@@ -9,6 +9,7 @@ export interface Env {
   HIGH_SHIN_INTERNAL_SECRET: string;
 }
 
+
 function createServer(env: Env): McpServer {
   const server = new McpServer({ name: "shia2n-mcp", version: "0.1.0" });
   registerHighShinTools(server, env);
