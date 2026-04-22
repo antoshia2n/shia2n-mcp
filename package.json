@@ -1,0 +1,22 @@
+{
+  "name": "shia2n-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "shia2n ecosystem unified MCP gateway (High-Shinくん and future apps)",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "agents": "^0.10.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260401.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^3.90.0"
+  }
+}
