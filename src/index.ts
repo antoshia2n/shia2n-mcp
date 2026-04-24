@@ -2,6 +2,7 @@ import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerHighShinTools } from "./tools.js";
 import { registerZeusTools } from "./tools-zeus.js";
+import { registerFormKunTools } from "./tools-form-kun.js";
 
 export interface Env {
   // Core
@@ -15,13 +16,18 @@ export interface Env {
   // Zeus（ナレッジハブ）
   ZEUS_API_BASE: string;
   ZEUS_INTERNAL_SECRET: string;
+
+  // Form-kun
+  FORM_KUN_API_BASE: string;
+  FORM_KUN_INTERNAL_SECRET: string;
 }
 
 
 function createServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.2.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.3.0" });
   registerHighShinTools(server, env);
   registerZeusTools(server, env);
+  registerFormKunTools(server, env);
   return server;
 }
 
@@ -52,14 +58,13 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // OPTIONSプリフライトリクエストへの応答
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
 
     if (url.pathname === "/" || url.pathname === "/health") {
       return new Response(
-        JSON.stringify({ name: "shia2n-mcp", version: "0.2.0", status: "ok", mcp_endpoint: "/mcp" }),
+        JSON.stringify({ name: "shia2n-mcp", version: "0.3.0", status: "ok", mcp_endpoint: "/mcp" }),
         { headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
       );
     }
@@ -73,7 +78,6 @@ export default {
       }
       const server = createServer(env);
       const mcpResponse = await createMcpHandler(server, { route: "/mcp" })(request, env, ctx);
-      // CORSヘッダーを追加して返す
       const newHeaders = new Headers(mcpResponse.headers);
       Object.entries(CORS_HEADERS).forEach(([k, v]) => newHeaders.set(k, v));
       return new Response(mcpResponse.body, {
