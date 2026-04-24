@@ -1,18 +1,27 @@
 import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerHighShinTools } from "./tools.js";
+import { registerZeusTools } from "./tools-zeus.js";
 
 export interface Env {
+  // Core
   MCP_SERVER_SECRET: string;
   MCP_DEFAULT_USER_ID: string;
+
+  // High-Shinくん
   HIGH_SHIN_API_BASE: string;
   HIGH_SHIN_INTERNAL_SECRET: string;
+
+  // Zeus（ナレッジハブ）
+  ZEUS_API_BASE: string;
+  ZEUS_INTERNAL_SECRET: string;
 }
 
 
 function createServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.2.0" });
   registerHighShinTools(server, env);
+  registerZeusTools(server, env);
   return server;
 }
 
@@ -50,7 +59,7 @@ export default {
 
     if (url.pathname === "/" || url.pathname === "/health") {
       return new Response(
-        JSON.stringify({ name: "shia2n-mcp", version: "0.1.0", status: "ok", mcp_endpoint: "/mcp" }),
+        JSON.stringify({ name: "shia2n-mcp", version: "0.2.0", status: "ok", mcp_endpoint: "/mcp" }),
         { headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
       );
     }
