@@ -1,6 +1,7 @@
 import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerHighShinTools } from "./tools.js";
+import { registerHighShinPhase3Tools } from "./tools-high-shin-phase3.js";
 import { registerZeusTools } from "./tools-zeus.js";
 import { registerFormKunTools } from "./tools-form-kun.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
@@ -24,8 +25,9 @@ export interface Env {
 }
 
 function createServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.4.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.5.0" });
   registerHighShinTools(server, env);
+  registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
   registerFormKunTools(server, env);
   registerPayKunTools(server, env);
@@ -65,7 +67,7 @@ export default {
 
     if (url.pathname === "/" || url.pathname === "/health") {
       return new Response(
-        JSON.stringify({ name: "shia2n-mcp", version: "0.4.0", status: "ok", mcp_endpoint: "/mcp" }),
+        JSON.stringify({ name: "shia2n-mcp", version: "0.5.0", status: "ok", mcp_endpoint: "/mcp" }),
         { headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
       );
     }

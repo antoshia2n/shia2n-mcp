@@ -119,6 +119,63 @@ export async function callFormKunInternalApi<TResult = unknown>(
   );
 }
 /**
+ * 任意のアプリの /api/internal/{path} を GET で叩く汎用関数。
+ * 読み取り系で GET エンドポイントを使うアプリ（High-Shin Phase 3 等）向け。
+ * パラメータは user_id を含むクエリストリングとして URL に付加する。
+ */
+async function callAppInternalApiGet<TResult = unknown>(
+  config: AppConfig,
+  path: string,
+  params: Record<string, unknown>
+): Promise<TResult> {
+  if (!config.apiBase) throw new Error("apiBase is not configured");
+  if (!config.secret)  throw new Error("internal secret is not configured");
+  if (!config.userId)  throw new Error("userId is not configured");
+
+  const qs = new URLSearchParams();
+  qs.set("user_id", config.userId);
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) qs.set(k, String(v));
+  }
+  const url = `${config.apiBase.replace(/\/$/, "")}/api/internal/${path}?${qs.toString()}`;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${config.secret}` },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`upstream_network_error: ${msg}`);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`upstream_error: ${res.status} ${res.statusText} — ${text.slice(0, 500)}`);
+  }
+  return (await res.json()) as TResult;
+}
+
+/**
+ * High-Shinくん本体の内部APIを GET で叩く（Phase 3 読み取り系）。
+ */
+export async function callHighShinInternalApiGet<TResult = unknown>(
+  env: Env,
+  path: string,
+  params: Record<string, unknown>
+): Promise<TResult> {
+  return callAppInternalApiGet<TResult>(
+    {
+      apiBase: env.HIGH_SHIN_API_BASE,
+      secret:  env.HIGH_SHIN_INTERNAL_SECRET,
+      userId:  env.MCP_DEFAULT_USER_ID,
+    },
+    path,
+    params
+  );
+}
+
+/**
  * Pay-kun 本体の内部APIを叩く。
  */
 export async function callPayKunInternalApi<TResult = unknown>(
