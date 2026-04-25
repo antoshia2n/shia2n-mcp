@@ -1,5 +1,4 @@
 import type { Env } from "./index.js";
-
 /**
  * アプリ別の接続設定。
  */
@@ -8,7 +7,6 @@ interface AppConfig {
   secret: string;
   userId: string;
 }
-
 /**
  * 任意のアプリの /api/internal/{path} を叩く汎用関数。
  * 各アプリ用のラッパー（callInternalApi, callZeusInternalApi 等）から呼び出される。
@@ -27,9 +25,7 @@ async function callAppInternalApi<TResult = unknown>(
   if (!config.userId) {
     throw new Error("userId is not configured");
   }
-
   const url = `${config.apiBase.replace(/\/$/, "")}/api/internal/${path}`;
-
   let res: Response;
   try {
     res = await fetch(url, {
@@ -47,17 +43,14 @@ async function callAppInternalApi<TResult = unknown>(
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`upstream_network_error: ${msg}`);
   }
-
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
       `upstream_error: ${res.status} ${res.statusText} — ${text.slice(0, 500)}`
     );
   }
-
   return (await res.json()) as TResult;
 }
-
 /**
  * High-Shinくん本体の内部APIを叩く（後方互換シグネチャを維持）。
  */
@@ -76,7 +69,6 @@ export async function callInternalApi<TResult = unknown>(
     body
   );
 }
-
 /**
  * Zeus（ナレッジハブ）本体の内部APIを叩く。
  */
@@ -95,7 +87,6 @@ export async function callZeusInternalApi<TResult = unknown>(
     body
   );
 }
-
 /**
  * APIレスポンスをMCPツールレスポンス形式に変換する。
  */
@@ -109,7 +100,6 @@ export function asMcpTextResult(payload: unknown) {
     ],
   };
 }
-
 /**
  * Form-kun 本体の内部APIを叩く。
  */
@@ -122,6 +112,24 @@ export async function callFormKunInternalApi<TResult = unknown>(
     {
       apiBase: env.FORM_KUN_API_BASE,
       secret:  env.FORM_KUN_INTERNAL_SECRET,
+      userId:  env.MCP_DEFAULT_USER_ID,
+    },
+    path,
+    body
+  );
+}
+/**
+ * Pay-kun 本体の内部APIを叩く。
+ */
+export async function callPayKunInternalApi<TResult = unknown>(
+  env: Env,
+  path: string,
+  body: Record<string, unknown>
+): Promise<TResult> {
+  return callAppInternalApi<TResult>(
+    {
+      apiBase: env.PAY_KUN_API_BASE,
+      secret:  env.PAY_KUN_INTERNAL_SECRET,
       userId:  env.MCP_DEFAULT_USER_ID,
     },
     path,
