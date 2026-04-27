@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerHighShinTools } from "./tools.js";
 import { registerHighShinPhase3Tools } from "./tools-high-shin-phase3.js";
 import { registerZeusTools } from "./tools-zeus.js";
+import { registerZeusV2Tools } from "./tools-zeus-v2.js";
 import { registerFormKunTools } from "./tools-form-kun.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
 
@@ -15,7 +16,8 @@ export interface Env {
   HIGH_SHIN_INTERNAL_SECRET: string;
   // Zeus（ナレッジハブ）
   ZEUS_API_BASE: string;
-  ZEUS_INTERNAL_SECRET: string;
+  ZEUS_INTERNAL_SECRET: string;   // v1-compat 移行後は不要になる予定。既存設定は残す
+  ZEUS_EXTERNAL_SECRET: string;   // Zeus v2 外部API用（v1-compat + v2 共通）
   // Form-kun
   FORM_KUN_API_BASE: string;
   FORM_KUN_INTERNAL_SECRET: string;
@@ -25,10 +27,11 @@ export interface Env {
 }
 
 function createServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.5.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.6.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
+  registerZeusV2Tools(server, env);
   registerFormKunTools(server, env);
   registerPayKunTools(server, env);
   return server;
@@ -67,7 +70,7 @@ export default {
 
     if (url.pathname === "/" || url.pathname === "/health") {
       return new Response(
-        JSON.stringify({ name: "shia2n-mcp", version: "0.5.0", status: "ok", mcp_endpoint: "/mcp" }),
+        JSON.stringify({ name: "shia2n-mcp", version: "0.6.0", status: "ok", mcp_endpoint: "/mcp" }),
         { headers: { "Content-Type": "application/json", ...CORS_HEADERS } }
       );
     }

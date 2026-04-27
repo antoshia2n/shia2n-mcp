@@ -71,6 +71,8 @@ export async function callInternalApi<TResult = unknown>(
 }
 /**
  * Zeus（ナレッジハブ）本体の内部APIを叩く。
+ * ※ Zeus v2 移行後は callZeusExternalV1Compat に置き換え済み。
+ *    このエクスポートは他コードが参照していないが、念のため残す。
  */
 export async function callZeusInternalApi<TResult = unknown>(
   env: Env,
@@ -86,6 +88,41 @@ export async function callZeusInternalApi<TResult = unknown>(
     path,
     body
   );
+}
+
+/**
+ * Zeus v2 の v1-compat エンドポイントを叩く（既存 zeus__* ツール用）。
+ * Zeus v2 移行後も下位互換を維持するため、/api/external/v1-compat/* を使う。
+ * 認証は ZEUS_EXTERNAL_SECRET。
+ */
+export async function callZeusExternalV1Compat<TResult = unknown>(
+  env: Env,
+  path: string,
+  body: Record<string, unknown>
+): Promise<TResult> {
+  const url = `https://zeus.shia2n.jp/api/external/v1-compat/${path}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.ZEUS_EXTERNAL_SECRET}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        user_id: env.MCP_DEFAULT_USER_ID,
+        ...body,
+      }),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`upstream_network_error: ${msg}`);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`upstream_error: ${res.status} ${res.statusText} — ${text.slice(0, 500)}`);
+  }
+  return (await res.json()) as TResult;
 }
 /**
  * APIレスポンスをMCPツールレスポンス形式に変換する。

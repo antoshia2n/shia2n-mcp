@@ -1,11 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { callZeusInternalApi, asMcpTextResult } from "./app-client.js";
+import { callZeusExternalV1Compat, asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 
 /**
- * Zeus（ナレッジハブ）用のツールを登録する。
- * 各ツールは Zeus 本体の /api/internal/* を薄くラップする。
+ * Zeus（ナレッジハブ）v1 互換ツールを登録する。
+ * Zeus v2 移行後も下位互換を維持するため、v1-compat エンドポイント経由で動作する。
+ * 認証は ZEUS_EXTERNAL_SECRET（旧 ZEUS_INTERNAL_SECRET から移行済み）。
  *
  * 命名規約：`zeus__<action>`（ダブルアンダースコアでアプリ名と機能を分離）
  */
@@ -33,7 +34,7 @@ export function registerZeusTools(server: McpServer, env: Env): void {
         ),
     },
     async (args) => {
-      const result = await callZeusInternalApi(env, "search", args);
+      const result = await callZeusExternalV1Compat(env, "search", args);
       return asMcpTextResult(result);
     }
   );
@@ -69,7 +70,7 @@ export function registerZeusTools(server: McpServer, env: Env): void {
         .describe("タグ配列（例：['発信軸', 'コーチング', '価値観']）"),
     },
     async (args) => {
-      const result = await callZeusInternalApi(env, "add-entry", args);
+      const result = await callZeusExternalV1Compat(env, "add-entry", args);
       return asMcpTextResult(result);
     }
   );
@@ -80,7 +81,7 @@ export function registerZeusTools(server: McpServer, env: Env): void {
     "Zeus（ナレッジハブ）の全エントリをソース別に集計する。棚卸し・進捗把握・移行状況の確認に使う。戻り値は { sources: [{source, count}], total }。source は count の降順でソート済み。",
     {},
     async () => {
-      const result = await callZeusInternalApi(env, "list-sources", {});
+      const result = await callZeusExternalV1Compat(env, "list-sources", {});
       return asMcpTextResult(result);
     }
   );
