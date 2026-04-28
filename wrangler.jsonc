@@ -3,8 +3,14 @@
   "name": "shia2n-mcp",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-01",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "observability": {
     "enabled": true
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "eebf082265bf4d93906382a83d069d45"
+    }
+  ]
 }
