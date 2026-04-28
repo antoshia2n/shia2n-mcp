@@ -1,6 +1,6 @@
 # shia2n-mcp
 
-shia2n エコシステム統合 MCP ゲートウェイ。Claude（Anthropic）から自然言語で High-Shinくんを操作するための窓口。
+shia2n エコシステム統合 MCP ゲートウェイ。Claude（Anthropic）から自然言語で High-Shinくんを操作するための窓口です。
 
 ## このアプリは何をするか
 
