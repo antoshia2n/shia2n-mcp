@@ -1,15 +1,12 @@
 /**
  * TaskMaster Firestore 読み取りエンドポイント
- * GET /taskmaster/tasks  — 未完了タスク・プロジェクト一覧
+ * GET /taskmaster/tasks  — 未完了タスク・プロジェクト一覧（Bearer 認証必須）
  * GET /taskmaster/diag   — 診断（認証不要）
  *
- * Firebase Admin SDK 不使用。
- * crypto.subtle（Cloudflare Workers ネイティブ）で JWT 署名し
- * Firestore REST API に直接アクセスする。
- *
  * データ構造（診断で確認済み）：
- *   users/{uid}/app_data/tasks    → フィールド "value" の中にタスクデータ
- *   users/{uid}/app_data/projects → フィールド "value" の中にプロジェクトデータ
+ *   users/{uid}/app_data/tasks    → fields.value が arrayValue（562件）
+ *   users/{uid}/app_data/projects → fields.value が arrayValue
+ *   各タスクオブジェクトに id / archived / completed / title / status / priority 等が入る
  */
 
 import { Env } from "./index.js";
@@ -90,11 +87,11 @@ export async function getFirestoreToken(env: Env): Promise<string> {
 type FVal = Record<string, unknown>;
 
 function fromVal(val: FVal): unknown {
-  if ("stringValue"   in val) return val.stringValue;
-  if ("booleanValue"  in val) return val.booleanValue;
-  if ("integerValue"  in val) return Number(val.integerValue);
-  if ("doubleValue"   in val) return val.doubleValue;
-  if ("nullValue"     in val) return null;
+  if ("stringValue"    in val) return val.stringValue;
+  if ("booleanValue"   in val) return val.booleanValue;
+  if ("integerValue"   in val) return Number(val.integerValue);
+  if ("doubleValue"    in val) return val.doubleValue;
+  if ("nullValue"      in val) return null;
   if ("timestampValue" in val) return (val.timestampValue as string).slice(0, 10);
   if ("mapValue" in val) {
     const fields = (val.mapValue as { fields?: Record<string, FVal> }).fields ?? {};
@@ -115,55 +112,57 @@ function fromVal(val: FVal): unknown {
 
 type FSDoc = { name: string; fields?: Record<string, FVal> };
 
-async function fsGet(token: string, path: string): Promise<{ status: number; body: unknown }> {
+async function fsGet(token: string, path: string): Promise<FSDoc> {
   const res = await fetch(`${FIRESTORE_BASE}/${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  return { status: res.status, body: await res.json() };
+  if (!res.ok) throw new Error(`Firestore GET ${path} failed: ${res.status}`);
+  return res.json() as Promise<FSDoc>;
 }
 
 // ─────────────────────────────────────────────
-// "value" フィールドの展開
+// value フィールドを Item[] に展開
 //
-// tasks / projects ドキュメントは以下の構造：
-//   { fields: { value: <arrayValue or mapValue> } }
-//
-// arrayValue → 各要素が 1 タスク/プロジェクトのマップ
-// mapValue   → キーが ID、値がタスク/プロジェクトのマップ
+// 確認済み構造：
+//   fields.value = arrayValue → 各要素が 1 タスクのマップ
+//   各タスクは id / title / status / priority / deadline / archived / completed 等を持つ
 // ─────────────────────────────────────────────
 
 type Item = Record<string, unknown>;
 
-function expandValueField(doc: FSDoc): Item[] {
+function expandValue(doc: FSDoc): Item[] {
   const fields = doc.fields ?? {};
 
-  // "value" フィールドが存在する場合
-  if ("value" in fields) {
-    const expanded = fromVal(fields.value);
-
-    // arrayValue → [{id?, title?, ...}, ...]
-    if (Array.isArray(expanded)) {
-      return expanded.filter((v): v is Item => typeof v === "object" && v !== null) as Item[];
-    }
-
-    // mapValue → { id1: {...}, id2: {...} }
-    if (typeof expanded === "object" && expanded !== null) {
-      return Object.entries(expanded as Record<string, unknown>).map(([id, v]) => ({
-        id,
-        ...(typeof v === "object" && v !== null ? (v as Item) : {}),
-      }));
-    }
+  if (!("value" in fields)) {
+    // value フィールドがない場合：フィールドキーを ID として扱う旧パターン
+    return Object.entries(fields).map(([id, val]) => {
+      const v = fromVal(val);
+      return typeof v === "object" && v !== null ? { id, ...(v as Item) } : { id };
+    });
   }
 
-  // "value" フィールドがない場合：フィールドキーをIDとして扱う従来パターン
-  return Object.entries(fields).map(([id, val]) => {
-    const v = fromVal(val);
-    return typeof v === "object" && v !== null ? { id, ...(v as Item) } : { id };
-  });
+  const expanded = fromVal(fields.value as FVal);
+
+  if (Array.isArray(expanded)) {
+    // arrayValue：各要素が 1 タスク（id フィールドを内包）
+    return (expanded as unknown[]).filter(
+      (v): v is Item => typeof v === "object" && v !== null
+    ) as Item[];
+  }
+
+  if (typeof expanded === "object" && expanded !== null) {
+    // mapValue：キーが ID、値がタスクデータ
+    return Object.entries(expanded as Record<string, unknown>).map(([id, v]) => ({
+      id,
+      ...(typeof v === "object" && v !== null ? (v as Item) : {}),
+    }));
+  }
+
+  return [];
 }
 
 // ─────────────────────────────────────────────
-// 型定義
+// 型定義・変換ヘルパー
 // ─────────────────────────────────────────────
 
 type TaskRecord = {
@@ -184,13 +183,34 @@ type ProjectRecord = {
 };
 
 function str(v: unknown, def = ""): string {
-  return typeof v === "string" ? v : def;
+  return typeof v === "string" && v ? v : def;
 }
 function nullStr(v: unknown): string | null {
   return typeof v === "string" && v ? v : null;
 }
-function bool(v: unknown, def = false): boolean {
-  return typeof v === "boolean" ? v : def;
+function bool(v: unknown): boolean {
+  return v === true;
+}
+
+function toTask(t: Item): TaskRecord {
+  return {
+    id:        str(t.id ?? t.taskId),
+    title:     str(t.title),
+    status:    str(t.status, "todo"),
+    priority:  str(t.priority, "medium"),
+    deadline:  nullStr(t.deadline),
+    groupId:   nullStr(t.groupId),
+    projectId: nullStr(t.projectId),
+  };
+}
+
+function toProject(p: Item): ProjectRecord {
+  return {
+    id:      str(p.id ?? p.projectId),
+    title:   str(p.title),
+    status:  str(p.status),
+    endDate: nullStr(p.endDate),
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -205,47 +225,31 @@ export async function handleTaskmasterTasks(_req: Request, env: Env): Promise<Re
 
   let token: string;
   try { token = await getFirestoreToken(env); }
-  catch (e) { return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 }); }
+  catch (e) {
+    return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
+  }
 
   let tasksDoc: FSDoc, projectsDoc: FSDoc;
   try {
-    const [tr, pr] = await Promise.all([
+    [tasksDoc, projectsDoc] = await Promise.all([
       fsGet(token, `users/${uid}/app_data/tasks`),
       fsGet(token, `users/${uid}/app_data/projects`),
     ]);
-    tasksDoc    = tr.body as FSDoc;
-    projectsDoc = pr.body as FSDoc;
   } catch (e) {
     return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
   }
 
-  const rawTasks    = expandValueField(tasksDoc);
-  const rawProjects = expandValueField(projectsDoc);
-
-  const tasks: TaskRecord[] = rawTasks
+  const tasks: TaskRecord[] = expandValue(tasksDoc)
     .filter((t) => !bool(t.archived) && !bool(t.completed))
-    .map((t) => ({
-      id:        str(t.id ?? t.taskId),
-      title:     str(t.title),
-      status:    str(t.status, "todo"),
-      priority:  str(t.priority, "medium"),
-      deadline:  nullStr(t.deadline),
-      groupId:   nullStr(t.groupId),
-      projectId: nullStr(t.projectId),
-    }));
+    .map(toTask);
 
-  const projects: ProjectRecord[] = rawProjects.map((p) => ({
-    id:      str(p.id ?? p.projectId),
-    title:   str(p.title),
-    status:  str(p.status),
-    endDate: nullStr(p.endDate),
-  }));
+  const projects: ProjectRecord[] = expandValue(projectsDoc).map(toProject);
 
   return Response.json({ tasks, projects });
 }
 
 // ─────────────────────────────────────────────
-// GET /taskmaster/diag — 認証不要・機密情報は返さない
+// GET /taskmaster/diag — 認証不要・変換サンプル付き
 // ─────────────────────────────────────────────
 
 export async function handleTaskmasterDiag(_req: Request, env: Env): Promise<Response> {
@@ -255,8 +259,7 @@ export async function handleTaskmasterDiag(_req: Request, env: Env): Promise<Res
     NAOKI_UID:               env.NAOKI_UID ? `set (${env.NAOKI_UID.length} chars)` : "NOT SET",
     FIREBASE_SA_EMAIL:       env.FIREBASE_SA_EMAIL ? `set → ${env.FIREBASE_SA_EMAIL}` : "NOT SET",
     FIREBASE_SA_PRIVATE_KEY: env.FIREBASE_SA_PRIVATE_KEY
-      ? `set (${env.FIREBASE_SA_PRIVATE_KEY.length} chars)`
-      : "NOT SET",
+      ? `set (${env.FIREBASE_SA_PRIVATE_KEY.length} chars)` : "NOT SET",
   };
 
   const uid = env.NAOKI_UID;
@@ -269,40 +272,35 @@ export async function handleTaskmasterDiag(_req: Request, env: Env): Promise<Res
   try { token = await getFirestoreToken(env); result.firebase_auth = "OK"; }
   catch (e) { result.firebase_auth = `FAILED: ${String(e)}`; return Response.json(result); }
 
-  // tasks ドキュメントの "value" フィールドの型と内容を確認
+  // tasks ドキュメント取得 + 変換処理を実行してサンプルを表示
   try {
-    const { status, body } = await fsGet(token, `users/${uid}/app_data/tasks`);
-    const doc = body as FSDoc;
-    const fields = doc.fields ?? {};
-    const valueRaw = fields.value;
-    let valueInfo: unknown = "field 'value' not found";
+    const tasksDoc = await fsGet(token, `users/${uid}/app_data/tasks`);
+    const allItems = expandValue(tasksDoc);
+    const active   = allItems.filter((t) => !bool(t.archived) && !bool(t.completed));
+    const mapped   = active.slice(0, 5).map(toTask);
 
-    if (valueRaw) {
-      const expanded = fromVal(valueRaw);
-      if (Array.isArray(expanded)) {
-        valueInfo = {
-          type: "array",
-          count: expanded.length,
-          sample: expanded.slice(0, 2),
-        };
-      } else if (typeof expanded === "object" && expanded !== null) {
-        const entries = Object.entries(expanded as Record<string, unknown>);
-        valueInfo = {
-          type: "map",
-          count: entries.length,
-          sampleKeys: entries.slice(0, 5).map(([k]) => k),
-          sampleFirstValue: entries[0]?.[1],
-        };
-      } else {
-        valueInfo = { type: typeof expanded, value: expanded };
-      }
-    }
-
-    result.tasks_doc = { status, fieldKeys: Object.keys(fields), value: valueInfo };
+    result.tasks = {
+      total_in_array:   allItems.length,
+      active_count:     active.length,   // archived:false && completed:false
+      sample_converted: mapped,          // 変換後の形式（最大5件）
+    };
   } catch (e) {
-    result.tasks_doc = { error: String(e) };
+    result.tasks = { error: String(e) };
   }
 
-  result.conclusion = "tasks_doc.value を確認してデータ構造を特定してください。";
+  // projects ドキュメント取得
+  try {
+    const projectsDoc = await fsGet(token, `users/${uid}/app_data/projects`);
+    const allProjects = expandValue(projectsDoc);
+    result.projects = {
+      total_count:      allProjects.length,
+      sample_converted: allProjects.slice(0, 3).map(toProject),
+    };
+  } catch (e) {
+    result.projects = { error: String(e) };
+  }
+
+  result.conclusion = "tasks.active_count > 0 かつ sample_converted に正しいデータが入っていれば /taskmaster/tasks も正常に動作します。";
+
   return Response.json(result);
 }
