@@ -1,6 +1,7 @@
 /**
  * TaskMaster Firestore 読み取りエンドポイント
- * GET /taskmaster/tasks
+ * GET /taskmaster/tasks  — 未完了タスク・プロジェクト一覧
+ * GET /taskmaster/diag   — 診断（環境変数・Firestore 疎通・パス特定）
  *
  * Firebase Admin SDK 不使用。
  * crypto.subtle（Cloudflare Workers ネイティブ）で JWT 署名し
@@ -20,7 +21,7 @@ const TOKEN_URL = "https://oauth2.googleapis.com/token";
 // Firebase 認証（Service Account → アクセストークン）
 // ─────────────────────────────────────────────
 
-async function getFirestoreToken(env: Env): Promise<string> {
+export async function getFirestoreToken(env: Env): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
 
   const b64url = (obj: object): string =>
@@ -40,7 +41,6 @@ async function getFirestoreToken(env: Env): Promise<string> {
 
   const signingInput = `${b64url(header)}.${b64url(payload)}`;
 
-  // PEM → DER（Cloudflare Workers の環境変数では \n がリテラルになっているため置換）
   const pem = env.FIREBASE_SA_PRIVATE_KEY.replace(/\\n/g, "\n");
   const pemBody = pem
     .replace("-----BEGIN PRIVATE KEY-----", "")
@@ -99,7 +99,6 @@ function fromFirestoreValue(val: FirestoreTypedValue): unknown {
   if ("doubleValue" in val) return val.doubleValue;
   if ("nullValue" in val) return null;
   if ("timestampValue" in val) {
-    // "2026-05-10T00:00:00Z" → "2026-05-10"
     return (val.timestampValue as string).slice(0, 10);
   }
   if ("mapValue" in val) {
@@ -119,7 +118,7 @@ function fromFirestoreValue(val: FirestoreTypedValue): unknown {
 }
 
 // ─────────────────────────────────────────────
-// Firestore ドキュメント取得
+// Firestore REST API ヘルパー
 // ─────────────────────────────────────────────
 
 type FirestoreDoc = {
@@ -127,73 +126,86 @@ type FirestoreDoc = {
   fields?: Record<string, FirestoreTypedValue>;
 };
 
-/**
- * users/{uid}/app_data/{docName} を取得する。
- *
- * TaskMaster はタスク/プロジェクトを
- *   users/{uid}/app_data/tasks     （ドキュメント）のフィールドに保存 … パターン A
- *   users/{uid}/app_data/tasks/{id} （サブコレクション内の個別ドキュメント） … パターン B
- * のどちらかを使っている可能性がある。
- *
- * Firestore REST API のセグメント数ルール：
- *   users/{uid}/app_data/tasks = 4 セグメント（偶数）→ ドキュメント GET
- *   users/{uid}/app_data/tasks/{id} = 5 セグメント（奇数）→ コレクション LIST は別エンドポイント
- *
- * ここではまずドキュメント GET を試み、フィールドを返す。
- * フィールドが空 or 404 の場合はサブコレクション LIST にフォールバックする。
- */
-async function fetchFirestoreData(
+async function firestoreGet(
+  accessToken: string,
+  path: string
+): Promise<{ status: number; body: unknown }> {
+  const url = `${FIRESTORE_BASE}/${path}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const body = await res.json();
+  return { status: res.status, body };
+}
+
+async function firestoreList(
+  accessToken: string,
+  path: string,
+  pageSize = 500
+): Promise<{ status: number; body: unknown }> {
+  // LIST は奇数セグメントパス（コレクション）に対して使う
+  const url = `${FIRESTORE_BASE}/${path}?pageSize=${pageSize}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const body = await res.json();
+  return { status: res.status, body };
+}
+
+async function firestoreRunQuery(
+  accessToken: string,
+  parentPath: string,
+  collectionId: string,
+  limit = 500
+): Promise<FirestoreDoc[]> {
+  const url = `${FIRESTORE_BASE}/${parentPath}:runQuery`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId, allDescendants: false }],
+        limit,
+      },
+    }),
+  });
+  if (!res.ok) return [];
+  const rows = (await res.json()) as Array<{ document?: FirestoreDoc }>;
+  return rows.flatMap((r) => (r.document ? [r.document] : []));
+}
+
+// ─────────────────────────────────────────────
+// データ取得（パターン A / B 自動判別）
+// ─────────────────────────────────────────────
+
+async function fetchData(
   accessToken: string,
   uid: string,
-  docName: "tasks" | "projects"
+  kind: "tasks" | "projects"
 ): Promise<{ docs: FirestoreDoc[]; mode: "single-doc" | "collection" }> {
-  const baseUrl = `${FIRESTORE_BASE}/users/${uid}/app_data/${docName}`;
-  const headers = { Authorization: `Bearer ${accessToken}` };
-
-  // まずドキュメント GET を試みる（パターン A）
-  const docRes = await fetch(baseUrl, { headers });
-
-  if (docRes.ok) {
-    const docData = (await docRes.json()) as FirestoreDoc;
-    if (docData.fields && Object.keys(docData.fields).length > 0) {
-      return { docs: [docData], mode: "single-doc" };
+  // ① ドキュメント GET（パターン A：1 ドキュメントのフィールドに全データ）
+  const { status, body } = await firestoreGet(accessToken, `users/${uid}/app_data/${kind}`);
+  if (status === 200) {
+    const doc = body as FirestoreDoc;
+    if (doc.fields && Object.keys(doc.fields).length > 0) {
+      return { docs: [doc], mode: "single-doc" };
     }
   }
 
-  // フォールバック：サブコレクション LIST（パターン B）
-  // users/{uid}/app_data を parent として tasks サブコレクションをリスト
-  const listUrl =
-    `${FIRESTORE_BASE}/users/${uid}/app_data` +
-    `?pageSize=500&showMissing=false`;
-  // NOTE: Firestore list API では parent + collectionId の形式を使う。
-  // REST では parent ドキュメントの名前を指定し、collectionId クエリパラメータは存在しない。
-  // 代わりに collectionId フィルタは runQuery で行う。
-  // シンプルに tasks サブコレクションを直接 GET する。
-  const subColUrl = `${FIRESTORE_BASE}/users/${uid}/app_data/${docName}?pageSize=500`;
-  const colRes = await fetch(subColUrl, { headers });
-
-  if (colRes.ok) {
-    const colData = (await colRes.json()) as {
-      documents?: FirestoreDoc[];
-    };
-    if (colData.documents && colData.documents.length > 0) {
-      return { docs: colData.documents, mode: "collection" };
-    }
+  // ② runQuery（パターン B：個別ドキュメントのサブコレクション）
+  const docs = await firestoreRunQuery(accessToken, `users/${uid}/app_data`, kind);
+  if (docs.length > 0) {
+    return { docs, mode: "collection" };
   }
 
   return { docs: [], mode: "collection" };
 }
 
 // ─────────────────────────────────────────────
-// ドキュメントパスからIDを抽出
-// ─────────────────────────────────────────────
-
-function docToId(name: string): string {
-  return name.split("/").pop() ?? name;
-}
-
-// ─────────────────────────────────────────────
-// ドキュメントデータ → タスク/プロジェクト変換
+// ドキュメント → タスク/プロジェクト変換
 // ─────────────────────────────────────────────
 
 type TaskRecord = {
@@ -213,14 +225,31 @@ type ProjectRecord = {
   endDate: string | null;
 };
 
-function extractTasks(
-  docs: FirestoreDoc[],
-  mode: "single-doc" | "collection"
-): TaskRecord[] {
+function docToId(name: string): string {
+  return name.split("/").pop() ?? name;
+}
+
+function getStr(f: Record<string, FirestoreTypedValue>, key: string, def = ""): string {
+  return (fromFirestoreValue(f[key] ?? { stringValue: def }) as string) ?? def;
+}
+
+function getBool(f: Record<string, FirestoreTypedValue>, key: string, def = false): boolean {
+  return (fromFirestoreValue(f[key] ?? { booleanValue: def }) as boolean) ?? def;
+}
+
+function getNullableStr(
+  f: Record<string, FirestoreTypedValue>,
+  key: string
+): string | null {
+  if (!(key in f)) return null;
+  const v = fromFirestoreValue(f[key]);
+  return typeof v === "string" ? v : null;
+}
+
+function extractTasks(docs: FirestoreDoc[], mode: "single-doc" | "collection"): TaskRecord[] {
   const results: TaskRecord[] = [];
 
   if (mode === "single-doc" && docs[0]?.fields) {
-    // パターン A：1 ドキュメントのフィールドが各タスク（mapValue）
     for (const [id, val] of Object.entries(docs[0].fields)) {
       const task = fromFirestoreValue(val) as Record<string, unknown>;
       if (task.archived || task.completed) continue;
@@ -235,20 +264,17 @@ function extractTasks(
       });
     }
   } else {
-    // パターン B：各ドキュメントが 1 タスク
     for (const doc of docs) {
       const f = doc.fields ?? {};
-      const archived = fromFirestoreValue(f.archived ?? { booleanValue: false }) as boolean;
-      const completed = fromFirestoreValue(f.completed ?? { booleanValue: false }) as boolean;
-      if (archived || completed) continue;
+      if (getBool(f, "archived") || getBool(f, "completed")) continue;
       results.push({
         id: docToId(doc.name),
-        title: (fromFirestoreValue(f.title ?? { stringValue: "" }) as string),
-        status: (fromFirestoreValue(f.status ?? { stringValue: "todo" }) as string),
-        priority: (fromFirestoreValue(f.priority ?? { stringValue: "medium" }) as string),
-        deadline: (fromFirestoreValue(f.deadline ?? { nullValue: null }) as string | null),
-        groupId: (fromFirestoreValue(f.groupId ?? { nullValue: null }) as string | null),
-        projectId: (fromFirestoreValue(f.projectId ?? { nullValue: null }) as string | null),
+        title: getStr(f, "title"),
+        status: getStr(f, "status", "todo"),
+        priority: getStr(f, "priority", "medium"),
+        deadline: getNullableStr(f, "deadline"),
+        groupId: getNullableStr(f, "groupId"),
+        projectId: getNullableStr(f, "projectId"),
       });
     }
   }
@@ -256,10 +282,7 @@ function extractTasks(
   return results;
 }
 
-function extractProjects(
-  docs: FirestoreDoc[],
-  mode: "single-doc" | "collection"
-): ProjectRecord[] {
+function extractProjects(docs: FirestoreDoc[], mode: "single-doc" | "collection"): ProjectRecord[] {
   const results: ProjectRecord[] = [];
 
   if (mode === "single-doc" && docs[0]?.fields) {
@@ -277,9 +300,9 @@ function extractProjects(
       const f = doc.fields ?? {};
       results.push({
         id: docToId(doc.name),
-        title: (fromFirestoreValue(f.title ?? { stringValue: "" }) as string),
-        status: (fromFirestoreValue(f.status ?? { stringValue: "" }) as string),
-        endDate: (fromFirestoreValue(f.endDate ?? { nullValue: null }) as string | null),
+        title: getStr(f, "title"),
+        status: getStr(f, "status"),
+        endDate: getNullableStr(f, "endDate"),
       });
     }
   }
@@ -288,7 +311,7 @@ function extractProjects(
 }
 
 // ─────────────────────────────────────────────
-// エンドポイントハンドラー（index.ts から呼ぶ）
+// GET /taskmaster/tasks
 // ─────────────────────────────────────────────
 
 export async function handleTaskmasterTasks(
@@ -296,47 +319,132 @@ export async function handleTaskmasterTasks(
   env: Env
 ): Promise<Response> {
   const uid = env.NAOKI_UID;
-  if (!uid) {
-    return Response.json(
-      { error: "NAOKI_UID not configured" },
-      { status: 500 }
-    );
-  }
+  if (!uid) return Response.json({ error: "NAOKI_UID not configured" }, { status: 500 });
   if (!env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
-    return Response.json(
-      { error: "Firebase Service Account not configured" },
-      { status: 500 }
-    );
+    return Response.json({ error: "Firebase Service Account not configured" }, { status: 500 });
   }
 
-  // Firebase アクセストークン取得
   let accessToken: string;
   try {
     accessToken = await getFirestoreToken(env);
   } catch (e) {
-    return Response.json(
-      { error: "Firebase auth failed", detail: String(e) },
-      { status: 500 }
-    );
+    return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
   }
 
-  // tasks / projects を並列取得
   let taskResult: { docs: FirestoreDoc[]; mode: "single-doc" | "collection" };
   let projectResult: { docs: FirestoreDoc[]; mode: "single-doc" | "collection" };
   try {
     [taskResult, projectResult] = await Promise.all([
-      fetchFirestoreData(accessToken, uid, "tasks"),
-      fetchFirestoreData(accessToken, uid, "projects"),
+      fetchData(accessToken, uid, "tasks"),
+      fetchData(accessToken, uid, "projects"),
     ]);
   } catch (e) {
-    return Response.json(
-      { error: "Firestore fetch failed", detail: String(e) },
-      { status: 500 }
-    );
+    return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
   }
 
-  const tasks = extractTasks(taskResult.docs, taskResult.mode);
-  const projects = extractProjects(projectResult.docs, projectResult.mode);
+  return Response.json({
+    tasks: extractTasks(taskResult.docs, taskResult.mode),
+    projects: extractProjects(projectResult.docs, projectResult.mode),
+  });
+}
 
-  return Response.json({ tasks, projects });
+// ─────────────────────────────────────────────
+// GET /taskmaster/diag — 原因特定用診断エンドポイント
+// ─────────────────────────────────────────────
+
+export async function handleTaskmasterDiag(
+  _req: Request,
+  env: Env
+): Promise<Response> {
+  const result: Record<string, unknown> = {};
+
+  // 1. 環境変数チェック（値は返さず設定状況のみ）
+  result.env = {
+    NAOKI_UID: env.NAOKI_UID
+      ? `set (${env.NAOKI_UID.length} chars)`
+      : "NOT SET",
+    FIREBASE_SA_EMAIL: env.FIREBASE_SA_EMAIL
+      ? `set → ${env.FIREBASE_SA_EMAIL}`
+      : "NOT SET",
+    FIREBASE_SA_PRIVATE_KEY: env.FIREBASE_SA_PRIVATE_KEY
+      ? `set (${env.FIREBASE_SA_PRIVATE_KEY.length} chars, starts: ${env.FIREBASE_SA_PRIVATE_KEY.slice(0, 27)}...)`
+      : "NOT SET",
+  };
+
+  const uid = env.NAOKI_UID;
+  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    result.conclusion = "STOP: 環境変数が未設定。";
+    return Response.json(result);
+  }
+
+  // 2. Firebase トークン取得テスト
+  let accessToken: string;
+  try {
+    accessToken = await getFirestoreToken(env);
+    result.firebase_auth = "OK";
+  } catch (e) {
+    result.firebase_auth = `FAILED: ${String(e)}`;
+    result.conclusion = "STOP: Firebase 認証失敗。SA_EMAIL / SA_PRIVATE_KEY を確認。";
+    return Response.json(result);
+  }
+
+  // 3. パス別 GET テスト
+  const getTests: Record<string, unknown> = {};
+  for (const p of [
+    `users/${uid}`,
+    `users/${uid}/app_data/tasks`,
+    `users/${uid}/app_data/projects`,
+  ]) {
+    try {
+      const { status, body } = await firestoreGet(accessToken, p);
+      const doc = body as FirestoreDoc;
+      getTests[p] = {
+        status,
+        fieldCount: doc.fields ? Object.keys(doc.fields).length : 0,
+        fieldKeys: doc.fields ? Object.keys(doc.fields).slice(0, 15) : [],
+      };
+    } catch (e) {
+      getTests[p] = { error: String(e) };
+    }
+  }
+  result.get_tests = getTests;
+
+  // 4. LIST テスト（奇数セグメント）
+  const listTests: Record<string, unknown> = {};
+  for (const p of [`users/${uid}/app_data`]) {
+    try {
+      const { status, body } = await firestoreList(accessToken, p, 20);
+      const lb = body as { documents?: FirestoreDoc[] };
+      listTests[p] = {
+        status,
+        documentCount: (lb.documents ?? []).length,
+        documentIds: (lb.documents ?? []).slice(0, 10).map((d) => d.name.split("/").pop()),
+      };
+    } catch (e) {
+      listTests[p] = { error: String(e) };
+    }
+  }
+  result.list_tests = listTests;
+
+  // 5. runQuery テスト（複数のコレクション ID を試す）
+  const queryTests: Record<string, unknown> = {};
+  for (const colId of ["tasks", "projects", "task", "project", "items", "data"]) {
+    try {
+      const docs = await firestoreRunQuery(accessToken, `users/${uid}/app_data`, colId, 3);
+      if (docs.length > 0) {
+        queryTests[`app_data → ${colId}`] = {
+          found: docs.length,
+          sampleFieldKeys: docs[0].fields ? Object.keys(docs[0].fields).slice(0, 15) : [],
+        };
+      }
+    } catch (_) {
+      // 無視して次へ
+    }
+  }
+  result.query_tests = queryTests;
+
+  result.conclusion =
+    "get_tests・list_tests・query_tests を確認し、データが見つかるパスを特定してください。";
+
+  return Response.json(result);
 }
