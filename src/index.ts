@@ -1,13 +1,13 @@
 /**
- * shia2n-mcp エントリーポイント v0.7.0
+ * shia2n-mcp エントリーポイント v0.8.0
  *
  * 認証方式：
  *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
  *   - Bearer token（resolveExternalToken）→ Anthropic API / MCP Inspector からの後方互換
  *
  * ツール実装（src/tools-*.ts）は v0.6.0 から無修正。
+ * v0.8.0 追加：GET /taskmaster/tasks（Firestore 直接読み取り・Firebase REST API 方式）
  */
-
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
@@ -18,6 +18,7 @@ import { registerZeusV2Tools } from "./tools-zeus-v2.js";
 import { registerFormKunTools } from "./tools-form-kun.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
 import { AuthHandler } from "./auth-handler.js";
+import { handleTaskmasterTasks } from "./taskmaster.js";
 
 export interface Env {
   // Core
@@ -38,10 +39,14 @@ export interface Env {
   // Pay-kun
   PAY_KUN_API_BASE: string;
   PAY_KUN_INTERNAL_SECRET: string;
+  // TaskMaster（Firestore 読み取り用）
+  FIREBASE_SA_EMAIL: string;       // Service Account メールアドレス
+  FIREBASE_SA_PRIVATE_KEY: string; // Service Account 秘密鍵（PEM。改行は \n で保存）
+  NAOKI_UID: string;               // Naoki の Firebase Auth UID
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.7.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.8.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -69,20 +74,20 @@ const mcpApiHandler = {
   },
 };
 
-export default new OAuthProvider({
+// OAuthProvider を変数に保持し、後段で fetch を委譲する。
+// export default を { fetch } オブジェクトに変えることで
+// /taskmaster/tasks を先に横取りできる。
+const oauthProvider = new OAuthProvider({
   // /mcp への OAuth 認証済みリクエストを mcpApiHandler に渡す
   apiRoute:   "/mcp",
   apiHandler: mcpApiHandler,
-
   // /mcp 以外のリクエスト（/authorize・/health 等）を AuthHandler に渡す
   defaultHandler: AuthHandler,
-
   // OAuth 2.1 エンドポイント設定
   // /token・/register は OAuthProvider が自動実装（DCR 含む）
   authorizeEndpoint:          "/authorize",
   tokenEndpoint:              "/token",
   clientRegistrationEndpoint: "/register",
-
   // 後方互換：Bearer token（MCP_SERVER_SECRET）による認証を継続サポート。
   // Anthropic API の mcp_servers 経由・MCP Inspector からの接続で使う。
   resolveExternalToken: async ({ token, env: rawEnv }) => {
@@ -95,3 +100,36 @@ export default new OAuthProvider({
     };
   },
 });
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+
+    // CORS プリフライト（/taskmaster/tasks 向け）
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Authorization, Content-Type",
+        },
+      });
+    }
+
+    // ── TaskMaster エンドポイント（Bearer token 認証） ──────────────────────
+    if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
+      const authHeader = request.headers.get("Authorization") ?? "";
+      if (
+        !authHeader.startsWith("Bearer ") ||
+        !timingSafeEqual(authHeader.slice(7), env.MCP_SERVER_SECRET)
+      ) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      return handleTaskmasterTasks(request, env);
+    }
+
+    // ── それ以外はすべて OAuthProvider に委譲 ──────────────────────────────
+    return oauthProvider.fetch(request, env, ctx);
+  },
+};
