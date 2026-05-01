@@ -7,8 +7,8 @@
  *
  * ツール実装（src/tools-*.ts）は v0.6.0 から無修正。
  * v0.8.0 追加：
- *   GET /taskmaster/tasks — Firestore から未完了タスク/プロジェクト取得
- *   GET /taskmaster/diag  — 環境変数・Firestore 疎通・パス構造の診断
+ *   GET /taskmaster/tasks — Firestore から未完了タスク/プロジェクト取得（Bearer 認証必須）
+ *   GET /taskmaster/diag  — 環境変数・Firestore 疎通・パス構造の診断（認証不要）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -24,14 +24,14 @@ import { handleTaskmasterTasks, handleTaskmasterDiag } from "./taskmaster.js";
 
 export interface Env {
   // Core
-  MCP_SERVER_SECRET: string;       // Bearer token（後方互換用）
-  MCP_DEFAULT_USER_ID: string;     // Naoki の Firebase UID
-  // OAuth トークンストレージ（@cloudflare/workers-oauth-provider が OAUTH_KV という名前で使う）
+  MCP_SERVER_SECRET: string;
+  MCP_DEFAULT_USER_ID: string;
+  // OAuth
   OAUTH_KV: KVNamespace;
   // High-Shinくん
   HIGH_SHIN_API_BASE: string;
   HIGH_SHIN_INTERNAL_SECRET: string;
-  // Zeus（ナレッジハブ）
+  // Zeus
   ZEUS_API_BASE: string;
   ZEUS_INTERNAL_SECRET: string;
   ZEUS_EXTERNAL_SECRET: string;
@@ -42,9 +42,9 @@ export interface Env {
   PAY_KUN_API_BASE: string;
   PAY_KUN_INTERNAL_SECRET: string;
   // TaskMaster（Firestore 読み取り用）
-  FIREBASE_SA_EMAIL: string;       // Service Account メールアドレス
-  FIREBASE_SA_PRIVATE_KEY: string; // Service Account 秘密鍵（PEM。改行は \n で保存）
-  NAOKI_UID: string;               // Naoki の Firebase Auth UID
+  FIREBASE_SA_EMAIL: string;
+  FIREBASE_SA_PRIVATE_KEY: string;
+  NAOKI_UID: string;
 }
 
 function createMcpServer(env: Env): McpServer {
@@ -74,7 +74,6 @@ const mcpApiHandler = {
   },
 };
 
-// OAuthProvider を変数に保持し、/taskmaster/* を先に横取りしてから委譲する。
 const oauthProvider = new OAuthProvider({
   apiRoute:   "/mcp",
   apiHandler: mcpApiHandler,
@@ -97,7 +96,6 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // CORS プリフライト
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -109,8 +107,13 @@ export default {
       });
     }
 
-    // ── /taskmaster/* は Bearer token 認証で処理 ──────────────────────────
-    if (url.pathname.startsWith("/taskmaster/")) {
+    // ── /taskmaster/diag は認証不要（機密情報は返さない） ────────────────
+    if (url.pathname === "/taskmaster/diag" && request.method === "GET") {
+      return handleTaskmasterDiag(request, env);
+    }
+
+    // ── /taskmaster/tasks は Bearer 認証必須 ─────────────────────────────
+    if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
       const authHeader = request.headers.get("Authorization") ?? "";
       if (
         !authHeader.startsWith("Bearer ") ||
@@ -118,18 +121,10 @@ export default {
       ) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
-
-      if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
-        return handleTaskmasterTasks(request, env);
-      }
-      if (url.pathname === "/taskmaster/diag" && request.method === "GET") {
-        return handleTaskmasterDiag(request, env);
-      }
-
-      return Response.json({ error: "Not Found" }, { status: 404 });
+      return handleTaskmasterTasks(request, env);
     }
 
-    // ── それ以外はすべて OAuthProvider に委譲 ──────────────────────────────
+    // ── それ以外はすべて OAuthProvider に委譲 ────────────────────────────
     return oauthProvider.fetch(request, env, ctx);
   },
 };
