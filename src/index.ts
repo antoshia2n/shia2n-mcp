@@ -6,7 +6,9 @@
  *   - Bearer token（resolveExternalToken）→ Anthropic API / MCP Inspector からの後方互換
  *
  * ツール実装（src/tools-*.ts）は v0.6.0 から無修正。
- * v0.8.0 追加：GET /taskmaster/tasks（Firestore 直接読み取り・Firebase REST API 方式）
+ * v0.8.0 追加：
+ *   GET /taskmaster/tasks — Firestore から未完了タスク/プロジェクト取得
+ *   GET /taskmaster/diag  — 環境変数・Firestore 疎通・パス構造の診断
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,7 +20,7 @@ import { registerZeusV2Tools } from "./tools-zeus-v2.js";
 import { registerFormKunTools } from "./tools-form-kun.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
 import { AuthHandler } from "./auth-handler.js";
-import { handleTaskmasterTasks } from "./taskmaster.js";
+import { handleTaskmasterTasks, handleTaskmasterDiag } from "./taskmaster.js";
 
 export interface Env {
   // Core
@@ -31,8 +33,8 @@ export interface Env {
   HIGH_SHIN_INTERNAL_SECRET: string;
   // Zeus（ナレッジハブ）
   ZEUS_API_BASE: string;
-  ZEUS_INTERNAL_SECRET: string;    // v1-compat 移行後は不要予定（設定は残す）
-  ZEUS_EXTERNAL_SECRET: string;    // Zeus v2 外部 API 用
+  ZEUS_INTERNAL_SECRET: string;
+  ZEUS_EXTERNAL_SECRET: string;
   // Form-kun
   FORM_KUN_API_BASE: string;
   FORM_KUN_INTERNAL_SECRET: string;
@@ -65,8 +67,6 @@ function timingSafeEqual(a: string, b: string): boolean {
   return result === 0;
 }
 
-// OAuthProvider から /mcp リクエストが届くときに呼ばれるハンドラー。
-// OAuth トークン検証は OAuthProvider が済ませているため、ここでは認証チェック不要。
 const mcpApiHandler = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const server = createMcpServer(env);
@@ -74,22 +74,14 @@ const mcpApiHandler = {
   },
 };
 
-// OAuthProvider を変数に保持し、後段で fetch を委譲する。
-// export default を { fetch } オブジェクトに変えることで
-// /taskmaster/tasks を先に横取りできる。
+// OAuthProvider を変数に保持し、/taskmaster/* を先に横取りしてから委譲する。
 const oauthProvider = new OAuthProvider({
-  // /mcp への OAuth 認証済みリクエストを mcpApiHandler に渡す
   apiRoute:   "/mcp",
   apiHandler: mcpApiHandler,
-  // /mcp 以外のリクエスト（/authorize・/health 等）を AuthHandler に渡す
   defaultHandler: AuthHandler,
-  // OAuth 2.1 エンドポイント設定
-  // /token・/register は OAuthProvider が自動実装（DCR 含む）
   authorizeEndpoint:          "/authorize",
   tokenEndpoint:              "/token",
   clientRegistrationEndpoint: "/register",
-  // 後方互換：Bearer token（MCP_SERVER_SECRET）による認証を継続サポート。
-  // Anthropic API の mcp_servers 経由・MCP Inspector からの接続で使う。
   resolveExternalToken: async ({ token, env: rawEnv }) => {
     const env = rawEnv as Env;
     if (!env.MCP_SERVER_SECRET) return null;
@@ -105,7 +97,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // CORS プリフライト（/taskmaster/tasks 向け）
+    // CORS プリフライト
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -117,8 +109,8 @@ export default {
       });
     }
 
-    // ── TaskMaster エンドポイント（Bearer token 認証） ──────────────────────
-    if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
+    // ── /taskmaster/* は Bearer token 認証で処理 ──────────────────────────
+    if (url.pathname.startsWith("/taskmaster/")) {
       const authHeader = request.headers.get("Authorization") ?? "";
       if (
         !authHeader.startsWith("Bearer ") ||
@@ -126,7 +118,15 @@ export default {
       ) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
-      return handleTaskmasterTasks(request, env);
+
+      if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
+        return handleTaskmasterTasks(request, env);
+      }
+      if (url.pathname === "/taskmaster/diag" && request.method === "GET") {
+        return handleTaskmasterDiag(request, env);
+      }
+
+      return Response.json({ error: "Not Found" }, { status: 404 });
     }
 
     // ── それ以外はすべて OAuthProvider に委譲 ──────────────────────────────
