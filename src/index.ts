@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.9.0
+ * shia2n-mcp エントリーポイント v0.10.0
  *
  * 認証方式：
  *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
@@ -7,6 +7,7 @@
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：MCP ツール taskmaster__list_tasks 追加
+ * v0.10.0：MCP ツール sales_manager__get_revenue_summary 追加
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,6 +19,7 @@ import { registerZeusV2Tools } from "./tools-zeus-v2.js";
 import { registerFormKunTools } from "./tools-form-kun.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
+import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterDiag } from "./taskmaster.js";
 
@@ -44,10 +46,12 @@ export interface Env {
   FIREBASE_SA_EMAIL: string;
   FIREBASE_SA_PRIVATE_KEY: string;
   NAOKI_UID: string;
+  // Sales Manager
+  SALES_MANAGER_API_BASE: string; // 既定 https://sales-manager.shia2n.jp
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.9.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.10.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -55,6 +59,7 @@ function createMcpServer(env: Env): McpServer {
   registerFormKunTools(server, env);
   registerPayKunTools(server, env);
   registerTaskmasterTools(server, env);
+  registerSalesManagerTools(server, env);
   return server;
 }
 
