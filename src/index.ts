@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.11.0
+ * shia2n-mcp エントリーポイント v0.12.0
  *
  * 認証方式：
  *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
@@ -9,6 +9,7 @@
  * v0.9.0：MCP ツール taskmaster__list_tasks 追加
  * v0.10.0：MCP ツール sales_manager__get_revenue_summary 追加
  * v0.11.0：MCP ツール slack_post_message 追加
+ * v0.12.0：/taskmaster/diag に Bearer 認証を追加（無認証アクセスを遮断）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -58,7 +59,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.11.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.12.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -78,6 +79,15 @@ function timingSafeEqual(a: string, b: string): boolean {
     result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return result === 0;
+}
+
+// /taskmaster/* の Bearer 認証チェック（共通ヘルパー）
+function isAuthorized(request: Request, env: Env): boolean {
+  const authHeader = request.headers.get("Authorization") ?? "";
+  return (
+    authHeader.startsWith("Bearer ") &&
+    timingSafeEqual(authHeader.slice(7), env.MCP_SERVER_SECRET)
+  );
 }
 
 const mcpApiHandler = {
@@ -120,21 +130,18 @@ export default {
       });
     }
 
-    // /taskmaster/diag は認証不要
-    if (url.pathname === "/taskmaster/diag" && request.method === "GET") {
-      return handleTaskmasterDiag(request, env);
-    }
-
-    // /taskmaster/tasks は Bearer 認証必須
-    if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
-      const authHeader = request.headers.get("Authorization") ?? "";
-      if (
-        !authHeader.startsWith("Bearer ") ||
-        !timingSafeEqual(authHeader.slice(7), env.MCP_SERVER_SECRET)
-      ) {
+    // /taskmaster/* は全て Bearer 認証必須（diag・tasks 共通）
+    if (url.pathname.startsWith("/taskmaster/")) {
+      if (!isAuthorized(request, env)) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
-      return handleTaskmasterTasks(request, env);
+      if (url.pathname === "/taskmaster/diag" && request.method === "GET") {
+        return handleTaskmasterDiag(request, env);
+      }
+      if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
+        return handleTaskmasterTasks(request, env);
+      }
+      return Response.json({ error: "Not Found" }, { status: 404 });
     }
 
     return oauthProvider.fetch(request, env, ctx);
