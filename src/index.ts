@@ -1,14 +1,12 @@
 /**
- * shia2n-mcp エントリーポイント v0.8.0
+ * shia2n-mcp エントリーポイント v0.9.0
  *
  * 認証方式：
  *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
  *   - Bearer token（resolveExternalToken）→ Anthropic API / MCP Inspector からの後方互換
  *
- * ツール実装（src/tools-*.ts）は v0.6.0 から無修正。
- * v0.8.0 追加：
- *   GET /taskmaster/tasks — Firestore から未完了タスク/プロジェクト取得（Bearer 認証必須）
- *   GET /taskmaster/diag  — 環境変数・Firestore 疎通・パス構造の診断（認証不要）
+ * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
+ * v0.9.0：MCP ツール taskmaster__list_tasks 追加
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -19,6 +17,7 @@ import { registerZeusTools } from "./tools-zeus.js";
 import { registerZeusV2Tools } from "./tools-zeus-v2.js";
 import { registerFormKunTools } from "./tools-form-kun.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
+import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterDiag } from "./taskmaster.js";
 
@@ -48,13 +47,14 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.8.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.9.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
   registerZeusV2Tools(server, env);
   registerFormKunTools(server, env);
   registerPayKunTools(server, env);
+  registerTaskmasterTools(server, env);
   return server;
 }
 
@@ -107,12 +107,12 @@ export default {
       });
     }
 
-    // ── /taskmaster/diag は認証不要（機密情報は返さない） ────────────────
+    // /taskmaster/diag は認証不要
     if (url.pathname === "/taskmaster/diag" && request.method === "GET") {
       return handleTaskmasterDiag(request, env);
     }
 
-    // ── /taskmaster/tasks は Bearer 認証必須 ─────────────────────────────
+    // /taskmaster/tasks は Bearer 認証必須
     if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
       const authHeader = request.headers.get("Authorization") ?? "";
       if (
@@ -124,7 +124,6 @@ export default {
       return handleTaskmasterTasks(request, env);
     }
 
-    // ── それ以外はすべて OAuthProvider に委譲 ────────────────────────────
     return oauthProvider.fetch(request, env, ctx);
   },
 };
