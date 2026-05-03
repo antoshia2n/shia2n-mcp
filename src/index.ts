@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.13.0
+ * shia2n-mcp エントリーポイント v0.14.0
  *
  * 認証方式：
  *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
@@ -11,6 +11,7 @@
  * v0.11.0：MCP ツール slack_post_message 追加
  * v0.12.0：/taskmaster/diag に Bearer 認証を追加（無認証アクセスを遮断）
  * v0.13.0：POST /taskmaster/tasks 追加・MCP ツール taskmaster__add_task 追加
+ * v0.14.0：/diag 公開診断エンドポイント追加（認証不要・レート制限付き）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -26,6 +27,7 @@ import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerSlackTools } from "./tools-slack.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterDiag } from "./taskmaster.js";
+import { handleDiag } from "./diag.js";
 
 export interface Env {
   // Core
@@ -60,7 +62,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.13.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.14.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -129,6 +131,11 @@ export default {
           "Access-Control-Allow-Headers": "Authorization, Content-Type",
         },
       });
+    }
+
+    // /diag：公開診断エンドポイント（認証不要・レート制限付き）
+    if (url.pathname === "/diag" && request.method === "GET") {
+      return handleDiag(request, env);
     }
 
     // /taskmaster/* は全て Bearer 認証必須（diag・tasks 共通）
