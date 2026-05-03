@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.12.0
+ * shia2n-mcp エントリーポイント v0.13.0
  *
  * 認証方式：
  *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
@@ -10,6 +10,7 @@
  * v0.10.0：MCP ツール sales_manager__get_revenue_summary 追加
  * v0.11.0：MCP ツール slack_post_message 追加
  * v0.12.0：/taskmaster/diag に Bearer 認証を追加（無認証アクセスを遮断）
+ * v0.13.0：POST /taskmaster/tasks 追加・MCP ツール taskmaster__add_task 追加
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -24,7 +25,7 @@ import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerSlackTools } from "./tools-slack.js";
 import { AuthHandler } from "./auth-handler.js";
-import { handleTaskmasterTasks, handleTaskmasterDiag } from "./taskmaster.js";
+import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterDiag } from "./taskmaster.js";
 
 export interface Env {
   // Core
@@ -59,7 +60,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.12.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.13.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -140,6 +141,9 @@ export default {
       }
       if (url.pathname === "/taskmaster/tasks" && request.method === "GET") {
         return handleTaskmasterTasks(request, env);
+      }
+      if (url.pathname === "/taskmaster/tasks" && request.method === "POST") {
+        return handleTaskmasterAddTask(request, env);
       }
       return Response.json({ error: "Not Found" }, { status: 404 });
     }

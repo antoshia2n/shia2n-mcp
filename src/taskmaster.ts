@@ -1,7 +1,8 @@
 /**
- * TaskMaster Firestore 読み取りエンドポイント
- * GET /taskmaster/tasks  — 未完了タスク・プロジェクト一覧（Bearer 認証必須）
- * GET /taskmaster/diag   — 診断（認証不要）
+ * TaskMaster Firestore 読み取り／書き込みエンドポイント
+ * GET  /taskmaster/tasks  — 未完了タスク・プロジェクト一覧（Bearer 認証必須）
+ * POST /taskmaster/tasks  — タスク新規追加（Bearer 認証必須）
+ * GET  /taskmaster/diag   — 診断（Bearer 認証必須）
  *
  * データ構造（診断で確認済み）：
  *   users/{uid}/app_data/tasks    → fields.value が arrayValue（562件）
@@ -81,7 +82,7 @@ export async function getFirestoreToken(env: Env): Promise<string> {
 }
 
 // ─────────────────────────────────────────────
-// Firestore 型変換
+// Firestore 型変換（読み取り）
 // ─────────────────────────────────────────────
 
 type FVal = Record<string, unknown>;
@@ -107,6 +108,31 @@ function fromVal(val: FVal): unknown {
 }
 
 // ─────────────────────────────────────────────
+// Firestore 型変換（書き込み）
+// ─────────────────────────────────────────────
+
+function toFVal(v: unknown): FVal {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === "boolean") return { booleanValue: v };
+  if (typeof v === "number") {
+    if (Number.isInteger(v)) return { integerValue: String(v) };
+    return { doubleValue: v };
+  }
+  if (typeof v === "string") return { stringValue: v };
+  if (Array.isArray(v)) {
+    return { arrayValue: { values: v.map(toFVal) } };
+  }
+  if (typeof v === "object") {
+    const fields: Record<string, FVal> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      fields[k] = toFVal(val);
+    }
+    return { mapValue: { fields } };
+  }
+  return { nullValue: null };
+}
+
+// ─────────────────────────────────────────────
 // Firestore ドキュメント取得
 // ─────────────────────────────────────────────
 
@@ -117,6 +143,33 @@ async function fsGet(token: string, path: string): Promise<FSDoc> {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`Firestore GET ${path} failed: ${res.status}`);
+  return res.json() as Promise<FSDoc>;
+}
+
+// ─────────────────────────────────────────────
+// Firestore ドキュメント更新（PATCH + updateMask）
+// ─────────────────────────────────────────────
+
+async function fsPatch(
+  token: string,
+  path: string,
+  fields: Record<string, FVal>,
+  updateMask: string[]
+): Promise<FSDoc> {
+  const maskQuery = updateMask
+    .map((f) => `updateMask.fieldPaths=${encodeURIComponent(f)}`)
+    .join("&");
+  const res = await fetch(`${FIRESTORE_BASE}/${path}?${maskQuery}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) {
+    throw new Error(`Firestore PATCH ${path} failed: ${res.status} ${await res.text()}`);
+  }
   return res.json() as Promise<FSDoc>;
 }
 
@@ -249,7 +302,84 @@ export async function handleTaskmasterTasks(_req: Request, env: Env): Promise<Re
 }
 
 // ─────────────────────────────────────────────
-// GET /taskmaster/diag — 認証不要・変換サンプル付き
+// POST /taskmaster/tasks — タスク新規追加
+// ─────────────────────────────────────────────
+
+type AddTaskInput = {
+  title: string;
+  status?: string;
+  priority?: string;
+  deadline?: string | null;
+  groupId?: string | null;
+  projectId?: string | null;
+};
+
+export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<Response> {
+  const uid = env.NAOKI_UID;
+  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    return Response.json({ error: "env not configured" }, { status: 500 });
+  }
+
+  let body: AddTaskInput;
+  try {
+    body = await req.json() as AddTaskInput;
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  if (!body.title || typeof body.title !== "string" || !body.title.trim()) {
+    return Response.json({ error: "title is required" }, { status: 400 });
+  }
+
+  let token: string;
+  try { token = await getFirestoreToken(env); }
+  catch (e) {
+    return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
+  }
+
+  // 既存タスク配列を取得
+  let tasksDoc: FSDoc;
+  try {
+    tasksDoc = await fsGet(token, `users/${uid}/app_data/tasks`);
+  } catch (e) {
+    return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
+  }
+
+  const existingItems = expandValue(tasksDoc);
+
+  // 新規タスクオブジェクト
+  const newTask: Item = {
+    id:        crypto.randomUUID(),
+    title:     body.title.trim(),
+    status:    body.status ?? "todo",
+    priority:  body.priority ?? "medium",
+    deadline:  body.deadline ?? null,
+    groupId:   body.groupId ?? null,
+    projectId: body.projectId ?? null,
+    archived:  false,
+    completed: false,
+    createdAt: new Date().toISOString().slice(0, 10),
+  };
+
+  const updatedItems = [...existingItems, newTask];
+
+  // Firestore に書き戻す（value フィールドのみ updateMask）
+  try {
+    await fsPatch(
+      token,
+      `users/${uid}/app_data/tasks`,
+      { value: toFVal(updatedItems) },
+      ["value"]
+    );
+  } catch (e) {
+    return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 });
+  }
+
+  return Response.json({ ok: true, task: toTask(newTask) }, { status: 201 });
+}
+
+// ─────────────────────────────────────────────
+// GET /taskmaster/diag — 認証必須・変換サンプル付き
 // ─────────────────────────────────────────────
 
 export async function handleTaskmasterDiag(_req: Request, env: Env): Promise<Response> {
@@ -281,8 +411,8 @@ export async function handleTaskmasterDiag(_req: Request, env: Env): Promise<Res
 
     result.tasks = {
       total_in_array:   allItems.length,
-      active_count:     active.length,   // archived:false && completed:false
-      sample_converted: mapped,          // 変換後の形式（最大5件）
+      active_count:     active.length,
+      sample_converted: mapped,
     };
   } catch (e) {
     result.tasks = { error: String(e) };
