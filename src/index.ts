@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.14.0
+ * shia2n-mcp エントリーポイント v0.15.0
  *
  * 認証方式：
  *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
@@ -12,6 +12,7 @@
  * v0.12.0：/taskmaster/diag に Bearer 認証を追加（無認証アクセスを遮断）
  * v0.13.0：POST /taskmaster/tasks 追加・MCP ツール taskmaster__add_task 追加
  * v0.14.0：/diag 公開診断エンドポイント追加（認証不要・レート制限付き）
+ * v0.15.0：MCP ツール content_os__list_posts / content_os__get_post / content_os__search_posts 追加
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -25,6 +26,7 @@ import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerSlackTools } from "./tools-slack.js";
+import { registerContentOsTools } from "./tools-content-os.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
@@ -48,6 +50,9 @@ export interface Env {
   // Pay-kun
   PAY_KUN_API_BASE: string;
   PAY_KUN_INTERNAL_SECRET: string;
+  // ContentOS（コンテンツくん）
+  CONTENT_OS_API_BASE: string;
+  CONTENT_OS_INTERNAL_SECRET: string;
   // TaskMaster（Firestore 読み取り用）
   FIREBASE_SA_EMAIL: string;
   FIREBASE_SA_PRIVATE_KEY: string;
@@ -62,7 +67,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.14.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.15.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -72,6 +77,7 @@ function createMcpServer(env: Env): McpServer {
   registerTaskmasterTools(server, env);
   registerSalesManagerTools(server, env);
   registerSlackTools(server, env);
+  registerContentOsTools(server, env);
   return server;
 }
 
