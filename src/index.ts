@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.19.0
+ * shia2n-mcp エントリーポイント v0.20.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -12,7 +12,8 @@
  * v0.16.0：POST /taskmaster/tasks/update・taskmaster__update_task / content_os__update_score 追加
  * v0.17.0：inbox_review_assist 追加
  * v0.18.0：haAku__get_kpi_progress / haAku__get_daily_report 追加
- * v0.19.0：knowledge_tag_suggest 追加（依頼書：3579c6c1-c439-81ad-8aca-db6aef5ea2dc）
+ * v0.19.0：knowledge_tag_suggest 追加
+ * v0.20.0：Cron ネタ9本メール追加（依頼書：3194c8d4-3517-4ad9-b996-fe53ca9cfe71）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -33,6 +34,7 @@ import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
+import { handleScheduled } from "./cron-neta-mail.js";
 
 export interface Env {
   // Core
@@ -69,11 +71,15 @@ export interface Env {
   SLACK_WEBHOOK_04: string;
   // v0.17.0 追加
   NOTION_TOKEN: string;
-  ANTHROPIC_API_KEY: string; // inbox_review_assist / knowledge_tag_suggest で共用
+  ANTHROPIC_API_KEY: string; // inbox_review_assist / knowledge_tag_suggest / cron-neta-mail で共用
+  // v0.20.0 追加（Cron ネタ9本メール）
+  RESEND_API_KEY: string;
+  RESEND_FROM_EMAIL: string; // 例: neta@shia2n.jp（Resend で送信ドメイン認証が必要）
+  RESEND_TO_EMAIL: string;   // 送信先：Naoki のメールアドレス
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.19.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.20.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -171,5 +177,9 @@ export default {
     }
 
     return oauthProvider.fetch(request, env, ctx);
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(handleScheduled(env));
   },
 };

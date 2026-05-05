@@ -12,5 +12,8 @@
       "binding": "OAUTH_KV",
       "id": "eebf082265bf4d93906382a83d069d45"
     }
-  ]
+  ],
+  "triggers": {
+    "crons": ["0 22 * * *"]
+  }
 }
