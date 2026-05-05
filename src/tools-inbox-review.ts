@@ -15,7 +15,7 @@ import type { Env } from "./index.js";
  * v0.17.0 で追加（依頼書：3579c6c1-c439-8132-adf8-f5da13eea6d4）
  */
 
-const INBOX_DB_ID = "31c9c6c1-c439-8007-bd6e-000bd5bc23bf";
+const INBOX_DB_ID = "31c9c6c1-c439-800f-8093-dd4e9dca241c";
 const NOTION_API_BASE = "https://api.notion.com/v1";
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const CLASSIFY_MODEL = "claude-haiku-4-5-20251001";
