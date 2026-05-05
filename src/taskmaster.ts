@@ -86,9 +86,9 @@ export async function getFirestoreToken(env: Env): Promise<string> {
 // Firestore 型変換（読み取り）
 // ─────────────────────────────────────────────
 
-type FVal = Record<string, unknown>;
+export type FVal = Record<string, unknown>;
 
-function fromVal(val: FVal): unknown {
+export function fromVal(val: FVal): unknown {
   if ("stringValue"    in val) return val.stringValue;
   if ("booleanValue"   in val) return val.booleanValue;
   if ("integerValue"   in val) return Number(val.integerValue);
@@ -137,9 +137,9 @@ function toFVal(v: unknown): FVal {
 // Firestore ドキュメント取得
 // ─────────────────────────────────────────────
 
-type FSDoc = { name: string; fields?: Record<string, FVal> };
+export type FSDoc = { name: string; fields?: Record<string, FVal> };
 
-async function fsGet(token: string, path: string): Promise<FSDoc> {
+export async function fsGet(token: string, path: string): Promise<FSDoc> {
   const res = await fetch(`${FIRESTORE_BASE}/${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });

@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.17.0
+ * shia2n-mcp エントリーポイント v0.18.0
  *
  * 認証方式：
  *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
@@ -14,7 +14,8 @@
  * v0.14.0：/diag 公開診断エンドポイント追加（認証不要・レート制限付き）
  * v0.15.0：MCP ツール content_os__list_posts / content_os__get_post / content_os__search_posts 追加
  * v0.16.0：POST /taskmaster/tasks/update 追加・MCP ツール taskmaster__update_task / content_os__update_score 追加
- * v0.17.0：MCP ツール inbox_review_assist 追加（依頼書：3579c6c1-c439-8132-adf8-f5da13eea6d4）
+ * v0.17.0：MCP ツール inbox_review_assist 追加
+ * v0.18.0：MCP ツール haAku__get_kpi_progress / haAku__get_daily_report 追加（依頼書：3579c6c1-c439-81ea-928b-dcb455ad4bb1）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -30,6 +31,7 @@ import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerSlackTools } from "./tools-slack.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
+import { registerHaakuTools } from "./tools-haaku.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
@@ -70,10 +72,11 @@ export interface Env {
   // inbox_review_assist（v0.17.0 追加）
   NOTION_TOKEN: string;      // Notion インテグレーショントークン（inbox DB 読み取り用）
   ANTHROPIC_API_KEY: string; // Anthropic API キー（Claude による一括分類用）
+  // haAku ツールは既存 FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY / NAOKI_UID を流用（v0.18.0）
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.17.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.18.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -85,6 +88,7 @@ function createMcpServer(env: Env): McpServer {
   registerSlackTools(server, env);
   registerContentOsTools(server, env);
   registerInboxReviewTools(server, env);
+  registerHaakuTools(server, env);
   return server;
 }
 
