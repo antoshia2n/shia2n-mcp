@@ -1,21 +1,18 @@
 /**
- * shia2n-mcp エントリーポイント v0.18.0
- *
- * 認証方式：
- *   - OAuth 2.1（@cloudflare/workers-oauth-provider）→ Claude.ai UI から接続
- *   - Bearer token（resolveExternalToken）→ Anthropic API / MCP Inspector からの後方互換
+ * shia2n-mcp エントリーポイント v0.19.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
- * v0.9.0：MCP ツール taskmaster__list_tasks 追加
- * v0.10.0：MCP ツール sales_manager__get_revenue_summary 追加
- * v0.11.0：MCP ツール slack_post_message 追加
- * v0.12.0：/taskmaster/diag に Bearer 認証を追加（無認証アクセスを阻止）
- * v0.13.0：POST /taskmaster/tasks 追加・MCP ツール taskmaster__add_task 追加
- * v0.14.0：/diag 公開診断エンドポイント追加（認証不要・レート制限付き）
- * v0.15.0：MCP ツール content_os__list_posts / content_os__get_post / content_os__search_posts 追加
- * v0.16.0：POST /taskmaster/tasks/update 追加・MCP ツール taskmaster__update_task / content_os__update_score 追加
- * v0.17.0：MCP ツール inbox_review_assist 追加
- * v0.18.0：MCP ツール haAku__get_kpi_progress / haAku__get_daily_report 追加（依頼書：3579c6c1-c439-81ea-928b-dcb455ad4bb1）
+ * v0.9.0：taskmaster__list_tasks 追加
+ * v0.10.0：sales_manager__get_revenue_summary 追加
+ * v0.11.0：slack_post_message 追加
+ * v0.12.0：/taskmaster/diag に Bearer 認証追加
+ * v0.13.0：POST /taskmaster/tasks・taskmaster__add_task 追加
+ * v0.14.0：/diag 公開診断エンドポイント追加
+ * v0.15.0：content_os__list_posts / content_os__get_post / content_os__search_posts 追加
+ * v0.16.0：POST /taskmaster/tasks/update・taskmaster__update_task / content_os__update_score 追加
+ * v0.17.0：inbox_review_assist 追加
+ * v0.18.0：haAku__get_kpi_progress / haAku__get_daily_report 追加
+ * v0.19.0：knowledge_tag_suggest 追加（依頼書：3579c6c1-c439-81ad-8aca-db6aef5ea2dc）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -32,6 +29,7 @@ import { registerSlackTools } from "./tools-slack.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
+import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
@@ -55,28 +53,27 @@ export interface Env {
   // Pay-kun
   PAY_KUN_API_BASE: string;
   PAY_KUN_INTERNAL_SECRET: string;
-  // ContentOS（コンテンツくん）
+  // ContentOS
   CONTENT_OS_API_BASE: string;
   CONTENT_OS_INTERNAL_SECRET: string;
-  // TaskMaster（Firestore 読み取り用）
+  // TaskMaster / haAku（Firestore）
   FIREBASE_SA_EMAIL: string;
   FIREBASE_SA_PRIVATE_KEY: string;
   NAOKI_UID: string;
   // Sales Manager
   SALES_MANAGER_API_BASE: string;
   // Slack Incoming Webhooks
-  SLACK_WEBHOOK_01: string; // #01-戦略室
-  SLACK_WEBHOOK_02: string; // #02-秘書室
-  SLACK_WEBHOOK_03: string; // #03-開発部
-  SLACK_WEBHOOK_04: string; // #04-コンテンツ部
-  // inbox_review_assist（v0.17.0 追加）
-  NOTION_TOKEN: string;      // Notion インテグレーショントークン（inbox DB 読み取り用）
-  ANTHROPIC_API_KEY: string; // Anthropic API キー（Claude による一括分類用）
-  // haAku ツールは既存 FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY / NAOKI_UID を流用（v0.18.0）
+  SLACK_WEBHOOK_01: string;
+  SLACK_WEBHOOK_02: string;
+  SLACK_WEBHOOK_03: string;
+  SLACK_WEBHOOK_04: string;
+  // v0.17.0 追加
+  NOTION_TOKEN: string;
+  ANTHROPIC_API_KEY: string; // inbox_review_assist / knowledge_tag_suggest で共用
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.18.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.19.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -89,6 +86,7 @@ function createMcpServer(env: Env): McpServer {
   registerContentOsTools(server, env);
   registerInboxReviewTools(server, env);
   registerHaakuTools(server, env);
+  registerKnowledgeTagTools(server, env);
   return server;
 }
 
@@ -101,7 +99,6 @@ function timingSafeEqual(a: string, b: string): boolean {
   return result === 0;
 }
 
-// /taskmaster/* の Bearer 認証チェック（共通ヘルパー）
 function isAuthorized(request: Request, env: Env): boolean {
   const authHeader = request.headers.get("Authorization") ?? "";
   return (
@@ -150,12 +147,10 @@ export default {
       });
     }
 
-    // /diag：公開診断エンドポイント（認証不要・レート制限付き）
     if (url.pathname === "/diag" && request.method === "GET") {
       return handleDiag(request, env);
     }
 
-    // /taskmaster/* は全て Bearer 認証必須（diag・tasks 共通）
     if (url.pathname.startsWith("/taskmaster/")) {
       if (!isAuthorized(request, env)) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
