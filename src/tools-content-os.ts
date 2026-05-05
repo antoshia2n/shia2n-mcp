@@ -4,12 +4,13 @@ import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 
 /**
- * ContentOS（content-os.shia2n.jp）の posts テーブル読み取りツール群。
- * ContentOS 側 /api/internal/{list-posts | get-post | search-posts} を
+ * ContentOS（content-os.shia2n.jp）の posts テーブル読み取り・更新ツール群。
+ * ContentOS 側 /api/internal/{list-posts | get-post | search-posts | update-score} を
  * Bearer 認証（CONTENT_OS_INTERNAL_SECRET）で叩くラッパー。
  *
  * 命名規約：`content_os__<action>`
- * v0.15.0 で新規追加（依頼書：3569c6c1-c439-81a9-869e-ef122d33c77e）
+ * v0.15.0 で読み取り3ツール追加（依頼書：3569c6c1-c439-81a9-869e-ef122d33c77e）
+ * v0.16.0 で content_os__update_score 追加（依頼書：3579c6c1-c439-81b4-98b4-cd4940145e4a）
  */
 
 async function callContentOsInternalApi<T = unknown>(
@@ -121,6 +122,29 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
       const result = await callContentOsInternalApi(env, "search-posts", {
         keyword: args.keyword,
         limit: args.limit,
+      });
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 4. content_os__update_score ─────────────────────────────────────
+  // v0.16.0 で追加（依頼書：3579c6c1-c439-81b4-98b4-cd4940145e4a）
+  server.tool(
+    "content_os__update_score",
+    "ContentOS の投稿スコアを手動設定する。コンテンツ分析後に評価を記録するときに使う。S/A/B/C/D の5段階または null（未評価に戻す）を指定できる。戻り値: { ok: true, post: {id, score, updated_at} } または { ok: false, error: 'not_found' }。",
+    {
+      id: z
+        .union([z.string(), z.number()])
+        .describe("投稿ID（bigint。content_os__list_posts の id フィールド）"),
+      score: z
+        .enum(["S", "A", "B", "C", "D"])
+        .nullable()
+        .describe("スコア。S/A/B/C/D の5段階、または null で未評価に戻す"),
+    },
+    async (args) => {
+      const result = await callContentOsInternalApi(env, "update-score", {
+        id: args.id,
+        score: args.score,
       });
       return asMcpTextResult(result);
     }

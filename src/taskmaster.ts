@@ -1,8 +1,9 @@
 /**
  * TaskMaster Firestore 読み取り／書き込みエンドポイント
- * GET  /taskmaster/tasks  — 未完了タスク・プロジェクト一覧（Bearer 認証必須）
- * POST /taskmaster/tasks  — タスク新規追加（Bearer 認証必須）
- * GET  /taskmaster/diag   — 診断（Bearer 認証必須）
+ * GET  /taskmaster/tasks       — 未完了タスク・プロジェクト一覧（Bearer 認証必須）
+ * POST /taskmaster/tasks       — タスク新規追加（Bearer 認証必須）
+ * POST /taskmaster/tasks/update — タスク更新（Bearer 認証必須）
+ * GET  /taskmaster/diag        — 診断（Bearer 認証必須）
  *
  * データ構造（診断で確認済み）：
  *   users/{uid}/app_data/tasks    → fields.value が arrayValue（562件）
@@ -376,6 +377,83 @@ export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<R
   }
 
   return Response.json({ ok: true, task: toTask(newTask) }, { status: 201 });
+}
+
+// ─────────────────────────────────────────────
+// POST /taskmaster/tasks/update — タスク更新
+// v0.16.0 で追加
+// ─────────────────────────────────────────────
+
+type UpdateTaskInput = {
+  task_id: string;
+  title?: string;
+  status?: string;
+  priority?: string;
+  deadline?: string | null;
+  archived?: boolean;
+};
+
+export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promise<Response> {
+  const uid = env.NAOKI_UID;
+  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    return Response.json({ error: "env not configured" }, { status: 500 });
+  }
+
+  let body: UpdateTaskInput;
+  try {
+    body = await req.json() as UpdateTaskInput;
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  if (!body.task_id || typeof body.task_id !== "string") {
+    return Response.json({ error: "task_id is required" }, { status: 400 });
+  }
+
+  let token: string;
+  try { token = await getFirestoreToken(env); }
+  catch (e) {
+    return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
+  }
+
+  // 既存タスク配列を取得
+  let tasksDoc: FSDoc;
+  try {
+    tasksDoc = await fsGet(token, `users/${uid}/app_data/tasks`);
+  } catch (e) {
+    return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
+  }
+
+  const existingItems = expandValue(tasksDoc);
+  const targetIndex = existingItems.findIndex((t) => t.id === body.task_id);
+  if (targetIndex === -1) {
+    return Response.json({ error: "task not found", task_id: body.task_id }, { status: 404 });
+  }
+
+  // 指定フィールドのみ上書き（未指定フィールドは既存値を保持）
+  const updated: Item = { ...existingItems[targetIndex] };
+  if (body.title    !== undefined) updated.title    = body.title;
+  if (body.status   !== undefined) updated.status   = body.status;
+  if (body.priority !== undefined) updated.priority = body.priority;
+  if (body.deadline !== undefined) updated.deadline = body.deadline;
+  if (body.archived !== undefined) updated.archived = body.archived;
+
+  const updatedItems = [...existingItems];
+  updatedItems[targetIndex] = updated;
+
+  // Firestore に書き戻す（value フィールドのみ updateMask）
+  try {
+    await fsPatch(
+      token,
+      `users/${uid}/app_data/tasks`,
+      { value: toFVal(updatedItems) },
+      ["value"]
+    );
+  } catch (e) {
+    return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 });
+  }
+
+  return Response.json({ ok: true, task: toTask(updated) });
 }
 
 // ─────────────────────────────────────────────
