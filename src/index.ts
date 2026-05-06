@@ -157,6 +157,19 @@ export default {
       return handleDiag(request, env);
     }
 
+    // Cron 手動実行（動作確認用）Bearer 認証必須
+    if (url.pathname === "/cron/neta-mail/run" && request.method === "POST") {
+      if (!isAuthorized(request, env)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      try {
+        await handleScheduled(env);
+        return Response.json({ ok: true, message: "neta-mail sent" });
+      } catch (e) {
+        return Response.json({ ok: false, error: String(e) }, { status: 500 });
+      }
+    }
+
     if (url.pathname.startsWith("/taskmaster/")) {
       if (!isAuthorized(request, env)) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
