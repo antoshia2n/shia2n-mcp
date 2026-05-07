@@ -64,6 +64,8 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
       priority: z.string().optional().describe("新しい優先度。例: \"high\" / \"medium\" / \"low\"。省略時は変更なし"),
       deadline: z.string().nullable().optional().describe("新しい期限日（ISO 8601 形式。例: \"2026-05-14\"）。null で期限削除。省略時は変更なし"),
       archived: z.boolean().optional().describe("true にすると廃案・アーカイブ扱い（論理削除）。省略時は変更なし"),
+      projectId: z.string().nullable().optional().describe("紐付けるプロジェクトID。null でプロジェクト解除。省略時は変更なし"),
+      groupId: z.string().nullable().optional().describe("紐付けるグループID。null でグループ解除。省略時は変更なし"),
     },
     async (args) => {
       const res = await handleTaskmasterUpdateTask(

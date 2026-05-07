@@ -15,6 +15,7 @@
  * v0.19.0：knowledge_tag_suggest 追加
  * v0.20.0：Cron ネタ9本メール追加（依頼書：3194c8d4-3517-4ad9-b996-fe53ca9cfe71）
  * v0.21.0：taskmaster__create_project / taskmaster__delete_project 追加（依頼書：de27238b-8526-4529-9e7c-a26667d506e4）
+ * v0.22.0：taskmaster__update_task に projectId / groupId 追加（依頼書：e3756a13-2c72-441d-a6cf-f04c5ee73788）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -80,7 +81,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.21.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.22.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);

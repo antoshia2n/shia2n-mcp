@@ -391,6 +391,8 @@ type UpdateTaskInput = {
   priority?: string;
   deadline?: string | null;
   archived?: boolean;
+  projectId?: string | null;
+  groupId?: string | null;
 };
 
 export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promise<Response> {
@@ -432,11 +434,13 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
 
   // 指定フィールドのみ上書き（未指定フィールドは既存値を保持）
   const updated: Item = { ...existingItems[targetIndex] };
-  if (body.title    !== undefined) updated.title    = body.title;
-  if (body.status   !== undefined) updated.status   = body.status;
-  if (body.priority !== undefined) updated.priority = body.priority;
-  if (body.deadline !== undefined) updated.deadline = body.deadline;
-  if (body.archived !== undefined) updated.archived = body.archived;
+  if (body.title     !== undefined) updated.title     = body.title;
+  if (body.status    !== undefined) updated.status    = body.status;
+  if (body.priority  !== undefined) updated.priority  = body.priority;
+  if (body.deadline  !== undefined) updated.deadline  = body.deadline;
+  if (body.archived  !== undefined) updated.archived  = body.archived;
+  if (body.projectId !== undefined) updated.projectId = body.projectId;
+  if (body.groupId   !== undefined) updated.groupId   = body.groupId;
 
   const updatedItems = [...existingItems];
   updatedItems[targetIndex] = updated;
