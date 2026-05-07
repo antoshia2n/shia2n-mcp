@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.21.0
+ * shia2n-mcp エントリーポイント v0.20.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -14,7 +14,7 @@
  * v0.18.0：haAku__get_kpi_progress / haAku__get_daily_report 追加
  * v0.19.0：knowledge_tag_suggest 追加
  * v0.20.0：Cron ネタ9本メール追加（依頼書：3194c8d4-3517-4ad9-b996-fe53ca9cfe71）
- * v0.21.0：Cron Notion→Zeus 夜間同期追加（毎日 JST 03:00 = UTC 18:00）
+ * v0.21.0：taskmaster__create_project / taskmaster__delete_project 追加（依頼書：de27238b-8526-4529-9e7c-a26667d506e4）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -33,7 +33,7 @@ import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { AuthHandler } from "./auth-handler.js";
-import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterDiag } from "./taskmaster.js";
+import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterCreateProject, handleTaskmasterDeleteProject, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
 import { handleScheduled } from "./cron-neta-mail.js";
 
@@ -75,47 +75,9 @@ export interface Env {
   ANTHROPIC_API_KEY: string; // inbox_review_assist / knowledge_tag_suggest / cron-neta-mail で共用
   // v0.20.0 追加（Cron ネタ9本メール）
   RESEND_API_KEY: string;
-  RESEND_FROM_EMAIL: string;
-  RESEND_TO_EMAIL: string;
+  RESEND_FROM_EMAIL: string; // 例: neta@shia2n.jp（Resend で送信ドメイン認証が必要）
+  RESEND_TO_EMAIL: string;   // 送信先：Naoki のメールアドレス
 }
-
-// ─── v0.21.0：Notion → Zeus 夜間同期 ──────────────────────────────────────────
-
-const ZEUS_EXTERNAL_BASE = "https://zeus.shia2n.jp/api/external";
-
-async function handleNotionZeusSync(env: Env): Promise<void> {
-  if (!env.ZEUS_EXTERNAL_SECRET) {
-    console.error("[notion-zeus-sync] ZEUS_EXTERNAL_SECRET not configured");
-    return;
-  }
-
-  try {
-    const res = await fetch(`${ZEUS_EXTERNAL_BASE}/sync-from-notion`, {
-      method: "POST",
-      headers: {
-        "Content-Type":  "application/json",
-        "Authorization": `Bearer ${env.ZEUS_EXTERNAL_SECRET}`,
-      },
-      body: JSON.stringify({ force_full: false }),
-    });
-
-    const data = await res.json() as Record<string, unknown>;
-
-    if (!res.ok) {
-      console.error("[notion-zeus-sync] sync failed:", data);
-      return;
-    }
-
-    console.log(
-      `[notion-zeus-sync] ok — total: ${data.total_imported}, by_source:`,
-      JSON.stringify(data.by_source)
-    );
-  } catch (e) {
-    console.error("[notion-zeus-sync] network error:", e instanceof Error ? e.message : String(e));
-  }
-}
-
-// ─── MCP サーバー ───────────────────────────────────────────────────────────────
 
 function createMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "shia2n-mcp", version: "0.21.0" });
@@ -196,32 +158,6 @@ export default {
       return handleDiag(request, env);
     }
 
-    // Cron 手動実行：ネタメール
-    if (url.pathname === "/cron/neta-mail/run" && request.method === "POST") {
-      if (!isAuthorized(request, env)) {
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
-      }
-      try {
-        await handleScheduled(env);
-        return Response.json({ ok: true, message: "neta-mail sent" });
-      } catch (e) {
-        return Response.json({ ok: false, error: String(e) }, { status: 500 });
-      }
-    }
-
-    // Cron 手動実行：Notion → Zeus 同期（v0.21.0 追加）
-    if (url.pathname === "/cron/notion-sync/run" && request.method === "POST") {
-      if (!isAuthorized(request, env)) {
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
-      }
-      try {
-        await handleNotionZeusSync(env);
-        return Response.json({ ok: true, message: "notion-zeus-sync triggered" });
-      } catch (e) {
-        return Response.json({ ok: false, error: String(e) }, { status: 500 });
-      }
-    }
-
     if (url.pathname.startsWith("/taskmaster/")) {
       if (!isAuthorized(request, env)) {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -238,19 +174,19 @@ export default {
       if (url.pathname === "/taskmaster/tasks/update" && request.method === "POST") {
         return handleTaskmasterUpdateTask(request, env);
       }
+      if (url.pathname === "/taskmaster/projects" && request.method === "POST") {
+        return handleTaskmasterCreateProject(request, env);
+      }
+      if (url.pathname === "/taskmaster/projects/delete" && request.method === "POST") {
+        return handleTaskmasterDeleteProject(request, env);
+      }
       return Response.json({ error: "Not Found" }, { status: 404 });
     }
 
     return oauthProvider.fetch(request, env, ctx);
   },
 
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    if (event.cron === "0 22 * * *") {
-      // JST 07:00：ネタ9本メール
-      ctx.waitUntil(handleScheduled(env));
-    } else if (event.cron === "0 18 * * *") {
-      // JST 03:00：Notion → Zeus 同期
-      ctx.waitUntil(handleNotionZeusSync(env));
-    }
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(handleScheduled(env));
   },
 };

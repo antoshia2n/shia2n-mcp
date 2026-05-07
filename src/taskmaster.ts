@@ -512,3 +512,144 @@ export async function handleTaskmasterDiag(_req: Request, env: Env): Promise<Res
 
   return Response.json(result);
 }
+// ─────────────────────────────────────────────
+// POST /taskmaster/projects — プロジェクト新規作成
+// v0.21.0 で追加（依頼書：de27238b-8526-4529-9e7c-a26667d506e4）
+// ─────────────────────────────────────────────
+
+type CreateProjectInput = {
+  title: string;
+  status?: string;
+  endDate?: string | null;
+};
+
+export async function handleTaskmasterCreateProject(req: Request, env: Env): Promise<Response> {
+  const uid = env.NAOKI_UID;
+  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    return Response.json({ error: "env not configured" }, { status: 500 });
+  }
+
+  let body: CreateProjectInput;
+  try {
+    body = await req.json() as CreateProjectInput;
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  if (!body.title || typeof body.title !== "string" || !body.title.trim()) {
+    return Response.json({ error: "title is required" }, { status: 400 });
+  }
+
+  let token: string;
+  try { token = await getFirestoreToken(env); }
+  catch (e) {
+    return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
+  }
+
+  // 既存プロジェクト配列を取得
+  let projectsDoc: FSDoc;
+  try {
+    projectsDoc = await fsGet(token, `users/${uid}/app_data/projects`);
+  } catch (e) {
+    return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
+  }
+
+  const existingItems = expandValue(projectsDoc);
+
+  // 新規プロジェクトオブジェクト
+  const newProject: Item = {
+    id:        crypto.randomUUID(),
+    title:     body.title.trim(),
+    status:    body.status ?? "active",
+    endDate:   body.endDate ?? null,
+    createdAt: new Date().toISOString().slice(0, 10),
+  };
+
+  const updatedItems = [...existingItems, newProject];
+
+  try {
+    await fsPatch(
+      token,
+      `users/${uid}/app_data/projects`,
+      { value: toFVal(updatedItems) },
+      ["value"]
+    );
+  } catch (e) {
+    return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 });
+  }
+
+  return Response.json({ ok: true, project: toProject(newProject) }, { status: 201 });
+}
+
+// ─────────────────────────────────────────────
+// POST /taskmaster/projects/delete — プロジェクト削除
+// v0.21.0 で追加（依頼書：de27238b-8526-4529-9e7c-a26667d506e4）
+// 配下タスクの projectId は null にリセット（カスケード削除なし）
+// ─────────────────────────────────────────────
+
+type DeleteProjectInput = {
+  project_id: string;
+};
+
+export async function handleTaskmasterDeleteProject(req: Request, env: Env): Promise<Response> {
+  const uid = env.NAOKI_UID;
+  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    return Response.json({ error: "env not configured" }, { status: 500 });
+  }
+
+  let body: DeleteProjectInput;
+  try {
+    body = await req.json() as DeleteProjectInput;
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  if (!body.project_id || typeof body.project_id !== "string") {
+    return Response.json({ error: "project_id is required" }, { status: 400 });
+  }
+
+  let token: string;
+  try { token = await getFirestoreToken(env); }
+  catch (e) {
+    return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
+  }
+
+  // projects・tasks を並行取得
+  let projectsDoc: FSDoc, tasksDoc: FSDoc;
+  try {
+    [projectsDoc, tasksDoc] = await Promise.all([
+      fsGet(token, `users/${uid}/app_data/projects`),
+      fsGet(token, `users/${uid}/app_data/tasks`),
+    ]);
+  } catch (e) {
+    return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
+  }
+
+  const existingProjects = expandValue(projectsDoc);
+  const targetIndex = existingProjects.findIndex((p) => p.id === body.project_id);
+  if (targetIndex === -1) {
+    return Response.json({ error: "project not found", project_id: body.project_id }, { status: 404 });
+  }
+
+  // プロジェクトを配列から除外
+  const updatedProjects = existingProjects.filter((p) => p.id !== body.project_id);
+
+  // 配下タスクの projectId を null にリセット
+  const existingTasks = expandValue(tasksDoc);
+  const updatedTasks = existingTasks.map((t) =>
+    t.projectId === body.project_id ? { ...t, projectId: null } : t
+  );
+  const resetCount = existingTasks.filter((t) => t.projectId === body.project_id).length;
+
+  // projects・tasks を並行書き戻し
+  try {
+    await Promise.all([
+      fsPatch(token, `users/${uid}/app_data/projects`, { value: toFVal(updatedProjects) }, ["value"]),
+      fsPatch(token, `users/${uid}/app_data/tasks`,    { value: toFVal(updatedTasks) },    ["value"]),
+    ]);
+  } catch (e) {
+    return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 });
+  }
+
+  return Response.json({ ok: true, deleted: body.project_id, tasks_reset: resetCount });
+}
