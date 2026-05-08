@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.20.0
+ * shia2n-mcp エントリーポイント v0.23.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -16,6 +16,7 @@
  * v0.20.0：Cron ネタ9本メール追加（依頼書：3194c8d4-3517-4ad9-b996-fe53ca9cfe71）
  * v0.21.0：taskmaster__create_project / taskmaster__delete_project 追加（依頼書：de27238b-8526-4529-9e7c-a26667d506e4）
  * v0.22.0：taskmaster__update_task に projectId / groupId 追加（依頼書：e3756a13-2c72-441d-a6cf-f04c5ee73788）
+ * v0.23.0：mn__create_lesson_from_youtube 追加（学ぶくん A S2先行解凍）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -33,6 +34,7 @@ import { registerContentOsTools } from "./tools-content-os.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
+import { registerManabuTools } from "./tools-manabu.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterCreateProject, handleTaskmasterDeleteProject, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
@@ -73,15 +75,19 @@ export interface Env {
   SLACK_WEBHOOK_04: string;
   // v0.17.0 追加
   NOTION_TOKEN: string;
-  ANTHROPIC_API_KEY: string; // inbox_review_assist / knowledge_tag_suggest / cron-neta-mail で共用
+  ANTHROPIC_API_KEY: string; // inbox_review_assist / knowledge_tag_suggest / cron-neta-mail / mn__ で共用
   // v0.20.0 追加（Cron ネタ9本メール）
   RESEND_API_KEY: string;
-  RESEND_FROM_EMAIL: string; // 例: neta@shia2n.jp（Resend で送信ドメイン認証が必要）
-  RESEND_TO_EMAIL: string;   // 送信先：Naoki のメールアドレス
+  RESEND_FROM_EMAIL: string;
+  RESEND_TO_EMAIL: string;
+  // v0.23.0 追加（学ぶくん A）
+  YOUTUBE_API_KEY: string;
+  SUPABASE_URL: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.22.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.23.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -95,6 +101,7 @@ function createMcpServer(env: Env): McpServer {
   registerInboxReviewTools(server, env);
   registerHaakuTools(server, env);
   registerKnowledgeTagTools(server, env);
+  registerManabuTools(server, env);
   return server;
 }
 
