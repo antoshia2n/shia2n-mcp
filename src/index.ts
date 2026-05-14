@@ -35,6 +35,7 @@ import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
+import { registerShiaraboTools } from "./tools-shiarabo.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterCreateProject, handleTaskmasterDeleteProject, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
@@ -87,7 +88,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.23.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.24.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -102,6 +103,7 @@ function createMcpServer(env: Env): McpServer {
   registerHaakuTools(server, env);
   registerKnowledgeTagTools(server, env);
   registerManabuTools(server, env);
+  registerShiaraboTools(server, env);
   return server;
 }
 
