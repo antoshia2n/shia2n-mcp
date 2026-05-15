@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.23.0
+ * shia2n-mcp エントリーポイント v0.25.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -17,6 +17,8 @@
  * v0.21.0：taskmaster__create_project / taskmaster__delete_project 追加（依頼書：de27238b-8526-4529-9e7c-a26667d506e4）
  * v0.22.0：taskmaster__update_task に projectId / groupId 追加（依頼書：e3756a13-2c72-441d-a6cf-f04c5ee73788）
  * v0.23.0：mn__create_lesson_from_youtube 追加（学ぶくん A S2先行解凍）
+ * v0.24.0：content_os__list_slots / content_os__fill_slot 追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
+ * v0.25.0：content_os__create_slot 追加（依頼書：3619c6c1-c439-8128-9de8-fb5da46c209b）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -88,7 +90,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.24.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.25.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);

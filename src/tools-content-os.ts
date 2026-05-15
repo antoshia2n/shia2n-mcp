@@ -5,13 +5,14 @@ import type { Env } from "./index.js";
 
 /**
  * ContentOS（content-os.shia2n.jp）の posts テーブル読み取り・更新ツール群。
- * ContentOS 側 /api/internal/{list-posts | get-post | search-posts | update-score | list-slots | fill-slot} を
+ * ContentOS 側 /api/internal/{list-posts | get-post | search-posts | update-score | list-slots | fill-slot | create-slot} を
  * Bearer 認証（CONTENT_OS_INTERNAL_SECRET）で叩くラッパー。
  *
  * 命名規約：`content_os__<action>`
  * v0.15.0 で読み取り3ツール追加（依頼書：3569c6c1-c439-81a9-869e-ef122d33c77e）
  * v0.16.0 で content_os__update_score 追加（依頼書：3579c6c1-c439-81b4-98b4-cd4940145e4a）
  * v0.17.0 で content_os__list_slots / content_os__fill_slot 追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
+ * v0.25.0 で content_os__create_slot 追加（依頼書：3619c6c1-c439-8128-9de8-fb5da46c209b）
  */
 
 async function callContentOsInternalApi<T = unknown>(
@@ -220,6 +221,44 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         body: args.body,
         post_type: args.post_type,
         force: args.force,
+      });
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 7. content_os__create_slot ──────────────────────────────────────
+  // v0.25.0 で追加（依頼書：3619c6c1-c439-8128-9de8-fb5da46c209b）
+  // 運用ルール（Decisions：3619c6c1-c439-8127-a30d-c283e3ac7d56）：
+  //   Claude が単独判断で呼ぶことは禁止。Naoki の明示指示があった時のみ呼ぶ。
+  //   1回の呼び出しは原則1枠。連続枠生成は別途 Naoki 承認が必要。
+  server.tool(
+    "content_os__create_slot",
+    "ContentOS に新しい空き予約枠（スロット）を作成する。Naoki から「○月○日に X 記事の予約枠を1本作って」のような明示指示があった時のみ呼ぶ。Claude が単独判断で呼ぶことは禁止。1回の呼び出しは原則1枠（連続枠生成は別途 Naoki 承認が必要）。作成後は枠の id と datetime を Naoki へ報告し、その後 content_os__fill_slot で本文を流し込む。戻り値: { ok: true, slot: { id, datetime, title, platform, post_type, status } } または { ok: false, error: string }。",
+    {
+      datetime: z
+        .string()
+        .describe("予約日時（YYYY-MM-DDTHH:mm 形式）。例: 2026-05-20T10:00"),
+      title: z
+        .string()
+        .min(1)
+        .describe("投稿タイトル（必須・空文字不可）"),
+      platform: z
+        .string()
+        .describe("媒体（x / note）"),
+      post_type: z
+        .string()
+        .describe("投稿タイプ（x_post / x_article / note 等）"),
+      account_id: z
+        .string()
+        .describe("ContentOS アカウントID（content_os__list_slots の account_id フィールドで確認）"),
+    },
+    async (args) => {
+      const result = await callContentOsInternalApi(env, "create-slot", {
+        datetime: args.datetime,
+        title: args.title,
+        platform: args.platform,
+        post_type: args.post_type,
+        account_id: args.account_id,
       });
       return asMcpTextResult(result);
     }
