@@ -5,12 +5,13 @@ import type { Env } from "./index.js";
 
 /**
  * ContentOS（content-os.shia2n.jp）の posts テーブル読み取り・更新ツール群。
- * ContentOS 側 /api/internal/{list-posts | get-post | search-posts | update-score} を
+ * ContentOS 側 /api/internal/{list-posts | get-post | search-posts | update-score | list-slots | fill-slot} を
  * Bearer 認証（CONTENT_OS_INTERNAL_SECRET）で叩くラッパー。
  *
  * 命名規約：`content_os__<action>`
  * v0.15.0 で読み取り3ツール追加（依頼書：3569c6c1-c439-81a9-869e-ef122d33c77e）
  * v0.16.0 で content_os__update_score 追加（依頼書：3579c6c1-c439-81b4-98b4-cd4940145e4a）
+ * v0.17.0 で content_os__list_slots / content_os__fill_slot 追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
  */
 
 async function callContentOsInternalApi<T = unknown>(
@@ -145,6 +146,80 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
       const result = await callContentOsInternalApi(env, "update-score", {
         id: args.id,
         score: args.score,
+      });
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 5. content_os__list_slots ───────────────────────────────────────
+  // v0.17.0 で追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
+  server.tool(
+    "content_os__list_slots",
+    "ContentOS の空き予約枠一覧を取得する。Naoki が事前に ContentOS UI で作成した「body が空の投稿レコード」を返す。Claude はこの枠に content_os__fill_slot で本文を書き込む。戻り値: { ok, count, slots: [{id, datetime, platform, post_type, status, title, account_id}] }。datetime 昇順。",
+    {
+      after: z
+        .string()
+        .optional()
+        .describe("この日時以降の枠を返す（YYYY-MM-DDTHH:mm 形式）"),
+      before: z
+        .string()
+        .optional()
+        .describe("この日時以前の枠を返す（YYYY-MM-DDTHH:mm 形式）"),
+      platform: z
+        .string()
+        .optional()
+        .describe("媒体で絞り込む（例: x / note）"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .optional()
+        .describe("返す件数（既定20、上限50）"),
+    },
+    async (args) => {
+      const result = await callContentOsInternalApi(env, "list-slots", {
+        after: args.after,
+        before: args.before,
+        platform: args.platform,
+        limit: args.limit,
+      });
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 6. content_os__fill_slot ────────────────────────────────────────
+  // v0.17.0 で追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
+  server.tool(
+    "content_os__fill_slot",
+    "ContentOS の指定予約枠（body が空のレコード）に title / body を書き込み、status を draft に更新する。すでに body が埋まっている枠への上書きは error（slot_already_filled）を返す。force=true を指定した場合のみ上書きを許可。必ず content_os__list_slots で枠の id を確認してから呼ぶこと。戻り値: { ok: true, post: {id, title, status, datetime} } または { ok: false, error: 'slot_already_filled' | 'not_found' }。",
+    {
+      id: z
+        .union([z.string(), z.number()])
+        .describe("予約枠の投稿ID（bigint。content_os__list_slots の id フィールド）"),
+      title: z
+        .string()
+        .min(1)
+        .describe("投稿タイトル（必須）"),
+      body: z
+        .string()
+        .describe("投稿本文（HTML可・空文字不可）"),
+      post_type: z
+        .string()
+        .optional()
+        .describe("投稿タイプ（省略時は枠の既存値を維持）。例: x_post / x_article / note"),
+      force: z
+        .boolean()
+        .optional()
+        .describe("true を指定するとすでに body が入っている枠にも上書きする。省略時は false"),
+    },
+    async (args) => {
+      const result = await callContentOsInternalApi(env, "fill-slot", {
+        id: args.id,
+        title: args.title,
+        body: args.body,
+        post_type: args.post_type,
+        force: args.force,
       });
       return asMcpTextResult(result);
     }
