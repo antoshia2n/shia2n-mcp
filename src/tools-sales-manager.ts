@@ -75,7 +75,10 @@ function contractAmountForMonth(contracts: Contract[], abs: number): number {
 }
 
 function getStrategyGoal(strategy: Strategy[], abs: number): number | null {
-  const row = strategy.find(r => r.key === `goal_${abs}`);
+  // abs形式（goal_24316）またはmonth_idx形式（goal_4）の両方に対応
+  // sm_strategy API が month_idx(0-11) 形式で返す場合に abs % 12 でフォールバック
+  const row = strategy.find(r => r.key === `goal_${abs}`)
+           ?? strategy.find(r => r.key === `goal_${abs % 12}`);
   if (!row) return null;
   try {
     const val = typeof row.value === "string" ? JSON.parse(row.value) : row.value;
