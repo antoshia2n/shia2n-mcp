@@ -29,19 +29,22 @@ type Strategy = { key: string; value: string | number };
 type Business = { id: number; name: string; color?: string };
 
 // ─────────────────────────────────────────────
-// abs ユーティリティ（haAku/src/tokens.ts 相当）
-// abs = year * 12 + month(0始まり)
+// abs ユーティリティ（Sales Manager UI 側 constants.ts と完全整合）
+// BASE_YEAR(2026) からの月インデックス。0 = 2026年1月、4 = 2026年5月。
+// haAku の year*12+month 形式ではない（DBスキーマが異なる）。
 // ─────────────────────────────────────────────
+
+const BASE_YEAR = 2026;
 
 function currAbs(): number {
   const now = new Date();
-  return now.getFullYear() * 12 + now.getMonth();
+  return (now.getFullYear() - BASE_YEAR) * 12 + now.getMonth();
 }
 
 function yearAbsList(): number[] {
   const now = new Date();
-  const year = now.getFullYear();
-  return Array.from({ length: 12 }, (_, i) => year * 12 + i);
+  const yearOffset = (now.getFullYear() - BASE_YEAR) * 12;
+  return Array.from({ length: 12 }, (_, i) => yearOffset + i);
 }
 
 function nextAbs(): number {
