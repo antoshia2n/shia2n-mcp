@@ -22,7 +22,7 @@ export function registerSalesManagerTools(server: McpServer, env: Env): void {
 // 型定義
 // ─────────────────────────────────────────────
 
-type Payment  = { paid: boolean; month_idx: number; amount: number; contract_id?: string };
+type Payment  = { paid: boolean; month_idx: number; amount: number; actual_amount?: number | null; contract_id?: string };
 type Contract = { id: string; status: string; type: string; start_month_idx?: number; total_count?: number; amount: number; business?: string };
 type Single   = { month_idx: number; amount: number; business?: string };
 type Strategy = { key: string; value: string | number };
@@ -112,7 +112,7 @@ async function fetchSMData(base: string): Promise<{
 // ─────────────────────────────────────────────
 
 async function getRevenueSummary(env: Env) {
-  const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager.shia2n.jp";
+  const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager-black.vercel.app";
   const { payments, contracts, singles, strategy, businesses } = await fetchSMData(base);
 
   const cur     = currAbs();
@@ -125,7 +125,7 @@ async function getRevenueSummary(env: Env) {
 
   // 当月確定
   const monthConf =
-    payments.filter(p => p.paid && p.month_idx === cur).reduce((a, p) => a + p.amount, 0) +
+    payments.filter(p => p.paid && p.month_idx === cur).reduce((a, p) => a + (p.actual_amount ?? p.amount), 0) +
     singles.filter(s => s.month_idx === cur).reduce((a, s) => a + s.amount, 0);
 
   // 当月目標
@@ -148,7 +148,7 @@ async function getRevenueSummary(env: Env) {
 
   // 年間
   const yearConf =
-    payments.filter(p => p.paid && absList.includes(p.month_idx)).reduce((a, p) => a + p.amount, 0) +
+    payments.filter(p => p.paid && absList.includes(p.month_idx)).reduce((a, p) => a + (p.actual_amount ?? p.amount), 0) +
     singles.filter(s => absList.includes(s.month_idx)).reduce((a, s) => a + s.amount, 0);
   const yearGoal = absList.reduce((t, abs) => t + getGoal(abs), 0);
 
@@ -160,7 +160,7 @@ async function getRevenueSummary(env: Env) {
   // 月次チャート
   const chartData = absList.map(abs => {
     const m    = abs % 12 + 1;
-    const conf = payments.filter(p => p.paid && p.month_idx === abs).reduce((a, p) => a + p.amount, 0)
+    const conf = payments.filter(p => p.paid && p.month_idx === abs).reduce((a, p) => a + (p.actual_amount ?? p.amount), 0)
                + singles.filter(s => s.month_idx === abs).reduce((a, s) => a + s.amount, 0);
     const goal = getGoal(abs);
     const proj = abs > cur
@@ -174,7 +174,7 @@ async function getRevenueSummary(env: Env) {
   const nextMonthGoal = getGoal(nxt);
   const nextMonthProj = contractAmountForMonth(contracts, nxt);
   const nextMonthConf =
-    payments.filter(p => p.paid && p.month_idx === nxt).reduce((a, p) => a + p.amount, 0) +
+    payments.filter(p => p.paid && p.month_idx === nxt).reduce((a, p) => a + (p.actual_amount ?? p.amount), 0) +
     singles.filter(s => s.month_idx === nxt).reduce((a, s) => a + s.amount, 0);
 
   // 事業別当月確定
@@ -184,7 +184,7 @@ async function getRevenueSummary(env: Env) {
     const conf = payments
       .filter(p => p.paid && p.month_idx === cur)
       .filter(p => bizContracts.some(c => c.id === p.contract_id))
-      .reduce((a, p) => a + p.amount, 0);
+      .reduce((a, p) => a + (p.actual_amount ?? p.amount), 0);
     const singleConf = singles
       .filter(s => s.month_idx === cur && s.business === biz.name)
       .reduce((a, s) => a + s.amount, 0);
