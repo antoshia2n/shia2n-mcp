@@ -22,7 +22,7 @@ export function registerSalesManagerTools(server: McpServer, env: Env): void {
 // 型定義
 // ─────────────────────────────────────────────
 
-type Payment  = { paid: boolean; month_idx: number; amount: number; actual_amount?: number | null; contract_id?: string };
+type Payment  = { paid: boolean; month_idx: number; amount: number; actual_amount?: number | null; contract_id?: string; due_date?: string | null };
 type Contract = { id: string; status: string; type: string; start_month_idx?: number; total_count?: number; amount: number; business?: string };
 type Single   = { month_idx: number; amount: number; business?: string };
 type Strategy = { key: string; value: string | number };
@@ -155,9 +155,10 @@ async function getRevenueSummary(env: Env) {
     singles.filter(s => absList.includes(s.month_idx)).reduce((a, s) => a + s.amount, 0);
   const yearGoal = absList.reduce((t, abs) => t + getGoal(abs), 0);
 
-  // 未収金
+  // 未収金（due_date ベース：支払期限が設定済み・期限到来・未入金）
+  const today = new Date().toISOString().split('T')[0];
   const uncollectedTotal = payments
-    .filter(p => !p.paid && p.month_idx < cur)
+    .filter(p => !p.paid && p.due_date != null && p.due_date <= today)
     .reduce((a, p) => a + p.amount, 0);
 
   // 月次チャート
