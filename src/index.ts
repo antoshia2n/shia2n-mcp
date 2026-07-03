@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.26.0
+ * shia2n-mcp エントリーポイント v0.26.1
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -19,7 +19,9 @@
  * v0.23.0：mn__create_lesson_from_youtube 追加（学ぶくん A S2先行解凍）
  * v0.24.0：content_os__list_slots / content_os__fill_slot 追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
  * v0.25.0：content_os__create_slot 追加（依頼書：3619c6c1-c439-8128-9de8-fb5da46c209b）
- * v0.26.0：会員管理くん Phase 3 ③ UTAGE ポーリング追加（cron 5,35 * * * * / POST /utage/backfill）
+ * v0.26.0：会員管理くん Phase 3 ③ UTAGE ポーリング追加（POST /utage/backfill）
+ * v0.26.1：cron を 1 本（0,30 * * * *）に統合（Free プラン 5 本上限対策）
+ *          ネタメールは handler 内の UTC 時刻判定で既存と同時刻（UTC 18:00 / 22:00）発火
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -98,7 +100,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.26.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.26.1" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -215,12 +217,17 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    // event.cron で分岐（同一 Worker に複数 cron が定義されているため）
-    if (event.cron === "5,35 * * * *") {
-      // 会員管理くん Phase 3 ③ UTAGE ポーリング
-      ctx.waitUntil(handleUtagePolling(env));
-    } else {
-      // 既存：ネタ9本メール（22時 / 18時）
+    // cron は "0,30 * * * *" の 1 本のみ（Free プラン 5 本上限対策）。
+    // 何を実行するかは UTC 時刻判定で分岐する。
+    const scheduledDate = new Date(event.scheduledTime);
+    const utcHour = scheduledDate.getUTCHours();
+    const utcMinute = scheduledDate.getUTCMinutes();
+
+    // UTAGE ポーリング：毎回（30 分ごと）実行
+    ctx.waitUntil(handleUtagePolling(env));
+
+    // ネタ9本メール：既存 cron（"0 18 * * *" / "0 22 * * *"）と同時刻に発火
+    if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
       ctx.waitUntil(handleScheduled(env));
     }
   },
