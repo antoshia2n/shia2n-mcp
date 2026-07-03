@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.25.0
+ * shia2n-mcp エントリーポイント v0.26.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -19,6 +19,7 @@
  * v0.23.0：mn__create_lesson_from_youtube 追加（学ぶくん A S2先行解凍）
  * v0.24.0：content_os__list_slots / content_os__fill_slot 追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
  * v0.25.0：content_os__create_slot 追加（依頼書：3619c6c1-c439-8128-9de8-fb5da46c209b）
+ * v0.26.0：会員管理くん Phase 3 ③ UTAGE ポーリング追加（cron 5,35 * * * * / POST /utage/backfill）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -42,6 +43,8 @@ import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterCreateProject, handleTaskmasterDeleteProject, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
 import { handleScheduled } from "./cron-neta-mail.js";
+import { handleUtagePolling } from "./cron-utage-polling.js";
+import { handleUtageBackfill } from "./handle-utage-backfill.js";
 
 export interface Env {
   // Core
@@ -78,7 +81,7 @@ export interface Env {
   SLACK_WEBHOOK_04: string;
   // v0.17.0 追加
   NOTION_TOKEN: string;
-  ANTHROPIC_API_KEY: string; // inbox_review_assist / knowledge_tag_suggest / cron-neta-mail / mn__ で共用
+  ANTHROPIC_API_KEY: string;
   // v0.20.0 追加（Cron ネタ9本メール）
   RESEND_API_KEY: string;
   RESEND_FROM_EMAIL: string;
@@ -87,10 +90,15 @@ export interface Env {
   YOUTUBE_API_KEY: string;
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
+  // v0.26.0 追加（会員管理くん Phase 3 ③ UTAGE ポーリング）
+  UTAGE_MCP_URL: string;              // https://api.utage-system.com/mcp
+  UTAGE_MCP_TOKEN: string;            // UTAGE 管理画面で発行した Bearer
+  MEMBERS_API_BASE: string;           // https://members.shia2n.jp
+  MEMBERS_INTERNAL_SECRET: string;    // 会員管理くん Cloudflare Secret と同値
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.25.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.26.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -195,10 +203,25 @@ export default {
       return Response.json({ error: "Not Found" }, { status: 404 });
     }
 
+    // v0.26.0：UTAGE 手動バックフィル用エンドポイント
+    if (url.pathname === "/utage/backfill" && request.method === "POST") {
+      if (!isAuthorized(request, env)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      return handleUtageBackfill(request, env);
+    }
+
     return oauthProvider.fetch(request, env, ctx);
   },
 
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(handleScheduled(env));
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // event.cron で分岐（同一 Worker に複数 cron が定義されているため）
+    if (event.cron === "5,35 * * * *") {
+      // 会員管理くん Phase 3 ③ UTAGE ポーリング
+      ctx.waitUntil(handleUtagePolling(env));
+    } else {
+      // 既存：ネタ9本メール（22時 / 18時）
+      ctx.waitUntil(handleScheduled(env));
+    }
   },
 };
