@@ -5,7 +5,8 @@
   "compatibility_date": "2026-04-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "vars": {
-    "SALES_MANAGER_API_BASE": "https://sales-manager-black.vercel.app"
+    "SALES_MANAGER_API_BASE": "https://sales-manager-black.vercel.app",
+    "UTAGE_API_BASE": "https://api.utage-system.com/v1"
   },
   "observability": {
     "enabled": true

@@ -1,46 +1,113 @@
 /**
- * UTAGE ポーリング Scheduled Handler v1.0.0
+ * UTAGE ポーリング Scheduled Handler v2.0.0
  *
- * cron 5,35 * * * * で発火。shia2n の全 UTAGE アカウントから最新読者を fetch し、
- * 会員管理くん内部 API に POST する（4 アカウント並列）。
+ * cron 0,30 * * * * で発火。
+ * UTAGE REST API から最新読者を取得し、会員管理くん内部 API にPOSTする。
  *
- * per_page=100・page=1 のみ取得（最新登録者の反映用）。
- * 全件バックフィルは /utage/backfill エンドポイントを使う。
+ * 注意:
+ * - MCPではなくREST APIを使う
+ * - UTAGE_API_KEY は Cloudflare Secret に保存する
+ * - fatal error / partial failure は再throwして Cron Events に失敗として残す
  */
 
 import type { Env } from "./index.js";
 import { listUtageAccounts, listReadersForAccount } from "./utage-client.js";
 import { postSyncUtageBatch } from "./members-client.js";
 
+const DEFAULT_UTAGE_API_BASE = "https://api.utage-system.com/v1";
+
+function requireEnv(name: string, value: string | undefined): string {
+  if (!value || value.trim().length === 0) {
+    throw new Error(`Missing required env: ${name}`);
+  }
+  return value;
+}
+
+function getUtageApiKey(env: Env): string {
+  /**
+   * 原則は UTAGE_API_KEY を使う。
+   * 既存運用で UTAGE_MCP_TOKEN に REST APIキーを入れてしまっている場合だけ暫定フォールバックする。
+   * MCP接続キーやOAuthアクセストークンを入れてもREST APIで401になる可能性が高い。
+   */
+  const apiKey = env.UTAGE_API_KEY || env.UTAGE_MCP_TOKEN;
+  return requireEnv("UTAGE_API_KEY", apiKey);
+}
+
 export async function handleUtagePolling(env: Env): Promise<void> {
   const startedAt = Date.now();
+  const runId = `utage_${new Date().toISOString()}`;
+
+  console.log(
+    "[utage-polling] started",
+    JSON.stringify({
+      run_id: runId,
+      started_at: new Date(startedAt).toISOString(),
+    })
+  );
 
   try {
-    // 1. shia2n の UTAGE アカウント一覧取得
-    const accounts = await listUtageAccounts(env.UTAGE_MCP_URL, env.UTAGE_MCP_TOKEN);
+    const utageApiBase = env.UTAGE_API_BASE || DEFAULT_UTAGE_API_BASE;
+    const utageApiKey = getUtageApiKey(env);
+    const membersApiBase = requireEnv("MEMBERS_API_BASE", env.MEMBERS_API_BASE);
+    const membersInternalSecret = requireEnv(
+      "MEMBERS_INTERNAL_SECRET",
+      env.MEMBERS_INTERNAL_SECRET
+    );
+
+    const accounts = await listUtageAccounts(utageApiBase, utageApiKey);
+
+    console.log(
+      "[utage-polling] accounts fetched",
+      JSON.stringify({
+        run_id: runId,
+        accounts_count: accounts.length,
+        accounts: accounts.map((account) => ({
+          id: account.id,
+          name: account.name,
+          type: account.type,
+        })),
+      })
+    );
+
     if (accounts.length === 0) {
-      console.warn("[utage-polling] no accounts found");
+      console.warn(
+        "[utage-polling] no accounts found",
+        JSON.stringify({ run_id: runId })
+      );
       return;
     }
 
-    // 2. 全アカウント並列で最新読者 fetch → 会員管理くん内部 API POST
     const results = await Promise.allSettled(
       accounts.map(async (account) => {
         const readers = await listReadersForAccount(
-          env.UTAGE_MCP_URL,
-          env.UTAGE_MCP_TOKEN,
+          utageApiBase,
+          utageApiKey,
           account.id,
           100,
           1
         );
 
+        console.log(
+          "[utage-polling] readers fetched",
+          JSON.stringify({
+            run_id: runId,
+            account_id: account.id,
+            account_name: account.name,
+            readers_count: readers.length,
+          })
+        );
+
         if (readers.length === 0) {
-          return { account, skipped: true };
+          return {
+            account,
+            skipped: true,
+            reason: "no_readers",
+          };
         }
 
         const result = await postSyncUtageBatch(
-          env.MEMBERS_API_BASE,
-          env.MEMBERS_INTERNAL_SECRET,
+          membersApiBase,
+          membersInternalSecret,
           {
             utage_account_id: account.id,
             utage_account_name: account.name,
@@ -48,33 +115,79 @@ export async function handleUtagePolling(env: Env): Promise<void> {
           }
         );
 
-        return { account, result };
+        return {
+          account,
+          skipped: false,
+          result,
+        };
       })
     );
 
-    // 3. 結果ログ（Cloudflare Workers 標準ログに残る・observability 有効）
-    const summary = results.map((r, i) => ({
-      account: accounts[i].name,
-      status: r.status,
-      ...(r.status === "fulfilled" ? { result: r.value } : { reason: String(r.reason) }),
-    }));
-    console.log("[utage-polling] completed", JSON.stringify({
-      duration_ms: Date.now() - startedAt,
-      summary,
-    }));
+    const summary = results.map((result, index) => {
+      const account = accounts[index];
 
-    // 4. 失敗があれば Slack #03-開発部 に通知
-    const failed = results.filter((r) => r.status === "rejected");
+      if (result.status === "fulfilled") {
+        return {
+          account_id: account.id,
+          account_name: account.name,
+          status: "fulfilled" as const,
+          value: result.value,
+        };
+      }
+
+      return {
+        account_id: account.id,
+        account_name: account.name,
+        status: "rejected" as const,
+        reason: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      };
+    });
+
+    console.log(
+      "[utage-polling] completed",
+      JSON.stringify({
+        run_id: runId,
+        duration_ms: Date.now() - startedAt,
+        summary,
+      })
+    );
+
+    const failed = results.filter((result) => result.status === "rejected");
+
     if (failed.length > 0) {
-      const errorText = failed
-        .map((r) => (r.status === "rejected" ? String(r.reason) : ""))
+      const errorText = summary
+        .filter((item) => item.status === "rejected")
+        .map((item) => `${item.account_name}: ${item.reason}`)
         .join("\n");
-      await notifyDevSlack(env, `UTAGE polling 一部失敗（${failed.length}/${accounts.length} アカウント）\n\`\`\`\n${errorText}\n\`\`\``);
+
+      await notifyDevSlack(
+        env,
+        `UTAGE polling 一部失敗（${failed.length}/${accounts.length} アカウント）\n\`\`\`\n${errorText}\n\`\`\``
+      );
+
+      throw new Error(`UTAGE polling partial failure: ${failed.length}/${accounts.length}`);
     }
-  } catch (e) {
-    const errText = e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e);
-    console.error("[utage-polling] fatal error", errText);
-    await notifyDevSlack(env, `UTAGE polling 全体失敗\n\`\`\`\n${errText}\n\`\`\``);
+  } catch (error) {
+    const errText =
+      error instanceof Error
+        ? `${error.message}\n${error.stack ?? ""}`
+        : String(error);
+
+    console.error(
+      "[utage-polling] fatal error",
+      JSON.stringify({
+        run_id: runId,
+        duration_ms: Date.now() - startedAt,
+        error: errText,
+      })
+    );
+
+    await notifyDevSlack(
+      env,
+      `UTAGE polling 全体失敗\n\`\`\`\n${errText}\n\`\`\``
+    );
+
+    throw error;
   }
 }
 
@@ -84,12 +197,15 @@ export async function handleUtagePolling(env: Env): Promise<void> {
 async function notifyDevSlack(env: Env, text: string): Promise<void> {
   try {
     if (!env.SLACK_WEBHOOK_03) return;
+
     await fetch(env.SLACK_WEBHOOK_03, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ text }),
     });
-  } catch (e) {
-    console.error("[utage-polling] slack notify failed", e);
+  } catch (error) {
+    console.error("[utage-polling] slack notify failed", error);
   }
 }

@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.26.1
+ * shia2n-mcp エントリーポイント v0.27.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -22,6 +22,9 @@
  * v0.26.0：会員管理くん Phase 3 ③ UTAGE ポーリング追加（POST /utage/backfill）
  * v0.26.1：cron を 1 本（0,30 * * * *）に統合（Free プラン 5 本上限対策）
  *          ネタメールは handler 内の UTC 時刻判定で既存と同時刻（UTC 18:00 / 22:00）発火
+ * v0.27.0：UTAGE を MCP から REST API に切り替え（api.utage-system.com/v1）
+ *          scheduled 発火直後ログ + エラー再 throw で Cron Events に失敗記録
+ *          GET /utage/diag 診断エンドポイント追加（認証不要）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -47,6 +50,7 @@ import { handleDiag } from "./diag.js";
 import { handleScheduled } from "./cron-neta-mail.js";
 import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
+import { handleUtageDiag } from "./handle-utage-diag.js";
 
 export interface Env {
   // Core
@@ -93,14 +97,17 @@ export interface Env {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   // v0.26.0 追加（会員管理くん Phase 3 ③ UTAGE ポーリング）
-  UTAGE_MCP_URL: string;              // https://api.utage-system.com/mcp
-  UTAGE_MCP_TOKEN: string;            // UTAGE 管理画面で発行した Bearer
+  UTAGE_MCP_URL: string;              // https://api.utage-system.com/mcp（v0.27.0 で未使用・後方互換のみ）
+  UTAGE_MCP_TOKEN: string;            // v0.27.0 で暫定フォールバック（UTAGE_API_KEY が未設定時のみ）
   MEMBERS_API_BASE: string;           // https://members.shia2n.jp
   MEMBERS_INTERNAL_SECRET: string;    // 会員管理くん Cloudflare Secret と同値
+  // v0.27.0 追加（UTAGE REST API 移行）
+  UTAGE_API_KEY: string;              // UTAGE 管理画面で発行した REST API キー
+  UTAGE_API_BASE: string;             // https://api.utage-system.com/v1（wrangler vars で設定）
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.26.1" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.27.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -205,6 +212,11 @@ export default {
       return Response.json({ error: "Not Found" }, { status: 404 });
     }
 
+    // v0.27.0：UTAGE 診断エンドポイント（認証不要・秘密情報は返さない）
+    if (url.pathname === "/utage/diag" && request.method === "GET") {
+      return handleUtageDiag(env);
+    }
+
     // v0.26.0：UTAGE 手動バックフィル用エンドポイント
     if (url.pathname === "/utage/backfill" && request.method === "POST") {
       if (!isAuthorized(request, env)) {
@@ -216,19 +228,64 @@ export default {
     return oauthProvider.fetch(request, env, ctx);
   },
 
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     // cron は "0,30 * * * *" の 1 本のみ（Free プラン 5 本上限対策）。
     // 何を実行するかは UTC 時刻判定で分岐する。
-    const scheduledDate = new Date(event.scheduledTime);
+    const scheduledDate = new Date(controller.scheduledTime);
     const utcHour = scheduledDate.getUTCHours();
     const utcMinute = scheduledDate.getUTCMinutes();
 
+    // v0.27.0：発火直後ログ（Cron Events / Observability に必ず記録される）
+    console.log(
+      "[scheduled] fired",
+      JSON.stringify({
+        cron: controller.cron,
+        scheduled_time: scheduledDate.toISOString(),
+        utc_hour: utcHour,
+        utc_minute: utcMinute,
+      })
+    );
+
+    const tasks: Promise<void>[] = [];
+
     // UTAGE ポーリング：毎回（30 分ごと）実行
-    ctx.waitUntil(handleUtagePolling(env));
+    tasks.push(handleUtagePolling(env));
 
     // ネタ9本メール：既存 cron（"0 18 * * *" / "0 22 * * *"）と同時刻に発火
     if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
-      ctx.waitUntil(handleScheduled(env));
+      tasks.push(handleScheduled(env));
     }
+
+    // v0.27.0：エラーを握りつぶさず再 throw して Cron Events に失敗記録
+    const results = await Promise.allSettled(tasks);
+    const failed = results.filter((result) => result.status === "rejected");
+
+    if (failed.length > 0) {
+      console.error(
+        "[scheduled] failed",
+        JSON.stringify({
+          failed_count: failed.length,
+          results: results.map((result) =>
+            result.status === "rejected"
+              ? {
+                  status: "rejected",
+                  reason:
+                    result.reason instanceof Error
+                      ? result.reason.message
+                      : String(result.reason),
+                }
+              : { status: "fulfilled" }
+          ),
+        })
+      );
+      throw new Error(`scheduled tasks failed: ${failed.length}/${results.length}`);
+    }
+
+    console.log(
+      "[scheduled] completed",
+      JSON.stringify({
+        task_count: tasks.length,
+      })
+    );
   },
 };

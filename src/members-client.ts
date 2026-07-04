@@ -1,5 +1,5 @@
 /**
- * 会員管理くん内部 API HTTP クライアント v1.0.0
+ * 会員管理くん内部 API HTTP クライアント v1.0.1
  *
  * shia2n-mcp Scheduled Handler から会員管理くんの内部 API に Bearer 認証で POST する。
  * Supabase 直接アクセスはせず、必ずこの HTTP 経由（High-Shin パターン踏襲）。

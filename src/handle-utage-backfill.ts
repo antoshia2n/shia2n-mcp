@@ -1,9 +1,10 @@
 /**
- * UTAGE バックフィル HTTP Handler v1.0.0
+ * UTAGE バックフィル HTTP Handler v2.0.0
  *
  * POST /utage/backfill で発火。指定アカウント（or 全アカウント）の
  * 全読者を per_page=200 ページングで取得して会員管理くん内部 API に POST する。
  *
+ * v2.0.0: UTAGE REST API 版に切り替え（MCP 直叩きから移行）
  * Bearer 認証は index.ts の isAuthorized 内で実施済。
  *
  * リクエストボディ（任意）：
@@ -14,6 +15,8 @@
 import type { Env } from "./index.js";
 import { listUtageAccounts, listReadersForAccount } from "./utage-client.js";
 import { postSyncUtageBatch } from "./members-client.js";
+
+const DEFAULT_UTAGE_API_BASE = "https://api.utage-system.com/v1";
 
 interface BackfillBody {
   account_id?: string;
@@ -30,6 +33,13 @@ interface AccountResult {
   error?: string;
 }
 
+function requireEnv(name: string, value: string | undefined): string {
+  if (!value || value.trim().length === 0) {
+    throw new Error(`Missing required env: ${name}`);
+  }
+  return value;
+}
+
 export async function handleUtageBackfill(request: Request, env: Env): Promise<Response> {
   const startedAt = Date.now();
   let body: BackfillBody = {};
@@ -43,7 +53,15 @@ export async function handleUtageBackfill(request: Request, env: Env): Promise<R
   const perPage = 200;
 
   try {
-    const allAccounts = await listUtageAccounts(env.UTAGE_MCP_URL, env.UTAGE_MCP_TOKEN);
+    const utageApiBase = env.UTAGE_API_BASE || DEFAULT_UTAGE_API_BASE;
+    const utageApiKey = requireEnv("UTAGE_API_KEY", env.UTAGE_API_KEY || env.UTAGE_MCP_TOKEN);
+    const membersApiBase = requireEnv("MEMBERS_API_BASE", env.MEMBERS_API_BASE);
+    const membersInternalSecret = requireEnv(
+      "MEMBERS_INTERNAL_SECRET",
+      env.MEMBERS_INTERNAL_SECRET
+    );
+
+    const allAccounts = await listUtageAccounts(utageApiBase, utageApiKey);
     const targetAccounts = body.account_id
       ? allAccounts.filter((a) => a.id === body.account_id)
       : allAccounts;
@@ -67,8 +85,8 @@ export async function handleUtageBackfill(request: Request, env: Env): Promise<R
       try {
         for (let page = 1; page <= maxPages; page++) {
           const readers = await listReadersForAccount(
-            env.UTAGE_MCP_URL,
-            env.UTAGE_MCP_TOKEN,
+            utageApiBase,
+            utageApiKey,
             account.id,
             perPage,
             page
@@ -79,8 +97,8 @@ export async function handleUtageBackfill(request: Request, env: Env): Promise<R
           }
 
           const result = await postSyncUtageBatch(
-            env.MEMBERS_API_BASE,
-            env.MEMBERS_INTERNAL_SECRET,
+            membersApiBase,
+            membersInternalSecret,
             {
               utage_account_id: account.id,
               utage_account_name: account.name,
