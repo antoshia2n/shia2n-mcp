@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.27.0
+ * shia2n-mcp エントリーポイント v0.28.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -25,6 +25,9 @@
  * v0.27.0：UTAGE を MCP から REST API に切り替え（api.utage-system.com/v1）
  *          scheduled 発火直後ログ + エラー再 throw で Cron Events に失敗記録
  *          GET /utage/diag 診断エンドポイント追加（認証不要）
+ * v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 cron 追加（15,45 * * * *）
+ *          controller.cron で分岐して handleAutoMappingCron を呼び出す
+ *          既存 UTAGE ポーリング（0,30）とは別 cron で 15 分後に reconciliation 実行
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -51,6 +54,7 @@ import { handleScheduled } from "./cron-neta-mail.js";
 import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
+import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 
 export interface Env {
   // Core
@@ -99,15 +103,15 @@ export interface Env {
   // v0.26.0 追加（会員管理くん Phase 3 ③ UTAGE ポーリング）
   UTAGE_MCP_URL: string;              // https://api.utage-system.com/mcp（v0.27.0 で未使用・後方互換のみ）
   UTAGE_MCP_TOKEN: string;            // v0.27.0 で暫定フォールバック（UTAGE_API_KEY が未設定時のみ）
-  MEMBERS_API_BASE: string;           // https://members.shia2n.jp
-  MEMBERS_INTERNAL_SECRET: string;    // 会員管理くん Cloudflare Secret と同値
+  MEMBERS_API_BASE: string;           // https://members.shia2n.jp（v0.28.0 で auto-mapping cron でも再利用）
+  MEMBERS_INTERNAL_SECRET: string;    // 会員管理くん Cloudflare Secret と同値（v0.28.0 で auto-mapping cron でも再利用）
   // v0.27.0 追加（UTAGE REST API 移行）
   UTAGE_API_KEY: string;              // UTAGE 管理画面で発行した REST API キー
   UTAGE_API_BASE: string;             // https://api.utage-system.com/v1（wrangler vars で設定）
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.27.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.28.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -229,13 +233,13 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // cron は "0,30 * * * *" の 1 本のみ（Free プラン 5 本上限対策）。
-    // 何を実行するかは UTC 時刻判定で分岐する。
+    // v0.28.0：cron は 2 本（"0,30 * * * *" と "15,45 * * * *"）
+    // controller.cron で分岐する（Free プラン 5 本上限内・現状 2 本使用）。
     const scheduledDate = new Date(controller.scheduledTime);
     const utcHour = scheduledDate.getUTCHours();
     const utcMinute = scheduledDate.getUTCMinutes();
 
-    // v0.27.0：発火直後ログ（Cron Events / Observability に必ず記録される）
+    // 発火直後ログ（Cron Events / Observability に必ず記録される）
     console.log(
       "[scheduled] fired",
       JSON.stringify({
@@ -248,15 +252,27 @@ export default {
 
     const tasks: Promise<void>[] = [];
 
-    // UTAGE ポーリング：毎回（30 分ごと）実行
-    tasks.push(handleUtagePolling(env));
+    if (controller.cron === "0,30 * * * *") {
+      // 既存：UTAGE ポーリング（毎回 30 分ごと）
+      tasks.push(handleUtagePolling(env));
 
-    // ネタ9本メール：既存 cron（"0 18 * * *" / "0 22 * * *"）と同時刻に発火
-    if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
-      tasks.push(handleScheduled(env));
+      // 既存：ネタ9本メール（UTC 18:00 / 22:00 のみ発火）
+      if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
+        tasks.push(handleScheduled(env));
+      }
+    } else if (controller.cron === "15,45 * * * *") {
+      // v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 reconciliation
+      // UTAGE ポーリング（0,30）の 15 分後に走ることで payment_status 変更を反映
+      tasks.push(handleAutoMappingCron(env));
+    } else {
+      // 想定外の cron が来た場合はログのみ（fail しない）
+      console.warn(
+        "[scheduled] unknown cron",
+        JSON.stringify({ cron: controller.cron })
+      );
     }
 
-    // v0.27.0：エラーを握りつぶさず再 throw して Cron Events に失敗記録
+    // エラーを握りつぶさず再 throw して Cron Events に失敗記録
     const results = await Promise.allSettled(tasks);
     const failed = results.filter((result) => result.status === "rejected");
 
@@ -264,6 +280,7 @@ export default {
       console.error(
         "[scheduled] failed",
         JSON.stringify({
+          cron: controller.cron,
           failed_count: failed.length,
           results: results.map((result) =>
             result.status === "rejected"
@@ -284,6 +301,7 @@ export default {
     console.log(
       "[scheduled] completed",
       JSON.stringify({
+        cron: controller.cron,
         task_count: tasks.length,
       })
     );
