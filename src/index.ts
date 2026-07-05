@@ -28,6 +28,11 @@
  * v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 cron 追加（15,45 * * * *）
  *          controller.cron で分岐して handleAutoMappingCron を呼び出す
  *          既存 UTAGE ポーリング（0,30）とは別 cron で 15 分後に reconciliation 実行
+ * v0.29.0：会員管理くん Phase 4 スコープ A の members__* 3 本追加
+ *          members__search / members__get / members__update
+ *          認証は MEMBERS_INTERNAL_TOKEN（sync-utage-batch 用の MEMBERS_INTERNAL_SECRET とは別 Secret）
+ *          リスク吸収 3 点（PII 禁止 8 種 / preview モード / 1req=1 会員）は会員管理くん本体側で実装
+ *          仕様確定 Decision：https://www.notion.so/3949c6c1c4398176805ae41019b5a6ec
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -47,6 +52,7 @@ import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
 import { registerShiaraboTools } from "./tools-shiarabo.js";
+import { registerMembersTools } from "./tools-members.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterCreateProject, handleTaskmasterDeleteProject, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
@@ -108,10 +114,13 @@ export interface Env {
   // v0.27.0 追加（UTAGE REST API 移行）
   UTAGE_API_KEY: string;              // UTAGE 管理画面で発行した REST API キー
   UTAGE_API_BASE: string;             // https://api.utage-system.com/v1（wrangler vars で設定）
+  // v0.29.0 追加（会員管理くん Phase 4 スコープ A members__* 3 本）
+  MEMBERS_INTERNAL_TOKEN: string;     // 会員管理くん Cloudflare Pages 側の MEMBERS_INTERNAL_TOKEN と同値
+                                      // MEMBERS_INTERNAL_SECRET とは別 Secret（スコープ分離：漏洩時の被害範囲最小化）
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.28.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.29.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -127,6 +136,7 @@ function createMcpServer(env: Env): McpServer {
   registerKnowledgeTagTools(server, env);
   registerManabuTools(server, env);
   registerShiaraboTools(server, env);
+  registerMembersTools(server, env);
   return server;
 }
 
