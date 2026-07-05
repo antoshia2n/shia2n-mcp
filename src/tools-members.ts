@@ -97,9 +97,41 @@ export function registerMembersTools(server: McpServer, env: MembersEnv): void {
     {
       member_id: z.string().uuid().describe("会員の UUID"),
       updates: z
-        .record(z.unknown())
+        .object({
+          entitlements: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "エンタイトルメント配列（update_member_entitlements RPC 経由・entitlement_logs 自動記録）"
+            ),
+          shr_member_id: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("shr-webhook 会員 ID（null で解除可）"),
+          shr_student_id: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("しあらぼ生徒 ID（null で解除可）"),
+          note_account: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("note アカウント（null で解除可）"),
+          consult_case_ids: z
+            .array(z.string())
+            .optional()
+            .describe("コンサル案件 ID 配列"),
+          meta: z
+            .string()
+            .optional()
+            .describe(
+              "汎用メタデータ（JSON 文字列で渡す。例: '{\"key\":\"value\"}'。会員管理くん本体側で JSON.parse して jsonb 列に格納）"
+            ),
+        })
         .describe(
-          "更新フィールド（許容 6 種のみ・PII 禁止）。例: { entitlements: [...], shr_member_id: '...' }"
+          "更新フィールド（許容 6 種のみ・PII 禁止）。空 object 拒否は本体側で 400 応答"
         ),
       reason: z
         .string()
