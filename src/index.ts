@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.28.0
+ * shia2n-mcp エントリーポイント v0.30.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -33,6 +33,11 @@
  *          認証は MEMBERS_INTERNAL_TOKEN（sync-utage-batch 用の MEMBERS_INTERNAL_SECRET とは別 Secret）
  *          リスク吸収 3 点（PII 禁止 8 種 / preview モード / 1req=1 会員）は会員管理くん本体側で実装
  *          仕様確定 Decision：https://www.notion.so/3949c6c1c4398176805ae41019b5a6ec
+ * v0.30.0：運用効率化パッケージ v1.0 実装（Decision 3959c6c1-c439-818b-b56d-ddce1d9fe776 / 2026-07-06）
+ *          ① munikis__get_context ツール追加（起動時 Notion fetch 4〜5 回を 1 呼び出しに圧縮）
+ *          ② 週次レビュー起動テキストの #01-戦略室 Slack 自動投稿 cron 追加
+ *            既存 "0,30 * * * *" の日曜 00:00 UTC（= 日曜 09:00 JST）分岐に相乗り（cron trigger 追加なし）
+ *          NOTION_TOKEN / SLACK_WEBHOOK_01 は既存 Secret を再利用（追加設定不要）
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -53,6 +58,7 @@ import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
 import { registerShiaraboTools } from "./tools-shiarabo.js";
 import { registerMembersTools } from "./tools-members.js";
+import { registerMunikisTools } from "./tools-munikis.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterCreateProject, handleTaskmasterDeleteProject, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
@@ -61,6 +67,7 @@ import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
+import { handleWeeklyReviewCron } from "./cron-weekly-review.js";
 
 export interface Env {
   // Core
@@ -120,7 +127,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.29.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.30.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -137,6 +144,7 @@ function createMcpServer(env: Env): McpServer {
   registerManabuTools(server, env);
   registerShiaraboTools(server, env);
   registerMembersTools(server, env);
+  registerMunikisTools(server, env);
   return server;
 }
 
@@ -243,11 +251,13 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // v0.28.0：cron は 2 本（"0,30 * * * *" と "15,45 * * * *"）
+    // v0.30.0：cron は 2 本（"0,30 * * * *" と "15,45 * * * *"）
     // controller.cron で分岐する（Free プラン 5 本上限内・現状 2 本使用）。
+    // 追加：v0.30.0 で "0,30" の日曜 00:00 UTC 発火に週次レビュー投稿を相乗り。
     const scheduledDate = new Date(controller.scheduledTime);
     const utcHour = scheduledDate.getUTCHours();
     const utcMinute = scheduledDate.getUTCMinutes();
+    const utcDay = scheduledDate.getUTCDay(); // 0 = 日曜
 
     // 発火直後ログ（Cron Events / Observability に必ず記録される）
     console.log(
@@ -257,6 +267,7 @@ export default {
         scheduled_time: scheduledDate.toISOString(),
         utc_hour: utcHour,
         utc_minute: utcMinute,
+        utc_day: utcDay,
       })
     );
 
@@ -269,6 +280,12 @@ export default {
       // 既存：ネタ9本メール（UTC 18:00 / 22:00 のみ発火）
       if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
         tasks.push(handleScheduled(env));
+      }
+
+      // v0.30.0：週次レビュー起動テキスト投稿
+      // 日曜 00:00 UTC = 日曜 09:00 JST のみ発火
+      if (utcDay === 0 && utcHour === 0 && utcMinute === 0) {
+        tasks.push(handleWeeklyReviewCron(env));
       }
     } else if (controller.cron === "15,45 * * * *") {
       // v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 reconciliation
