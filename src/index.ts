@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.30.0
+ * shia2n-mcp エントリーポイント v0.31.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -38,6 +38,14 @@
  *          ② 週次レビュー起動テキストの #01-戦略室 Slack 自動投稿 cron 追加
  *            既存 "0,30 * * * *" の日曜 00:00 UTC（= 日曜 09:00 JST）分岐に相乗り（cron trigger 追加なし）
  *          NOTION_TOKEN / SLACK_WEBHOOK_01 は既存 Secret を再利用（追加設定不要）
+ * v0.31.0：運用効率化パッケージ v1.0 施策② の実装方式を変更
+ *          （方針変更 Decision 3959c6c1-c439-81f9-9cac-e2dd3a93ac0d / 2026-07-06）
+ *          Slack 自動投稿 cron を廃止：cron-weekly-review.ts 削除・
+ *          scheduled ハンドラから日曜 00:00 UTC 分岐削除・handleWeeklyReviewCron import 削除
+ *          代替として munikis__get_context のレスポンスに weekly_review_due フラグを追加
+ *          （実装は munikis-client.ts 側）
+ *          Naoki は「Google カレンダー繰返予定（日曜 09:00 JST）+ Claude 起動時フラグ」の
+ *          二段構えで週次レビュー発火を管理する
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -67,7 +75,6 @@ import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
-import { handleWeeklyReviewCron } from "./cron-weekly-review.js";
 
 export interface Env {
   // Core
@@ -127,7 +134,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.30.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.31.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -251,13 +258,13 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // v0.30.0：cron は 2 本（"0,30 * * * *" と "15,45 * * * *"）
+    // v0.31.0：cron は 2 本（"0,30 * * * *" と "15,45 * * * *"）
     // controller.cron で分岐する（Free プラン 5 本上限内・現状 2 本使用）。
-    // 追加：v0.30.0 で "0,30" の日曜 00:00 UTC 発火に週次レビュー投稿を相乗り。
+    // v0.30.0 で追加した週次レビュー Slack 投稿は v0.31.0 で廃止済み（方針変更 Decision による）。
+    // 週次レビュー未起票検知は munikis__get_context の weekly_review_due フラグに移行。
     const scheduledDate = new Date(controller.scheduledTime);
     const utcHour = scheduledDate.getUTCHours();
     const utcMinute = scheduledDate.getUTCMinutes();
-    const utcDay = scheduledDate.getUTCDay(); // 0 = 日曜
 
     // 発火直後ログ（Cron Events / Observability に必ず記録される）
     console.log(
@@ -267,7 +274,6 @@ export default {
         scheduled_time: scheduledDate.toISOString(),
         utc_hour: utcHour,
         utc_minute: utcMinute,
-        utc_day: utcDay,
       })
     );
 
@@ -280,12 +286,6 @@ export default {
       // 既存：ネタ9本メール（UTC 18:00 / 22:00 のみ発火）
       if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
         tasks.push(handleScheduled(env));
-      }
-
-      // v0.30.0：週次レビュー起動テキスト投稿
-      // 日曜 00:00 UTC = 日曜 09:00 JST のみ発火
-      if (utcDay === 0 && utcHour === 0 && utcMinute === 0) {
-        tasks.push(handleWeeklyReviewCron(env));
       }
     } else if (controller.cron === "15,45 * * * *") {
       // v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 reconciliation
