@@ -13,6 +13,9 @@ import type { Env } from "./index.js";
  * v0.16.0 で content_os__update_score 追加（依頼書：3579c6c1-c439-81b4-98b4-cd4940145e4a）
  * v0.17.0 で content_os__list_slots / content_os__fill_slot 追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
  * v0.25.0 で content_os__create_slot 追加（依頼書：3619c6c1-c439-8128-9de8-fb5da46c209b）
+ * v0.32.0 で add_post / bulk_add_posts / list_accounts / update_post 追加、
+ *          list_posts に account_id・status、list_slots / search_posts に account_id 追加
+ *          （要件定義 v1.2 F6：3ac9c6c1-c439-8175-88e5-e3d5747cf898）
  */
 
 async function callContentOsInternalApi<T = unknown>(
@@ -76,11 +79,21 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         .enum(["score_desc", "created_desc"])
         .optional()
         .describe("ソート順（既定 created_desc）。score_desc は S>A>B>C>D>null の順"),
+      account_id: z
+        .string()
+        .optional()
+        .describe("アカウントIDで絞り込む（content_os__list_accounts の id）。省略時は全アカウント横断"),
+      status: z
+        .enum(["draft", "review", "waiting", "reserved", "published"])
+        .optional()
+        .describe("制作段階で絞り込む。waiting＝本文は完成しているが投稿日時が未定。省略時は絞り込まない"),
     },
     async (args) => {
       const result = await callContentOsInternalApi(env, "list-posts", {
         limit: args.limit,
         sort: args.sort,
+        account_id: args.account_id,
+        status: args.status,
       });
       return asMcpTextResult(result);
     }
@@ -119,11 +132,16 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         .max(50)
         .optional()
         .describe("返す件数（既定20、上限50）"),
+      account_id: z
+        .string()
+        .optional()
+        .describe("アカウントIDで絞り込む。省略時は全アカウント横断"),
     },
     async (args) => {
       const result = await callContentOsInternalApi(env, "search-posts", {
         keyword: args.keyword,
         limit: args.limit,
+        account_id: args.account_id,
       });
       return asMcpTextResult(result);
     }
@@ -177,6 +195,10 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         .max(50)
         .optional()
         .describe("返す件数（既定20、上限50）"),
+      account_id: z
+        .string()
+        .optional()
+        .describe("アカウントIDで絞り込む。省略時は全アカウント横断"),
     },
     async (args) => {
       const result = await callContentOsInternalApi(env, "list-slots", {
@@ -184,6 +206,7 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         before: args.before,
         platform: args.platform,
         limit: args.limit,
+        account_id: args.account_id,
       });
       return asMcpTextResult(result);
     }
@@ -260,6 +283,146 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         post_type: args.post_type,
         account_id: args.account_id,
       });
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 8. content_os__list_accounts ────────────────────────────────────
+  // v0.32.0 で追加（要件定義 v1.2 F6）
+  server.tool(
+    "content_os__list_accounts",
+    "ContentOS のアカウント（クライアント）一覧を取得する。content_os__add_post / bulk_add_posts で投稿先を指定する前に、どのアカウントがあるか・どれが既定かを確認するために使う。is_default が true のアカウントが、account_id を省略したときの登録先になる。戻り値: { ok, count, accounts: [{id, name, handle, default_platform, is_default, is_active, sort_order}] }。sort_order 昇順。",
+    {},
+    async () => {
+      const result = await callContentOsInternalApi(env, "list-accounts", {});
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 9. content_os__add_post ─────────────────────────────────────────
+  // v0.32.0 で追加（要件定義 v1.2 F1）
+  server.tool(
+    "content_os__add_post",
+    "ContentOS に新しい投稿を1件登録する。Naoki が事前に予約枠を作っておく必要はない（枠を介さない登録）。書き上げた原稿をそのまま格納するときはこれを使う。datetime を省略すると status=waiting（本文は完成・日時未定）で入り、あとで content_os__update_post で日時を入れると自動的に reserved（予約済み）へ上がる。datetime を最初から渡した場合も自動で reserved になる。account_id を省略すると既定アカウントに入る。platform を省略するとそのアカウントの default_platform、それも空なら x になる。登録元は mcp として記録される。戻り値: { ok: true, account_name, post: {...} } または { ok: false, error: string }。",
+    {
+      title: z
+        .string()
+        .min(1)
+        .describe("投稿タイトル（必須・空文字不可）"),
+      body: z
+        .string()
+        .min(1)
+        .describe("投稿本文（必須・HTML可・空文字不可）"),
+      post_type: z
+        .string()
+        .describe("投稿タイプ（必須）。例: x_post / x_article / note"),
+      account_id: z
+        .string()
+        .optional()
+        .describe("登録先アカウントID（省略時は既定アカウント）。content_os__list_accounts で確認できる"),
+      datetime: z
+        .string()
+        .optional()
+        .describe("投稿日時（YYYY-MM-DDTHH:mm 形式）。省略すると日時未定（waiting）で登録される"),
+      platform: z
+        .string()
+        .optional()
+        .describe("媒体（x / note）。省略時はアカウントの default_platform、それも空なら x"),
+      memo: z
+        .string()
+        .optional()
+        .describe("メモ（任意）"),
+    },
+    async (args) => {
+      const result = await callContentOsInternalApi(env, "add-post", {
+        title: args.title,
+        body: args.body,
+        post_type: args.post_type,
+        account_id: args.account_id,
+        datetime: args.datetime,
+        platform: args.platform,
+        memo: args.memo,
+      });
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 10. content_os__bulk_add_posts ──────────────────────────────────
+  // v0.32.0 で追加（要件定義 v1.2 F2）
+  server.tool(
+    "content_os__bulk_add_posts",
+    "ContentOS に複数本の投稿をまとめて登録する（1回あたり最大20本）。まとめ書きした原稿を一度に格納するときに使う。1本でも失敗しても成功した分はそのまま残り、失敗した分だけが理由付きで返る（全部やり直しにはならない）。各項目の指定内容と既定値の扱いは content_os__add_post と同じ。戻り値: { ok, requested, succeeded_count, failed_count, succeeded: [{index, account_name, post}], failed: [{index, title, error}] }。ok は全件成功したときだけ true。",
+    {
+      posts: z
+        .array(
+          z.object({
+            title: z.string().min(1).describe("投稿タイトル（必須）"),
+            body: z.string().min(1).describe("投稿本文（必須・HTML可）"),
+            post_type: z.string().describe("投稿タイプ（必須）。例: x_post / x_article / note"),
+            account_id: z.string().optional().describe("登録先アカウントID（省略時は既定アカウント）"),
+            datetime: z.string().optional().describe("投稿日時（YYYY-MM-DDTHH:mm）。省略すると日時未定"),
+            platform: z.string().optional().describe("媒体（x / note）。省略時はアカウントの既定値"),
+            memo: z.string().optional().describe("メモ（任意）"),
+          })
+        )
+        .min(1)
+        .max(20)
+        .describe("登録する投稿の配列（1〜20件）"),
+    },
+    async (args) => {
+      const result = await callContentOsInternalApi(env, "bulk-add-posts", {
+        posts: args.posts,
+      });
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 11. content_os__update_post ─────────────────────────────────────
+  // v0.32.0 で追加（要件定義 v1.2 F6）
+  server.tool(
+    "content_os__update_post",
+    "ContentOS の既存投稿を部分更新する。渡した項目だけが変わり、渡さなかった項目は元の値を保つ。日時未定（waiting）の投稿に datetime を入れると自動的に reserved（予約済み）へ上がる。datetime に null を渡すと日時を消し、reserved だった投稿は waiting に戻る（draft / review / published は日時を消しても変わらない）。制作段階を進める・戻すときは status を明示的に指定する。戻り値: { ok: true, updated_fields, post: {...} } または { ok: false, error: 'not_found' | string }。",
+    {
+      id: z
+        .union([z.string(), z.number()])
+        .describe("投稿ID（bigint。content_os__list_posts の id フィールド）"),
+      title: z.string().optional().describe("投稿タイトル"),
+      body: z.string().optional().describe("投稿本文（HTML可）"),
+      datetime: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("投稿日時（YYYY-MM-DDTHH:mm）。null を渡すと日時を消す（予約済みなら日時未定へ戻る）"),
+      status: z
+        .enum(["draft", "review", "waiting", "reserved", "published"])
+        .optional()
+        .describe("制作段階。draft=制作途中 / review=レビュー中 / waiting=完成・日時未定 / reserved=予約済み / published=投稿済み"),
+      platform: z.string().optional().describe("媒体（x / note）"),
+      post_type: z.string().optional().describe("投稿タイプ（x_post / x_article / note 等）"),
+      memo: z.string().optional().describe("メモ"),
+      score: z
+        .enum(["S", "A", "B", "C", "D"])
+        .nullable()
+        .optional()
+        .describe("成績（S/A/B/C/D）。null で未評価に戻す"),
+      labels: z
+        .array(z.string())
+        .optional()
+        .describe("ラベルの配列（渡すと全置換）。投稿後の成績を印として残すのにも使う"),
+    },
+    async (args) => {
+      const payload: Record<string, unknown> = { id: args.id };
+      if (args.title !== undefined) payload.title = args.title;
+      if (args.body !== undefined) payload.body = args.body;
+      if (args.datetime !== undefined) payload.datetime = args.datetime;
+      if (args.status !== undefined) payload.status = args.status;
+      if (args.platform !== undefined) payload.platform = args.platform;
+      if (args.post_type !== undefined) payload.post_type = args.post_type;
+      if (args.memo !== undefined) payload.memo = args.memo;
+      if (args.score !== undefined) payload.score = args.score;
+      if (args.labels !== undefined) payload.labels = args.labels;
+
+      const result = await callContentOsInternalApi(env, "update-post", payload);
       return asMcpTextResult(result);
     }
   );

@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.31.0
+ * shia2n-mcp エントリーポイント v0.32.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -38,6 +38,9 @@
  *          ② 週次レビュー起動テキストの #01-戦略室 Slack 自動投稿 cron 追加
  *            既存 "0,30 * * * *" の日曜 00:00 UTC（= 日曜 09:00 JST）分岐に相乗り（cron trigger 追加なし）
  *          NOTION_TOKEN / SLACK_WEBHOOK_01 は既存 Secret を再利用（追加設定不要）
+ * v0.32.0：ContentOS 改良 v1.2 F6。content_os__add_post / bulk_add_posts /
+ *          list_accounts / update_post を追加。list_posts に account_id・status、
+ *          list_slots / search_posts に account_id を追加
  * v0.31.0：運用効率化パッケージ v1.0 施策② の実装方式を変更
  *          （方針変更 Decision 3959c6c1-c439-81f9-9cac-e2dd3a93ac0d / 2026-07-06）
  *          Slack 自動投稿 cron を廃止：cron-weekly-review.ts 削除・
@@ -134,7 +137,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.31.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.32.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
