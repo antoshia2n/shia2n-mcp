@@ -6,7 +6,13 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "vars": {
     "SALES_MANAGER_API_BASE": "https://sales-manager-black.vercel.app",
-    "UTAGE_API_BASE": "https://api.utage-system.com/v1"
+    "UTAGE_API_BASE": "https://api.utage-system.com/v1",
+    // 2026-08-03 追加：zeus-worker（Notion → Zeus 同期）の起動先。
+    // 秘密ではない公開URLのため、画面ではなくこの設定ファイル側で管理する。
+    // 画面で追加したプレーンテキスト変数は、この vars を含むデプロイで
+    // 置き換えられて消えるため、ここに書くのが正。
+    // 合言葉（ZEUS_WORKER_SECRET）はシークレットなので画面側で管理する。
+    "ZEUS_WORKER_URL": "https://zeus-worker.gameister1.workers.dev"
   },
   "observability": {
     "enabled": true
