@@ -9,7 +9,7 @@ import type { Env } from "./index.js";
 export function registerSalesManagerTools(server: McpServer, env: Env): void {
   server.tool(
     "sales_manager__get_revenue_summary",
-    "今月の確定売上・見込み・目標・事業別売上・年間・未収金・月次チャート・来月予測を一括取得する。秘書 Claude が毎朝売上 KPI を確認するために呼ぶ。戻り値は { month: {confirmed, projected, goal}, year: {confirmed, goal}, uncollected_total, by_business: {事業名: 金額}, chart_data: [{month, abs, conf, proj, goal}], next_month: {goal, projected, confirmed} }。",
+    "今月の確定売上・見込み・目標・事業別売上・年間・未収金・月次チャート・来月予測を一括取得する。秘書 Claude が毎朝売上 KPI を確認するために呼ぶ。戻り値は { month: {confirmed, projected, goal}, year: {confirmed, goal}, uncollected_total（当月以前で未入金の合計。入金管理タブのヘッダーの未収金と一致する）, uncollected_count, uncollected_by_month: [{abs, year, month, count, amount}]（月ごとの未収額）, by_business: {事業名: 金額}, chart_data: [{month, abs, conf, proj, goal}], next_month: {goal, projected, confirmed} }。",
     {},
     async () => {
       const data = await getRevenueSummary(env);
@@ -155,11 +155,39 @@ async function getRevenueSummary(env: Env) {
     singles.filter(s => absList.includes(s.month_idx)).reduce((a, s) => a + s.amount, 0);
   const yearGoal = absList.reduce((t, abs) => t + getGoal(abs), 0);
 
-  // 未収金（due_date ベース：支払期限が設定済み・期限到来・未入金）
-  const today = new Date().toISOString().split('T')[0];
-  const uncollectedTotal = payments
-    .filter(p => !p.paid && p.due_date != null && p.due_date <= today)
-    .reduce((a, p) => a + p.amount, 0);
+  // 未収金（当月以前・未入金）
+  //
+  // 2026-08-03 修正：due_date ベースから当月以前ベースへ戻した。
+  //   旧実装は「支払期限が設定済み・期限到来・未入金」で数えていたが、
+  //   sm_payments 291 件すべてで due_date が未設定のため、条件に合致する行が
+  //   存在せず uncollected_total が常に 0 を返していた。
+  //   画面（入金管理タブのヘッダー）は「当月以前で未入金」で数えており、
+  //   同じ入金管理の数字が二系統に割れていた状態だった。
+  //   due_date を使う定義は、値が全件投入されたあと（Phase 3）に再度切り替える。
+  //   金額は画面と同じく実額優先（actual_amount があればそれ、無ければ amount）。
+  const uncollectedPayments = payments.filter(p => !p.paid && p.month_idx <= cur);
+
+  const uncollectedTotal = uncollectedPayments
+    .reduce((a, p) => a + (p.actual_amount ?? p.amount), 0);
+
+  // 月ごとの未収額（どの月から回収するかを決めるために使う）
+  const uncollectedByMonth = Array.from(
+    uncollectedPayments.reduce((map, p) => {
+      const e = map.get(p.month_idx) ?? { count: 0, amount: 0 };
+      e.count  += 1;
+      e.amount += p.actual_amount ?? p.amount;
+      map.set(p.month_idx, e);
+      return map;
+    }, new Map<number, { count: number; amount: number }>())
+  )
+    .sort((a, b) => a[0] - b[0])
+    .map(([abs, e]) => ({
+      abs,
+      year:   BASE_YEAR + Math.floor(abs / 12),
+      month:  abs % 12 + 1,
+      count:  e.count,
+      amount: e.amount,
+    }));
 
   // 月次チャート
   const chartData = absList.map(abs => {
@@ -205,8 +233,10 @@ async function getRevenueSummary(env: Env) {
       confirmed: yearConf,
       goal:      yearGoal,
     },
-    uncollected_total: uncollectedTotal,
-    by_business:       byBusiness,
+    uncollected_total:    uncollectedTotal,
+    uncollected_count:    uncollectedPayments.length,
+    uncollected_by_month: uncollectedByMonth,
+    by_business:          byBusiness,
     chart_data:        chartData,
     next_month: {
       goal:      nextMonthGoal,
