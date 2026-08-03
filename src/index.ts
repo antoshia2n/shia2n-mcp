@@ -78,6 +78,7 @@ import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
+import { handleZeusSync } from "./cron-zeus-sync.js";
 
 export interface Env {
   // Core
@@ -92,6 +93,11 @@ export interface Env {
   ZEUS_API_BASE: string;
   ZEUS_INTERNAL_SECRET: string;
   ZEUS_EXTERNAL_SECRET: string;
+  // Zeus 同期 Worker（zeus-worker）
+  // 2026-08-03：Cron Triggers 上限のため zeus-worker 側 cron を廃止し、
+  // 本 Worker の 0,30 cron（UTC 18:00 分岐）から HTTP で起動する。
+  ZEUS_WORKER_URL: string;
+  ZEUS_WORKER_SECRET: string;
   // Form-kun
   FORM_KUN_API_BASE: string;
   FORM_KUN_INTERNAL_SECRET: string;
@@ -289,6 +295,13 @@ export default {
       // 既存：ネタ9本メール（UTC 18:00 / 22:00 のみ発火）
       if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
         tasks.push(handleScheduled(env));
+      }
+
+      // 2026-08-03：Zeus 同期の起動（UTC 18:00 = JST 03:00 のみ発火）
+      // Cron Triggers が Free プラン上限 5 本で埋まっており zeus-worker 側の
+      // cron を登録できないため、cron 枠を増やさずここから HTTP で起動する。
+      if (utcMinute === 0 && utcHour === 18) {
+        tasks.push(handleZeusSync(env));
       }
     } else if (controller.cron === "15,45 * * * *") {
       // v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 reconciliation

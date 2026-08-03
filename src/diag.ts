@@ -61,6 +61,11 @@ const ENV_KEYS: (keyof Env)[] = [
   "ZEUS_API_BASE",
   "ZEUS_INTERNAL_SECRET",
   "ZEUS_EXTERNAL_SECRET",
+  // 2026-08-03：zeus-worker の cron 廃止に伴い追加。
+  // 本 Worker の 0,30 cron（UTC 18:00 分岐）から POST /sync-all を叩くため、
+  // この 2 つが未設定だと毎晩の Zeus 取り込みが動かない。
+  "ZEUS_WORKER_URL",
+  "ZEUS_WORKER_SECRET",
   "FORM_KUN_API_BASE",
   "FORM_KUN_INTERNAL_SECRET",
   "PAY_KUN_API_BASE",
