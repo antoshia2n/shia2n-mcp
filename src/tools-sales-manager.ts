@@ -93,19 +93,27 @@ function getStrategyGoal(strategy: Strategy[], abs: number): number | null {
 // データ取得
 // ─────────────────────────────────────────────
 
-async function fetchSMData(base: string): Promise<{
+async function fetchSMData(base: string, secret?: string): Promise<{
   payments: Payment[];
   contracts: Contract[];
   singles: Single[];
   strategy: Strategy[];
   businesses: Business[];
 }> {
+  // 2026-08-03：取得口の合言葉を付けて呼ぶ（段階1）。
+  //   Sales Manager 側は段階2で「あれば通す・無くても通す」で受けるため、
+  //   ここで先に送り始めても本番は止まらない。
+  //   合言葉が未設定のときは見出しを付けない（設定漏れで取得が全滅しないため）。
+  const init: RequestInit | undefined = secret
+    ? { headers: { Authorization: `Bearer ${secret}` } }
+    : undefined;
+
   const [payments, contracts, singles, businesses, strategy] = await Promise.all([
-    fetch(`${base}/api/sm-payments`).then(r => r.json() as Promise<Payment[]>),
-    fetch(`${base}/api/sm-contracts`).then(r => r.json() as Promise<Contract[]>),
-    fetch(`${base}/api/sm-singles`).then(r => r.json() as Promise<Single[]>),
-    fetch(`${base}/api/sm-businesses`).then(r => r.json() as Promise<Business[]>),
-    fetch(`${base}/api/sm-strategy`).then(r => r.json() as Promise<Strategy[]>),
+    fetch(`${base}/api/sm-payments`, init).then(r => r.json() as Promise<Payment[]>),
+    fetch(`${base}/api/sm-contracts`, init).then(r => r.json() as Promise<Contract[]>),
+    fetch(`${base}/api/sm-singles`, init).then(r => r.json() as Promise<Single[]>),
+    fetch(`${base}/api/sm-businesses`, init).then(r => r.json() as Promise<Business[]>),
+    fetch(`${base}/api/sm-strategy`, init).then(r => r.json() as Promise<Strategy[]>),
   ]);
   return { payments, contracts, singles, businesses, strategy };
 }
@@ -116,7 +124,10 @@ async function fetchSMData(base: string): Promise<{
 
 async function getRevenueSummary(env: Env) {
   const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager-black.vercel.app";
-  const { payments, contracts, singles, strategy, businesses } = await fetchSMData(base);
+  const { payments, contracts, singles, strategy, businesses } = await fetchSMData(
+    base,
+    env.SALES_MANAGER_INTERNAL_SECRET
+  );
 
   const cur     = currAbs();
   const absList = yearAbsList();

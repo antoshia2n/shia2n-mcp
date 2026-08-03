@@ -113,6 +113,10 @@ export interface Env {
   NAOKI_UID: string;
   // Sales Manager
   SALES_MANAGER_API_BASE: string;
+  // 2026-08-03：Sales Manager の取得口の合言葉（この用途で新規作成した Secret）。
+  // 既存の合言葉は使い回さない（既存の呼び出し元を壊さないため）。
+  // 未設定のときは見出しを付けずに従来どおり取得する（移行期間中に止めないため）。
+  SALES_MANAGER_INTERNAL_SECRET?: string;
   // Slack Incoming Webhooks
   SLACK_WEBHOOK_01: string;
   SLACK_WEBHOOK_02: string;

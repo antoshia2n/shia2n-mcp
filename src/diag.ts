@@ -74,6 +74,9 @@ const ENV_KEYS: (keyof Env)[] = [
   "FIREBASE_SA_PRIVATE_KEY",
   "NAOKI_UID",
   "SALES_MANAGER_API_BASE",
+  // 2026-08-03：Sales Manager の取得口の合言葉（段階1で追加）。
+  // 未設定だと合言葉なしで取りに行くため、段階4（必須化）の前に present を確認する。
+  "SALES_MANAGER_INTERNAL_SECRET",
   "SLACK_WEBHOOK_01",
   "SLACK_WEBHOOK_02",
   "SLACK_WEBHOOK_03",
