@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.32.0
+ * shia2n-mcp エントリーポイント v0.33.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -49,6 +49,13 @@
  *          （実装は munikis-client.ts 側）
  *          Naoki は「Google カレンダー繰返予定（日曜 09:00 JST）+ Claude 起動時フラグ」の
  *          二段構えで週次レビュー発火を管理する
+ * v0.33.0：ネタ9本メールに入切スイッチ（NETA_MAIL_ENABLED）を追加
+ *          Anthropic 側の残高切れで毎日 2 回（JST 03:00 / 07:00）失敗が続くため、
+ *          Naoki の方針「一旦止める」を受けて既定を止まる側にする。
+ *          NETA_MAIL_ENABLED が "1" のときだけ実行し、それ以外（未設定を含む）は
+ *          失敗ではなく通常のログを残して静かに飛ばす。
+ *          再開・停止は Cloudflare 側の Secret の入切だけででき、アップロード不要。
+ *          現在の入切状態は GET /diag の switches.neta_mail で確認できる。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -129,6 +136,13 @@ export interface Env {
   RESEND_API_KEY: string;
   RESEND_FROM_EMAIL: string;
   RESEND_TO_EMAIL: string;
+  // 2026-08-04 追加（ネタ9本メールの入切スイッチ）。
+  // "1" のときだけ送信処理を実行する。未設定・空・"1" 以外はすべて停止。
+  // 既定を停止側にしているのは、止めたい状態が既定であるべきだから
+  // （Secret が消えたり移行に失敗しても、勝手に再開して失敗が再発しない）。
+  // 値そのものは秘密ではないが、画面のプレーンテキスト変数は wrangler.jsonc の
+  // vars を含むデプロイで上書きされて消えるため、Secret 側で管理する。
+  NETA_MAIL_ENABLED?: string;
   // v0.23.0 追加（学ぶくん A）
   YOUTUBE_API_KEY: string;
   SUPABASE_URL: string;
@@ -297,8 +311,22 @@ export default {
       tasks.push(handleUtagePolling(env));
 
       // 既存：ネタ9本メール（UTC 18:00 / 22:00 のみ発火）
+      // 2026-08-04：NETA_MAIL_ENABLED が "1" のときだけ実行する。
+      // それ以外（未設定を含む）は失敗扱いにせず、通常のログを残して飛ばす。
+      // throw しないのは、止めている状態を Cron Events の失敗として
+      // 記録し続けると、本当の失敗が埋もれるため。
       if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
-        tasks.push(handleScheduled(env));
+        if (env.NETA_MAIL_ENABLED === "1") {
+          tasks.push(handleScheduled(env));
+        } else {
+          console.log(
+            "[scheduled] neta-mail skipped",
+            JSON.stringify({
+              reason: "NETA_MAIL_ENABLED is not \"1\"",
+              utc_hour: utcHour,
+            })
+          );
+        }
       }
 
       // 2026-08-03：Zeus 同期の起動（UTC 18:00 = JST 03:00 のみ発火）

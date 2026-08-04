@@ -1,14 +1,17 @@
 /**
- * /diag 公開診断エンドポイント v0.14.0
+ * /diag 公開診断エンドポイント v0.15.0
  *
  * - 認証不要（機密情報は一切返さない）
  * - レート制限: IPベース・1分あたり5回（OAUTH_KV使用）
  * - 環境変数の存在状態のみ返す（値は返さない）
  * - 各サービスへのHEAD疎通確認（並列・タイムアウト2秒）
+ * - v0.15.0：入切スイッチの現在値（switches）を追加。
+ *   未設定が正常な状態のスイッチを ENV_KEYS に混ぜると missing 表示になり、
+ *   設定漏れと見分けが付かなくなるため、別欄で on / off として返す。
  */
 import type { Env } from "./index.js";
 
-const VERSION = "0.14.0";
+const VERSION = "0.15.0";
 const RATE_LIMIT_PER_MINUTE = 5;
 
 function isPresent(val: unknown): boolean {
@@ -119,6 +122,12 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
   );
   const connectivity = Object.fromEntries(connectivityEntries);
 
+  // 入切スイッチの現在値（値そのものは返さず on / off のみ）
+  // neta_mail：毎朝のネタ9本メール。off のときは cron が来ても送信処理を実行しない。
+  const switches: Record<string, "on" | "off"> = {
+    neta_mail: env.NETA_MAIL_ENABLED === "1" ? "on" : "off",
+  };
+
   return Response.json(
     {
       app: "shia2n-mcp",
@@ -127,6 +136,7 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
       db_tables: "n/a (mcp wrapper - no direct db)",
       recent_errors: [],
       env: envStatus,
+      switches,
       connectivity,
     },
     {
