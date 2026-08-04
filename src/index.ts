@@ -71,6 +71,14 @@
  *          あわせて、部分失敗のときに投げるエラーへ失敗したアカウントと理由を載せた。
  *          通知文にしか入っていなかった情報が、削除で失われるのを防ぐため。
  *          SLACK_WEBHOOK_03 の Secret 削除は Naoki 作業（この版の反映後）。
+ * v0.36.0：連絡ツール（Slack）の名残を削除（第3便・Naoki 承認 2026-08-04）
+ *          正本 Decision：Slack 完全廃止・申し送りルート再定義（2026-07-26）
+ *          ① slack_post_message の道具を廃止（tools-slack.ts の import と登録を削除）。
+ *            道具として残っていると、廃止済みの経路を他のチャットが使えてしまうため。
+ *          ② 廃止済みの週次レビュー投稿（cron-weekly-review.ts）は v0.31.0 で
+ *            「削除」と記録されていたが実物が残っていた。呼び出しは 0 か所。
+ *          ①② のファイル本体の削除は Naoki が GitHub の画面で行う（アップロードでは消せないため）。
+ *          Env の SLACK_WEBHOOK_01〜04 は点検画面が名前を参照しているため宣言だけ残す。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -83,7 +91,6 @@ import { registerFormKunTools } from "./tools-form-kun.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
-import { registerSlackTools } from "./tools-slack.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
@@ -141,6 +148,10 @@ export interface Env {
   // 未設定のときは見出しを付けずに従来どおり取得する（移行期間中に止めないため）。
   SALES_MANAGER_INTERNAL_SECRET?: string;
   // Slack Incoming Webhooks
+  // 2026-08-04 v0.36.0：投稿の道具も自動の通知も廃止したため、
+  // 動作としてはもう使っていない。点検画面（diag.ts / handle-utage-diag.ts）が
+  // 設定の有無を見る項目として名前を参照しているので、宣言だけ残している。
+  // 点検画面の整理と Secret の削除は次の作業でまとめて行う。
   SLACK_WEBHOOK_01: string;
   SLACK_WEBHOOK_02: string;
   SLACK_WEBHOOK_03: string;
@@ -186,7 +197,6 @@ function createMcpServer(env: Env): McpServer {
   registerPayKunTools(server, env);
   registerTaskmasterTools(server, env);
   registerSalesManagerTools(server, env);
-  registerSlackTools(server, env);
   registerContentOsTools(server, env);
   registerInboxReviewTools(server, env);
   registerHaakuTools(server, env);
