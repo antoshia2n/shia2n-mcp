@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.33.0
+ * shia2n-mcp エントリーポイント v0.34.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -56,6 +56,13 @@
  *          失敗ではなく通常のログを残して静かに飛ばす。
  *          再開・停止は Cloudflare 側の Secret の入切だけででき、アップロード不要。
  *          現在の入切状態は GET /diag の switches.neta_mail で確認できる。
+ * v0.34.0：自動で動くものの実行記録を追加（cron-log.ts）
+ *          判断記録：https://www.notion.so/3b29c6c1c4398113bc59df5a566ea591
+ *          Zeus 同期 / UTAGE ポーリング / ネタ9本メールの 3 つについて、
+ *          いつ・成否・件数・失敗原因を KV に残す。見る場所は既存の 2 つ
+ *          （GET /diag の last_runs と munikis__get_context の recent_runs）。
+ *          Zeus は起動までしか関与しないため件数は null（件数は zeus-worker 側）。
+ *          連絡ツールへの通知はこの版では残す（移行の間に異常を落とさないため）。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -85,6 +92,7 @@ import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
+import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleZeusSync } from "./cron-zeus-sync.js";
 
 export interface Env {
@@ -308,7 +316,15 @@ export default {
 
     if (controller.cron === "0,30 * * * *") {
       // 既存：UTAGE ポーリング（毎回 30 分ごと）
-      tasks.push(handleUtagePolling(env));
+      tasks.push(
+        runAndRecord(env, "utage_polling", async () => {
+          const summary = await handleUtagePolling(env);
+          return {
+            count: summary.readers_total,
+            detail: `対象アカウント ${summary.accounts} 件・読者 ${summary.readers_total} 件を送信`,
+          };
+        })
+      );
 
       // 既存：ネタ9本メール（UTC 18:00 / 22:00 のみ発火）
       // 2026-08-04：NETA_MAIL_ENABLED が "1" のときだけ実行する。
@@ -317,8 +333,22 @@ export default {
       // 記録し続けると、本当の失敗が埋もれるため。
       if (utcMinute === 0 && (utcHour === 18 || utcHour === 22)) {
         if (env.NETA_MAIL_ENABLED === "1") {
-          tasks.push(handleScheduled(env));
+          tasks.push(
+            runAndRecord(env, "neta_mail", async () => {
+              await handleScheduled(env);
+              return { count: 9, detail: "ネタ9本のメールを送信" };
+            })
+          );
         } else {
+          // 止めていることも記録に残す。記録が無いと「壊れて動いていない」と
+          // 見分けが付かなくなるため。
+          tasks.push(
+            recordSkipped(
+              env,
+              "neta_mail",
+              "入切スイッチが入っていないため送っていません（意図的な停止）"
+            )
+          );
           console.log(
             "[scheduled] neta-mail skipped",
             JSON.stringify({
@@ -333,7 +363,16 @@ export default {
       // Cron Triggers が Free プラン上限 5 本で埋まっており zeus-worker 側の
       // cron を登録できないため、cron 枠を増やさずここから HTTP で起動する。
       if (utcMinute === 0 && utcHour === 18) {
-        tasks.push(handleZeusSync(env));
+        tasks.push(
+          runAndRecord(env, "zeus_sync", async () => {
+            await handleZeusSync(env);
+            return {
+              count: null,
+              detail:
+                "取り込みの開始までを確認（何件入ったかは Zeus 側にあり、ここでは分かりません）",
+            };
+          })
+        );
       }
     } else if (controller.cron === "15,45 * * * *") {
       // v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 reconciliation

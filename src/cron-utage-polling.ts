@@ -33,7 +33,13 @@ function getUtageApiKey(env: Env): string {
   return requireEnv("UTAGE_API_KEY", apiKey);
 }
 
-export async function handleUtagePolling(env: Env): Promise<void> {
+/** 実行記録に載せるための件数。呼び出し側（index.ts）が使う */
+export interface UtagePollingSummary {
+  accounts: number;
+  readers_total: number;
+}
+
+export async function handleUtagePolling(env: Env): Promise<UtagePollingSummary> {
   const startedAt = Date.now();
   const runId = `utage_${new Date().toISOString()}`;
 
@@ -74,7 +80,7 @@ export async function handleUtagePolling(env: Env): Promise<void> {
         "[utage-polling] no accounts found",
         JSON.stringify({ run_id: runId })
       );
-      return;
+      return { accounts: 0, readers_total: 0 };
     }
 
     const results = await Promise.allSettled(
@@ -102,6 +108,7 @@ export async function handleUtagePolling(env: Env): Promise<void> {
             account,
             skipped: true,
             reason: "no_readers",
+            readers_count: 0,
           };
         }
 
@@ -119,6 +126,7 @@ export async function handleUtagePolling(env: Env): Promise<void> {
           account,
           skipped: false,
           result,
+          readers_count: readers.length,
         };
       })
     );
@@ -167,6 +175,15 @@ export async function handleUtagePolling(env: Env): Promise<void> {
 
       throw new Error(`UTAGE polling partial failure: ${failed.length}/${accounts.length}`);
     }
+
+    // 2026-08-04：実行記録に載せる件数を返す。
+    // 送った読者の数を合計する（読者が 0 件で飛ばしたアカウントは 0 として数える）。
+    const readersTotal = results.reduce((total, result) => {
+      if (result.status !== "fulfilled") return total;
+      return total + (result.value.readers_count ?? 0);
+    }, 0);
+
+    return { accounts: accounts.length, readers_total: readersTotal };
   } catch (error) {
     const errText =
       error instanceof Error

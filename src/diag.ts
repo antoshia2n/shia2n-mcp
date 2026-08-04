@@ -1,5 +1,5 @@
 /**
- * /diag 公開診断エンドポイント v0.15.0
+ * /diag 公開診断エンドポイント v0.16.0
  *
  * - 認証不要（機密情報は一切返さない）
  * - レート制限: IPベース・1分あたり5回（OAUTH_KV使用）
@@ -8,10 +8,14 @@
  * - v0.15.0：入切スイッチの現在値（switches）を追加。
  *   未設定が正常な状態のスイッチを ENV_KEYS に混ぜると missing 表示になり、
  *   設定漏れと見分けが付かなくなるため、別欄で on / off として返す。
+ * - v0.16.0：自動で動くものの直近の実行結果（last_runs）を追加。
+ *   いつ・成否・件数・失敗原因の 4 点。値そのものではなく結果だけなので
+ *   認証なしのままで問題ない（金額・個人情報は含まない）。
  */
 import type { Env } from "./index.js";
+import { readAllRuns } from "./cron-log.js";
 
-const VERSION = "0.15.0";
+const VERSION = "0.16.0";
 const RATE_LIMIT_PER_MINUTE = 5;
 
 function isPresent(val: unknown): boolean {
@@ -128,6 +132,9 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
     neta_mail: env.NETA_MAIL_ENABLED === "1" ? "on" : "off",
   };
 
+  // 自動で動くものの直近の実行結果（新しいものが先頭・処理ごとに最大 5 件）
+  const last_runs = await readAllRuns(env);
+
   return Response.json(
     {
       app: "shia2n-mcp",
@@ -137,6 +144,7 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
       recent_errors: [],
       env: envStatus,
       switches,
+      last_runs,
       connectivity,
     },
     {

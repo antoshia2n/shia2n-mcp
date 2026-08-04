@@ -12,9 +12,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchMunikisContext } from "./munikis-client.js";
+import { readAllRuns, runAndRecord } from "./cron-log.js";
 
 interface MunikisEnv {
   NOTION_TOKEN: string;
+  OAUTH_KV: KVNamespace;
 }
 
 export function registerMunikisTools(server: McpServer, env: MunikisEnv): void {
@@ -37,15 +39,66 @@ export function registerMunikisTools(server: McpServer, env: MunikisEnv): void {
         .describe("返却する直近セッション数（1-10・デフォルト 3）"),
     },
     async ({ chat_type, n_sessions }) => {
-      const result = await fetchMunikisContext(env.NOTION_TOKEN, {
-        chat_type,
-        n_sessions: n_sessions ?? 3,
-      });
+      const [result, recent_runs] = await Promise.all([
+        fetchMunikisContext(env.NOTION_TOKEN, {
+          chat_type,
+          n_sessions: n_sessions ?? 3,
+        }),
+        readAllRuns(env),
+      ]);
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(result, null, 2),
+            text: JSON.stringify({ ...result, recent_runs }, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // 2026-08-04：実行記録の仕組みそのものを確かめるための自己点検。
+  // 成功だけ記録されて失敗が落ちる作りになっていないかを、本番の処理を
+  // 動かさずに確認する。記録は selftest という名前で残るため、本番の
+  // 3 つの処理の記録には混ざらない。
+  server.tool(
+    "munikis__cron_selftest",
+    "自動で動くものの実行記録が、成功と失敗の両方を残せているかを確かめる。outcome=failure を指定すると、わざと失敗した記録を 1 件残す。本番の処理（Zeus 取り込み・UTAGE 取り込み・ネタ9本メール）は一切動かさない。結果は munikis__get_context の recent_runs.selftest と GET /diag の last_runs.selftest で確認できる。",
+    {
+      outcome: z
+        .enum(["success", "failure"])
+        .describe("success=成功として記録する / failure=わざと失敗させて記録する"),
+    },
+    async ({ outcome }) => {
+      let thrown: string | null = null;
+
+      try {
+        await runAndRecord(env, "selftest", async () => {
+          if (outcome === "failure") {
+            throw new Error("自己点検のためのわざとの失敗（本番の処理ではありません）");
+          }
+          return { count: 1, detail: "自己点検（成功として記録）" };
+        });
+      } catch (error) {
+        // ここで受け止める。記録は runAndRecord の中で済んでいる。
+        thrown = error instanceof Error ? error.message : String(error);
+      }
+
+      const runs = await readAllRuns(env);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                requested: outcome,
+                recorded: runs.selftest?.[0] ?? null,
+                thrown,
+              },
+              null,
+              2
+            ),
           },
         ],
       };
