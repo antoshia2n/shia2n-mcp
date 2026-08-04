@@ -14,11 +14,15 @@
  * - v0.17.0：連絡ツールの宛先 4 件（SLACK_WEBHOOK_01〜04）を項目から削除。
  *   通知も投稿の道具も廃止済みで、どこからも読まれていないことを全件確認した。
  *   残しておくと「未設定＝直すべきもの」と読めてしまい、本当の設定漏れが埋もれる。
+ * - v0.18.0：疎通確認で叩く先を対象ごとに指定できるようにした（SERVICES の path）。
+ *   sales_manager だけ入口が画面のページで、HEAD でも画面を丸ごと作るため 2 秒に
+ *   間に合わず timeout になっていた。軽い口 /api/diag へ向ける。
+ *   path を指定した対象は 4xx も失敗として扱う（口が消えたことを取りこぼさないため）。
  */
 import type { Env } from "./index.js";
 import { readAllRuns } from "./cron-log.js";
 
-const VERSION = "0.17.0";
+const VERSION = "0.18.0";
 const RATE_LIMIT_PER_MINUTE = 5;
 
 function isPresent(val: unknown): boolean {
@@ -43,15 +47,20 @@ async function checkRateLimit(request: Request, env: Env): Promise<boolean> {
 }
 
 async function pingService(
-  base: string
+  base: string,
+  path?: string
 ): Promise<{ ok: boolean; latency_ms: number; http_status?: number; error?: string }> {
   const start = Date.now();
+  const target = path ? base.replace(/\/+$/, "") + path : base;
   try {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 2000);
-    const resp = await fetch(base, { method: "HEAD", signal: controller.signal });
+    const resp = await fetch(target, { method: "HEAD", signal: controller.signal });
     clearTimeout(id);
-    return { ok: resp.status < 500, latency_ms: Date.now() - start, http_status: resp.status };
+    // path を指定した場合は「その口が実在すること」まで見たいので 4xx も失敗にする。
+    // path なし（入口を叩く従来どおりの4件）は挙動を変えない。
+    const limit = path ? 400 : 500;
+    return { ok: resp.status < limit, latency_ms: Date.now() - start, http_status: resp.status };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "unknown";
     return {
@@ -89,12 +98,16 @@ const ENV_KEYS: (keyof Env)[] = [
   "SALES_MANAGER_INTERNAL_SECRET",
 ];
 
-const SERVICES: { name: string; envKey: keyof Env }[] = [
+// path を書いた行だけ、入口ではなくその道を叩く。
+// sales_manager：入口は画面のページで、HEAD でも画面を丸ごと作るため 2 秒に間に合わない。
+// 軽い口（/api/diag・HEAD は即返し）へ向ける。原因と対処は 2026-05-04 に特定済みで、
+// 3 か月そのままだったものを今回反映する。
+const SERVICES: { name: string; envKey: keyof Env; path?: string }[] = [
   { name: "high_shin",     envKey: "HIGH_SHIN_API_BASE"     },
   { name: "zeus",          envKey: "ZEUS_API_BASE"          },
   { name: "form_kun",      envKey: "FORM_KUN_API_BASE"      },
   { name: "pay_kun",       envKey: "PAY_KUN_API_BASE"       },
-  { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE" },
+  { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag" },
 ];
 
 export async function handleDiag(request: Request, env: Env): Promise<Response> {
@@ -115,12 +128,14 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
 
   // 各サービスへの疎通確認（並列）
   const connectivityEntries = await Promise.all(
-    SERVICES.map(async ({ name, envKey }) => {
+    SERVICES.map(async ({ name, envKey, path }) => {
       const base = env[envKey] as string | undefined;
       if (!isPresent(base)) {
         return [name, { ok: false, reason: "env_missing" }] as const;
       }
-      return [name, await pingService(base!)] as const;
+      const result = await pingService(base!, path);
+      // どの道を叩いたかを結果に載せる（住所そのものは載せない）。
+      return [name, path ? { ...result, path } : result] as const;
     })
   );
   const connectivity = Object.fromEntries(connectivityEntries);
