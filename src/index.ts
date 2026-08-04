@@ -63,6 +63,14 @@
  *          （GET /diag の last_runs と munikis__get_context の recent_runs）。
  *          Zeus は起動までしか関与しないため件数は null（件数は zeus-worker 側）。
  *          連絡ツールへの通知はこの版では残す（移行の間に異常を落とさないため）。
+ * v0.35.0：連絡ツールへの異常通知を削除（第2便）
+ *          判断記録：https://www.notion.so/3b29c6c1c4398113bc59df5a566ea591
+ *          cron-utage-polling.ts の notifyDevSlack（呼び出し 2 か所と関数本体）を削除。
+ *          UTAGE ポーリングは v0.34.0 で実行記録が動いていることを実機で確認済みのため、
+ *          置き換え先が用意できてから外す順序になっている。
+ *          あわせて、部分失敗のときに投げるエラーへ失敗したアカウントと理由を載せた。
+ *          通知文にしか入っていなかった情報が、削除で失われるのを防ぐため。
+ *          SLACK_WEBHOOK_03 の Secret 削除は Naoki 作業（この版の反映後）。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";

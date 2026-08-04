@@ -1,5 +1,5 @@
 /**
- * UTAGE ポーリング Scheduled Handler v2.0.0
+ * UTAGE ポーリング Scheduled Handler v2.1.0
  *
  * cron 0,30 * * * * で発火。
  * UTAGE REST API から最新読者を取得し、会員管理くん内部 API にPOSTする。
@@ -8,6 +8,14 @@
  * - MCPではなくREST APIを使う
  * - UTAGE_API_KEY は Cloudflare Secret に保存する
  * - fatal error / partial failure は再throwして Cron Events に失敗として残す
+ *
+ * v2.1.0（2026-08-04）：連絡ツール（Slack #03-開発部）への異常通知を削除。
+ *   判断記録：https://www.notion.so/3b29c6c1c4398113bc59df5a566ea591
+ *   異常は実行記録（cron-log.ts）に残り、GET /diag の last_runs と
+ *   munikis__get_context の recent_runs で確認する。
+ *   あわせて、部分失敗のときに投げるエラーへ失敗したアカウントと理由を載せた。
+ *   通知文にしか入っていなかった情報を記録側へ移すため。
+ *   SLACK_WEBHOOK_03 はこのファイルからは参照しなくなった。
  */
 
 import type { Env } from "./index.js";
@@ -168,12 +176,12 @@ export async function handleUtagePolling(env: Env): Promise<UtagePollingSummary>
         .map((item) => `${item.account_name}: ${item.reason}`)
         .join("\n");
 
-      await notifyDevSlack(
-        env,
-        `UTAGE polling 一部失敗（${failed.length}/${accounts.length} アカウント）\n\`\`\`\n${errorText}\n\`\`\``
+      // 2026-08-04：連絡ツールへの通知をやめ、失敗の原因を投げるエラーに載せる。
+      // ここで載せないと、実行記録には「何アカウント落ちたか」しか残らず、
+      // 「どのアカウントがなぜ落ちたか」が失われる（依頼書の完了条件2を満たさない）。
+      throw new Error(
+        `UTAGE polling partial failure: ${failed.length}/${accounts.length}\n${errorText}`
       );
-
-      throw new Error(`UTAGE polling partial failure: ${failed.length}/${accounts.length}`);
     }
 
     // 2026-08-04：実行記録に載せる件数を返す。
@@ -199,30 +207,9 @@ export async function handleUtagePolling(env: Env): Promise<UtagePollingSummary>
       })
     );
 
-    await notifyDevSlack(
-      env,
-      `UTAGE polling 全体失敗\n\`\`\`\n${errText}\n\`\`\``
-    );
-
+    // 2026-08-04：連絡ツールへの通知をやめた。
+    // 全体失敗は投げ直され、呼び出し側（index.ts の runAndRecord）が
+    // 原因つきで実行記録に残す。
     throw error;
-  }
-}
-
-/**
- * Slack #03-開発部 に通知（SLACK_WEBHOOK_03）
- */
-async function notifyDevSlack(env: Env, text: string): Promise<void> {
-  try {
-    if (!env.SLACK_WEBHOOK_03) return;
-
-    await fetch(env.SLACK_WEBHOOK_03, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ text }),
-    });
-  } catch (error) {
-    console.error("[utage-polling] slack notify failed", error);
   }
 }
