@@ -1,5 +1,5 @@
 /**
- * /diag 公開診断エンドポイント v0.16.0
+ * /diag 公開診断エンドポイント v0.17.0
  *
  * - 認証不要（機密情報は一切返さない）
  * - レート制限: IPベース・1分あたり5回（OAUTH_KV使用）
@@ -11,11 +11,14 @@
  * - v0.16.0：自動で動くものの直近の実行結果（last_runs）を追加。
  *   いつ・成否・件数・失敗原因の 4 点。値そのものではなく結果だけなので
  *   認証なしのままで問題ない（金額・個人情報は含まない）。
+ * - v0.17.0：連絡ツールの宛先 4 件（SLACK_WEBHOOK_01〜04）を項目から削除。
+ *   通知も投稿の道具も廃止済みで、どこからも読まれていないことを全件確認した。
+ *   残しておくと「未設定＝直すべきもの」と読めてしまい、本当の設定漏れが埋もれる。
  */
 import type { Env } from "./index.js";
 import { readAllRuns } from "./cron-log.js";
 
-const VERSION = "0.16.0";
+const VERSION = "0.17.0";
 const RATE_LIMIT_PER_MINUTE = 5;
 
 function isPresent(val: unknown): boolean {
@@ -84,10 +87,6 @@ const ENV_KEYS: (keyof Env)[] = [
   // 2026-08-03：Sales Manager の取得口の合言葉（段階1で追加）。
   // 未設定だと合言葉なしで取りに行くため、段階4（必須化）の前に present を確認する。
   "SALES_MANAGER_INTERNAL_SECRET",
-  "SLACK_WEBHOOK_01",
-  "SLACK_WEBHOOK_02",
-  "SLACK_WEBHOOK_03",
-  "SLACK_WEBHOOK_04",
 ];
 
 const SERVICES: { name: string; envKey: keyof Env }[] = [

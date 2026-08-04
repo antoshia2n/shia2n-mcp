@@ -1,5 +1,8 @@
 /**
- * UTAGE 診断 HTTP Handler v1.0.0
+ * UTAGE 診断 HTTP Handler v1.1.0
+ *
+ * v1.1.0（2026-08-04）：連絡ツールの宛先の項目（SLACK_WEBHOOK_03）を削除。
+ *   通知そのものを廃止したため、設定の有無を見ても意味が無くなった。
  *
  * GET /utage/diag （認証不要・Naoki の 1 URL 検証用）
  *
@@ -19,7 +22,6 @@ interface EnvCheck {
   UTAGE_API_BASE: string;
   MEMBERS_API_BASE_set: boolean;
   MEMBERS_INTERNAL_SECRET_set: boolean;
-  SLACK_WEBHOOK_03_set: boolean;
 }
 
 interface UtageCheck {
@@ -47,7 +49,6 @@ export async function handleUtageDiag(env: Env): Promise<Response> {
     UTAGE_API_BASE: env.UTAGE_API_BASE || DEFAULT_UTAGE_API_BASE,
     MEMBERS_API_BASE_set: Boolean(env.MEMBERS_API_BASE),
     MEMBERS_INTERNAL_SECRET_set: Boolean(env.MEMBERS_INTERNAL_SECRET),
-    SLACK_WEBHOOK_03_set: Boolean(env.SLACK_WEBHOOK_03),
   };
 
   // ------------------------------------------------------------

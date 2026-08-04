@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.34.0
+ * shia2n-mcp エントリーポイント v0.37.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -79,6 +79,16 @@
  *            「削除」と記録されていたが実物が残っていた。呼び出しは 0 か所。
  *          ①② のファイル本体の削除は Naoki が GitHub の画面で行う（アップロードでは消せないため）。
  *          Env の SLACK_WEBHOOK_01〜04 は点検画面が名前を参照しているため宣言だけ残す。
+ * v0.37.0：点検画面から使っていない設定を外す（第4便）
+ *          タスク：https://www.notion.so/3b19c6c1c43981a89d6adfb0e363e68d
+ *          ① /diag の項目から SLACK_WEBHOOK_01〜04 を削除（diag.ts v0.17.0）。
+ *          ② /utage/diag から SLACK_WEBHOOK_03 の項目を削除（handle-utage-diag.ts v1.1.0）。
+ *          ③ Env の SLACK_WEBHOOK_01〜04 の宣言を削除（読む側が居なくなったため）。
+ *          点検画面の 23 項目を全件、末端まで呼び出しを辿って確認した結果、
+ *          読まれていないのはこの 4 件だけだった。他の 19 件はすべて現役。
+ *          Cloudflare 側の Secret 4 本の削除は、この版の反映後に Naoki が行う。
+ *          あわせて、冒頭の版表記（v0.34.0 のまま）と MCP サーバーの版（0.32.0 のまま）が
+ *          実物とずれていたので、いずれも 0.37.0 にそろえた。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -147,15 +157,6 @@ export interface Env {
   // 既存の合言葉は使い回さない（既存の呼び出し元を壊さないため）。
   // 未設定のときは見出しを付けずに従来どおり取得する（移行期間中に止めないため）。
   SALES_MANAGER_INTERNAL_SECRET?: string;
-  // Slack Incoming Webhooks
-  // 2026-08-04 v0.36.0：投稿の道具も自動の通知も廃止したため、
-  // 動作としてはもう使っていない。点検画面（diag.ts / handle-utage-diag.ts）が
-  // 設定の有無を見る項目として名前を参照しているので、宣言だけ残している。
-  // 点検画面の整理と Secret の削除は次の作業でまとめて行う。
-  SLACK_WEBHOOK_01: string;
-  SLACK_WEBHOOK_02: string;
-  SLACK_WEBHOOK_03: string;
-  SLACK_WEBHOOK_04: string;
   // v0.17.0 追加
   NOTION_TOKEN: string;
   ANTHROPIC_API_KEY: string;
@@ -188,7 +189,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.32.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.37.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
