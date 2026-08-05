@@ -41,6 +41,8 @@ interface KgiDef {
   unit: string;
   color: string;
   current?: number;
+  period?: string;
+  deadline?: string;
 }
 
 interface DailyRecord {
@@ -180,6 +182,169 @@ function parseKgiCurrents(raw?: string): { id?: string; title?: string; current:
     }
     return { id, title, current: n };
   });
+}
+
+// ─── 目標値の書き換え用（2026-08-05 追加） ───────────────────────────────────
+//
+// 依頼書：3b39c6c1-c439-815f-817f-f690ff7fdd39
+// 日報の口では実績と現在値しか書けず、目標値は画面からしか直せなかった。
+// 人も AI も直せる状態にするため、目標値を書き換える口を分けて足す。
+//
+// 消す口は作らない。目標を消すと、そこにぶら下がる手前の数字の行き先が
+// 黙って無くなるため。置き直すときは名前と値の書き換えで足りる。
+
+const KGI_PERIODS = ["annual", "monthly", "weekly", "daily"];
+
+interface KgiGoalPatch {
+  id?: string;
+  title?: string;
+  new_title?: string;
+  target?: string;
+  unit?: string;
+  period?: string;
+  deadline?: string;
+}
+
+interface KpiGoalPatch {
+  id?: string;
+  title?: string;
+  new_title?: string;
+  monthly_target?: string; // "" ＝ 目標を外す
+  unit?: string;
+}
+
+function parseJsonArray(raw: string, field: string): Record<string, unknown>[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${field} が JSON として読めません（受け取った値: ${raw}）`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${field} は配列で渡してください`);
+  }
+  return parsed.map((item, i) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new Error(`${field} の ${i + 1} 件目が読めません`);
+    }
+    return item as Record<string, unknown>;
+  });
+}
+
+/** 数値でも文字列でも受け取り、保存の形（文字列）にそろえる */
+function toTargetString(v: unknown, label: string): string {
+  if (v === null) return "";
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) throw new Error(`${label} の値が数値として読めません`);
+    return String(v);
+  }
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (t === "") return "";
+    if (!Number.isFinite(Number(t))) {
+      throw new Error(`${label} は数値で渡してください（受け取った値: ${v}）`);
+    }
+    return t;
+  }
+  throw new Error(`${label} の値が読めません`);
+}
+
+function parseKgiGoals(raw?: string): KgiGoalPatch[] {
+  if (!raw) return [];
+  return parseJsonArray(raw, "kgi_goals_json").map((o, i) => {
+    const nth = `kgi_goals_json の ${i + 1} 件目`;
+    const patch: KgiGoalPatch = {};
+    if (typeof o.id === "string") patch.id = o.id;
+    if (typeof o.title === "string") patch.title = o.title;
+    if (!patch.id && !patch.title) throw new Error(`${nth} に id も title もありません`);
+
+    if ("new_title" in o) {
+      if (typeof o.new_title !== "string" || o.new_title.trim() === "") {
+        throw new Error(`${nth} の new_title が空です`);
+      }
+      patch.new_title = o.new_title;
+    }
+    if ("target" in o) patch.target = toTargetString(o.target, `${nth} の target`);
+    if ("unit" in o) {
+      if (typeof o.unit !== "string") throw new Error(`${nth} の unit は文字で渡してください`);
+      patch.unit = o.unit;
+    }
+    if ("period" in o) {
+      if (typeof o.period !== "string" || !KGI_PERIODS.includes(o.period)) {
+        throw new Error(`${nth} の period は ${KGI_PERIODS.join(" / ")} のいずれかで渡してください`);
+      }
+      patch.period = o.period;
+    }
+    if ("deadline" in o) {
+      if (typeof o.deadline !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(o.deadline)) {
+        throw new Error(`${nth} の deadline は YYYY-MM-DD 形式で渡してください`);
+      }
+      patch.deadline = o.deadline;
+    }
+    const touched = ["new_title", "target", "unit", "period", "deadline"].some((k) => k in patch);
+    if (!touched) throw new Error(`${nth} に変更する項目がありません`);
+    return patch;
+  });
+}
+
+function parseKpiGoals(raw?: string): KpiGoalPatch[] {
+  if (!raw) return [];
+  return parseJsonArray(raw, "kpi_goals_json").map((o, i) => {
+    const nth = `kpi_goals_json の ${i + 1} 件目`;
+    const patch: KpiGoalPatch = {};
+    if (typeof o.id === "string") patch.id = o.id;
+    if (typeof o.title === "string") patch.title = o.title;
+    if (!patch.id && !patch.title) throw new Error(`${nth} に id も title もありません`);
+
+    if ("new_title" in o) {
+      if (typeof o.new_title !== "string" || o.new_title.trim() === "") {
+        throw new Error(`${nth} の new_title が空です`);
+      }
+      patch.new_title = o.new_title;
+    }
+    if ("monthly_target" in o) {
+      patch.monthly_target = toTargetString(o.monthly_target, `${nth} の monthly_target`);
+    }
+    if ("unit" in o) {
+      if (typeof o.unit !== "string") throw new Error(`${nth} の unit は文字で渡してください`);
+      patch.unit = o.unit;
+    }
+    const touched = ["new_title", "monthly_target", "unit"].some((k) => k in patch);
+    if (!touched) throw new Error(`${nth} に変更する項目がありません`);
+    return patch;
+  });
+}
+
+/**
+ * 書き換える相手を1件に絞る。
+ * 見つからない・同じ名前が2件ある、のどちらも書き込まずに止める。
+ */
+function findOneByIdOrTitle<T extends { id: string; title: string }>(
+  list: T[],
+  patch: { id?: string; title?: string },
+  kind: string
+): T {
+  const names = list.map((x) => x.title).join(" / ");
+  if (patch.id) {
+    const hit = list.find((x) => x.id === patch.id);
+    if (!hit) {
+      throw new Error(`${kind}「${patch.id}」が見つかりません。登録されているのは: ${names}。書き込みは行っていません`);
+    }
+    return hit;
+  }
+  const hits = list.filter((x) => x.title === patch.title);
+  if (hits.length === 0) {
+    throw new Error(`${kind}「${patch.title}」が見つかりません。登録されているのは: ${names}。書き込みは行っていません`);
+  }
+  if (hits.length > 1) {
+    throw new Error(`${kind}「${patch.title}」が ${hits.length} 件あります。id で指定してください。書き込みは行っていません`);
+  }
+  return hits[0];
+}
+
+function newHaakuId(): string {
+  // 画面が作る id と同じ形（id_ミリ秒_5文字）にそろえる
+  return `id_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
 // ─── 日付ヘルパー ──────────────────────────────────────────────────────────────
@@ -487,6 +652,200 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           target:  g.target,
           unit:    g.unit,
           current: g.current ?? null,
+        })),
+      });
+    }
+  );
+
+  // ─── 4. haAku__update_goals ───────────────────────────────────────────────
+  server.tool(
+    "haAku__update_goals",
+    "haAku の目標値（上位の目標の目標値・手前の数字の月次目標）を書き換える。実績や現在値ではなく「目標そのもの」を直すときに使う。日報の口（haAku__update_daily_report）では目標値は変えられないため、こちらを使う。渡した項目だけ更新し、渡さなかった項目はもとの値を保つ。対象が見つからない・同じ名前が複数ある場合は、何も書かずに止める。月次目標を外すときは monthly_target に null を渡す。戻り値: { ok, updated, kgis: [{id, title, target, unit, period, deadline, current}], kpis: [{id, title, unit, monthlyTarget, kgiId}] }（すべて書き込んだあとに読み直した値）",
+    {
+      kgi_goals_json: z
+        .string()
+        .optional()
+        .describe(
+          '上位の目標の書き換え。JSON 配列で渡す。例: [{"title":"月商150万","new_title":"着金 月100万","target":100,"unit":"万円"}]。' +
+          "id か title のどちらかで相手を指定する。変えられるのは new_title / target / unit / period / deadline。" +
+          "period は annual / monthly / weekly / daily。target に空文字を渡すと値なし（未設定）になる"
+        ),
+      kpi_goals_json: z
+        .string()
+        .optional()
+        .describe(
+          '手前の数字の月次目標の書き換え。JSON 配列で渡す。例: [{"title":"しあらぼ新規契約","monthly_target":2}]。' +
+          "id か title のどちらかで相手を指定する。変えられるのは new_title / monthly_target / unit。" +
+          "monthly_target に null を渡すと月次目標を外す（実績だけをためる形になる）"
+        ),
+    },
+    async (args) => {
+      const uid = env.NAOKI_UID;
+      if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+        throw new Error("Firebase env not configured (NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY)");
+      }
+
+      // 入力の解釈を先に済ませる（保存先を触る前に落とす）
+      const kgiPatches = parseKgiGoals(args.kgi_goals_json);
+      const kpiPatches = parseKpiGoals(args.kpi_goals_json);
+      if (kgiPatches.length === 0 && kpiPatches.length === 0) {
+        throw new Error("更新する項目が1つもありません（kgi_goals_json か kpi_goals_json のどちらかを渡してください）");
+      }
+
+      const token = await getFirestoreToken(env);
+      const kgiPath = `users/${uid}/app_data/os_kgis`;
+      const kpiPath = `users/${uid}/app_data/os_kpis`;
+      const updated: string[] = [];
+
+      // ─ 上位の目標 ─
+      if (kgiPatches.length > 0) {
+        const kgis = await loadArrayDocStrict<KgiDef>(token, uid, "os_kgis");
+        if (kgis.length === 0) {
+          throw new Error("上位の目標が1件も読み取れませんでした。書き込みは行っていません");
+        }
+        const next = kgis.map((g) => ({ ...g }));
+        for (const patch of kgiPatches) {
+          const hit = findOneByIdOrTitle(next, patch, "上位の目標");
+          const before = hit.title;
+          if (patch.new_title !== undefined) hit.title = patch.new_title;
+          if (patch.target !== undefined) hit.target = patch.target;
+          if (patch.unit !== undefined) hit.unit = patch.unit;
+          if (patch.period !== undefined) hit.period = patch.period;
+          if (patch.deadline !== undefined) hit.deadline = patch.deadline;
+          updated.push(`kgi:${before}${patch.new_title !== undefined ? ` → ${hit.title}` : ""}`);
+        }
+        await fsPatch(token, kgiPath, { value: toFVal(next) }, ["value"]);
+      }
+
+      // ─ 手前の数字 ─
+      if (kpiPatches.length > 0) {
+        const kpis = await loadArrayDocStrict<KpiDef>(token, uid, "os_kpis");
+        if (kpis.length === 0) {
+          throw new Error("手前の数字が1件も読み取れませんでした。書き込みは行っていません");
+        }
+        const next = kpis.map((k) => ({ ...k }));
+        for (const patch of kpiPatches) {
+          const hit = findOneByIdOrTitle(next, patch, "手前の数字");
+          const before = hit.title;
+          if (patch.new_title !== undefined) hit.title = patch.new_title;
+          if (patch.monthly_target !== undefined) hit.monthlyTarget = patch.monthly_target;
+          if (patch.unit !== undefined) hit.unit = patch.unit;
+          updated.push(
+            `kpi:${before}${patch.monthly_target === "" ? "（月次目標を外した）" : ""}`
+          );
+        }
+        await fsPatch(token, kpiPath, { value: toFVal(next) }, ["value"]);
+      }
+
+      // ─ 書いたあとに読み直して、その値をそのまま返す ─
+      const [kgisAfter, kpisAfter] = await Promise.all([
+        loadArrayDoc<KgiDef>(token, uid, "os_kgis"),
+        loadArrayDoc<KpiDef>(token, uid, "os_kpis"),
+      ]);
+
+      return asMcpTextResult({
+        ok: true,
+        updated,
+        kgis: kgisAfter.map((g) => ({
+          id:       g.id,
+          title:    g.title,
+          target:   g.target,
+          unit:     g.unit,
+          period:   g.period ?? null,
+          deadline: g.deadline ?? null,
+          current:  g.current ?? null,
+        })),
+        kpis: kpisAfter.map((k) => ({
+          id:            k.id,
+          title:         k.title,
+          unit:          k.unit,
+          monthlyTarget: k.monthlyTarget ?? "",
+          kgiId:         k.kgiId,
+        })),
+      });
+    }
+  );
+
+  // ─── 5. haAku__add_kgi ────────────────────────────────────────────────────
+  server.tool(
+    "haAku__add_kgi",
+    "haAku に上位の目標（KGI）を1本追加する。目標の器を作るときに使う。値がまだ決まっていない場合は target を渡さなければ空のまま作れる。同じ名前がすでにある場合は、何も書かずに止める。戻り値: { ok, added: {id, title}, kgis: [{id, title, target, unit, period, deadline, current}] }（書き込んだあとに読み直した値）",
+    {
+      title: z
+        .string()
+        .describe("上位の目標の名前。必須。すでに同じ名前があるときは追加しない"),
+      target: z
+        .string()
+        .optional()
+        .describe("目標値。数字を文字で渡す（例: 100）。渡さなければ空のまま作る"),
+      unit: z
+        .string()
+        .optional()
+        .describe("単位（例: 万円 / 名）。渡さなければ空のまま作る"),
+      period: z
+        .string()
+        .optional()
+        .describe("期間。annual / monthly / weekly / daily のいずれか。省略時は monthly"),
+      deadline: z
+        .string()
+        .optional()
+        .describe("期限（ISO 日付 例: 2026-12-31）。渡さなければ設定しない"),
+      color: z
+        .string()
+        .optional()
+        .describe("画面での色（例: #41C9A2）。渡さなければ画面の既定の色で表示される"),
+    },
+    async (args) => {
+      const uid = env.NAOKI_UID;
+      if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+        throw new Error("Firebase env not configured (NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY)");
+      }
+
+      const title = args.title.trim();
+      if (title === "") throw new Error("title が空です");
+
+      const period = args.period ?? "monthly";
+      if (!KGI_PERIODS.includes(period)) {
+        throw new Error(`period は ${KGI_PERIODS.join(" / ")} のいずれかで渡してください（受け取った値: ${period}）`);
+      }
+      if (args.deadline !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(args.deadline)) {
+        throw new Error(`deadline は YYYY-MM-DD 形式で渡してください（受け取った値: ${args.deadline}）`);
+      }
+      const target = args.target === undefined ? "" : toTargetString(args.target, "target");
+
+      const token = await getFirestoreToken(env);
+      const kgiPath = `users/${uid}/app_data/os_kgis`;
+
+      const kgis = await loadArrayDocStrict<KgiDef>(token, uid, "os_kgis");
+      if (kgis.some((g) => g.title === title)) {
+        throw new Error(`「${title}」はすでにあります。追加は行っていません（値を変えるなら haAku__update_goals を使う）`);
+      }
+
+      const created: KgiDef = {
+        id:     newHaakuId(),
+        title,
+        target,
+        unit:   args.unit ?? "",
+        color:  args.color ?? "",
+        period,
+      };
+      if (args.deadline !== undefined) created.deadline = args.deadline;
+
+      await fsPatch(token, kgiPath, { value: toFVal([...kgis, created]) }, ["value"]);
+
+      const kgisAfter = await loadArrayDoc<KgiDef>(token, uid, "os_kgis");
+
+      return asMcpTextResult({
+        ok: true,
+        added: { id: created.id, title: created.title },
+        kgis: kgisAfter.map((g) => ({
+          id:       g.id,
+          title:    g.title,
+          target:   g.target,
+          unit:     g.unit,
+          period:   g.period ?? null,
+          deadline: g.deadline ?? null,
+          current:  g.current ?? null,
         })),
       });
     }
