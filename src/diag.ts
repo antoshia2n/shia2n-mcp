@@ -146,6 +146,11 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
     neta_mail: env.NETA_MAIL_ENABLED === "1" ? "on" : "off",
   };
 
+  // 控えの置き場が結び付いているか。値そのものは出さず、有無だけを返す
+  const storage: Record<string, "設定あり" | "未設定"> = {
+    backup_bucket: env.BACKUP_BUCKET ? "設定あり" : "未設定",
+  };
+
   // 自動で動くものの直近の実行結果（新しいものが先頭・処理ごとに最大 5 件）
   const last_runs = await readAllRuns(env);
 
@@ -158,6 +163,7 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
       recent_errors: [],
       env: envStatus,
       switches,
+      storage,
       last_runs,
       connectivity,
     },

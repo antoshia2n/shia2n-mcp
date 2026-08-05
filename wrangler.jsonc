@@ -23,6 +23,14 @@
       "id": "eebf082265bf4d93906382a83d069d45"
     }
   ],
+  // 2026-08-05 追加：データの控えの置き場。
+  // Supabase の外に置くことが要件なので Supabase Storage は使わない。
+  "r2_buckets": [
+    {
+      "binding": "BACKUP_BUCKET",
+      "bucket_name": "shia2n-backup"
+    }
+  ],
   "triggers": {
     "crons": [
       "0,30 * * * *",

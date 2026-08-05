@@ -119,6 +119,7 @@ import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleZeusSync } from "./cron-zeus-sync.js";
+import { handleBackupCron } from "./cron-backup.js";
 
 export interface Env {
   // Core
@@ -126,6 +127,8 @@ export interface Env {
   MCP_DEFAULT_USER_ID: string;
   // OAuth
   OAUTH_KV: KVNamespace;
+  // データの控えの置き場（R2）。wrangler.jsonc の r2_buckets で結び付ける
+  BACKUP_BUCKET: R2Bucket;
   // High-Shinくん
   HIGH_SHIN_API_BASE: string;
   HIGH_SHIN_INTERNAL_SECRET: string;
@@ -391,6 +394,16 @@ export default {
                 "取り込みの開始までを確認（何件入ったかは Zeus 側にあり、ここでは分かりません）",
             };
           })
+        );
+      }
+
+      // 2026-08-05：データの控え（UTC 19:00 = JST 04:00 のみ発火）
+      // Zeus 同期（JST 03:00）の 1 時間後に置く。同じ時刻に重ねると、
+      // どちらの不調で遅れているのか分からなくなるため。
+      // cron 枠は増やさず、既存の 0,30 の枠に相乗りする。
+      if (utcMinute === 0 && utcHour === 19) {
+        tasks.push(
+          runAndRecord(env, "backup", async () => handleBackupCron(env))
         );
       }
     } else if (controller.cron === "15,45 * * * *") {

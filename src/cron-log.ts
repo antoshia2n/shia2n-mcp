@@ -33,6 +33,7 @@ export const KNOWN_JOBS = [
   "zeus_sync",
   "utage_polling",
   "neta_mail",
+  "backup",
   "selftest",
 ] as const;
 
