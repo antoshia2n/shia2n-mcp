@@ -9,7 +9,7 @@ import type { Env } from "./index.js";
 export function registerSalesManagerTools(server: McpServer, env: Env): void {
   server.tool(
     "sales_manager__get_revenue_summary",
-    "今月の確定売上・見込み・目標・事業別売上・年間・未収金・月次チャート・来月予測を一括取得する。秘書 Claude が毎朝売上 KPI を確認するために呼ぶ。戻り値は { month: {confirmed, projected, goal}, year: {confirmed, goal}, uncollected_total（当月以前で未入金の合計。入金管理タブのヘッダーの未収金と一致する）, uncollected_count, uncollected_by_month: [{abs, year, month, count, amount}]（月ごとの未収額）, by_business: {事業名: 金額}, chart_data: [{month, abs, conf, proj, goal}], next_month: {goal, projected, confirmed} }。",
+    "今月の確定売上・見込み・目標・事業別売上・年間・未収金・月次チャート・来月予測を一括取得する。秘書 Claude が毎朝売上 KPI を確認するために呼ぶ。月の目標は事業別の予算表（sm_budgets）の合計で、画面と同じ数字。予算表にその月の行が無いときは goal が null（＝未設定）になり、契約の合計では代用しない。戻り値は { month: {confirmed, projected, goal}, year: {confirmed, goal, goal_unset（目標が未設定の月）}, uncollected_total（当月以前で未入金の合計。入金管理タブのヘッダーの未収金と一致する）, uncollected_count, uncollected_by_month: [{abs, year, month, count, amount}]（月ごとの未収額）, by_business: {事業名: 金額}, chart_data: [{month, abs, conf, proj, goal}], next_month: {goal, projected, confirmed} }。",
     {},
     async () => {
       const data = await getRevenueSummary(env);
@@ -25,7 +25,7 @@ export function registerSalesManagerTools(server: McpServer, env: Env): void {
 type Payment  = { paid: boolean; month_idx: number; amount: number; actual_amount?: number | null; contract_id?: string; due_date?: string | null };
 type Contract = { id: string; status: string; type: string; start_month_idx?: number; total_count?: number; amount: number; business?: string };
 type Single   = { month_idx: number; amount: number; business?: string };
-type Strategy = { key: string; value: string | number };
+type Budget   = { biz: string; month_idx: number; amount: number };
 type Business = { id: number; name: string; color?: string };
 
 // ─────────────────────────────────────────────
@@ -77,16 +77,17 @@ function contractAmountForMonth(contracts: Contract[], abs: number): number {
   }, 0);
 }
 
-function getStrategyGoal(strategy: Strategy[], abs: number): number | null {
-  // abs形式（goal_24316）またはmonth_idx形式（goal_4）の両方に対応
-  // sm_strategy API が month_idx(0-11) 形式で返す場合に abs % 12 でフォールバック
-  const row = strategy.find(r => r.key === `goal_${abs}`)
-           ?? strategy.find(r => r.key === `goal_${abs % 12}`);
-  if (!row) return null;
-  try {
-    const val = typeof row.value === "string" ? JSON.parse(row.value) : row.value;
-    return typeof val === "number" ? val : null;
-  } catch { return null; }
+// 月の目標＝事業別の予算表（sm_budgets）の合計。
+// 2026-08-05：戦略メモ（sm_strategy の goal_*）を読むのをやめ、画面と同じ側に一本化した。
+//   判断記録：3b39c6c1-c439-81b7-9695-d668b408b7a2
+// 画面と同じく「事業マスタに載っている名前の行だけ」を足す。
+//   予算表には事業名でない行（__goal__ など）が混ざっており、足すと画面と数字がずれるため。
+// 行が無い月は null（＝未設定）を返す。契約の合計で代用しない。
+function getBudgetGoal(budgets: Budget[], bizNames: Set<string>, abs: number): number | null {
+  const rows = budgets.filter(b => b.month_idx === abs && bizNames.has(b.biz));
+  if (rows.length === 0) return null;
+  const total = rows.reduce((a, b) => a + (b.amount || 0), 0);
+  return total > 0 ? total : null;
 }
 
 // ─────────────────────────────────────────────
@@ -97,7 +98,7 @@ async function fetchSMData(base: string, secret?: string): Promise<{
   payments: Payment[];
   contracts: Contract[];
   singles: Single[];
-  strategy: Strategy[];
+  budgets: Budget[];
   businesses: Business[];
 }> {
   // 2026-08-03：取得口の合言葉を付けて呼ぶ（段階1）。
@@ -108,14 +109,14 @@ async function fetchSMData(base: string, secret?: string): Promise<{
     ? { headers: { Authorization: `Bearer ${secret}` } }
     : undefined;
 
-  const [payments, contracts, singles, businesses, strategy] = await Promise.all([
+  const [payments, contracts, singles, businesses, budgets] = await Promise.all([
     fetch(`${base}/api/sm-payments`, init).then(r => r.json() as Promise<Payment[]>),
     fetch(`${base}/api/sm-contracts`, init).then(r => r.json() as Promise<Contract[]>),
     fetch(`${base}/api/sm-singles`, init).then(r => r.json() as Promise<Single[]>),
     fetch(`${base}/api/sm-businesses`, init).then(r => r.json() as Promise<Business[]>),
-    fetch(`${base}/api/sm-strategy`, init).then(r => r.json() as Promise<Strategy[]>),
+    fetch(`${base}/api/sm-budgets`, init).then(r => r.json() as Promise<Budget[]>),
   ]);
-  return { payments, contracts, singles, businesses, strategy };
+  return { payments, contracts, singles, businesses, budgets };
 }
 
 // ─────────────────────────────────────────────
@@ -124,7 +125,7 @@ async function fetchSMData(base: string, secret?: string): Promise<{
 
 async function getRevenueSummary(env: Env) {
   const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager-black.vercel.app";
-  const { payments, contracts, singles, strategy, businesses } = await fetchSMData(
+  const { payments, contracts, singles, budgets, businesses } = await fetchSMData(
     base,
     env.SALES_MANAGER_INTERNAL_SECRET
   );
@@ -134,8 +135,10 @@ async function getRevenueSummary(env: Env) {
 
   const bizList = businesses?.length ? businesses : FALLBACK_BUSINESSES;
 
-  const getGoal = (abs: number): number =>
-    getStrategyGoal(strategy, abs) ?? contractAmountForMonth(contracts, abs);
+  const bizNames = new Set(bizList.map(b => b.name));
+
+  // null = 未設定（予算表にその月の行が無い）
+  const getGoal = (abs: number): number | null => getBudgetGoal(budgets, bizNames, abs);
 
   // 当月確定
   const monthConf =
@@ -164,7 +167,11 @@ async function getRevenueSummary(env: Env) {
   const yearConf =
     payments.filter(p => p.paid && absList.includes(p.month_idx)).reduce((a, p) => a + (p.actual_amount ?? p.amount), 0) +
     singles.filter(s => absList.includes(s.month_idx)).reduce((a, s) => a + s.amount, 0);
-  const yearGoal = absList.reduce((t, abs) => t + getGoal(abs), 0);
+  // 未設定の月は足さない（画面の年間目標と同じ数え方）
+  const yearGoalMonths = absList.map(abs => getGoal(abs));
+  const yearGoal       = yearGoalMonths.reduce<number>((t, g) => t + (g ?? 0), 0);
+  const yearGoalUnset  = absList.filter((_, i) => yearGoalMonths[i] === null)
+                                .map(abs => `${abs % 12 + 1}月`);
 
   // 未収金（当月以前・未入金）
   //
@@ -242,7 +249,8 @@ async function getRevenueSummary(env: Env) {
     },
     year: {
       confirmed: yearConf,
-      goal:      yearGoal,
+      goal:       yearGoal,
+      goal_unset: yearGoalUnset,   // 目標が未設定の月（年間目標には足していない）
     },
     uncollected_total:    uncollectedTotal,
     uncollected_count:    uncollectedPayments.length,
