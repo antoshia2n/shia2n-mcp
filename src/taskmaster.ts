@@ -112,7 +112,7 @@ export function fromVal(val: FVal): unknown {
 // Firestore 型変換（書き込み）
 // ─────────────────────────────────────────────
 
-function toFVal(v: unknown): FVal {
+export function toFVal(v: unknown): FVal {
   if (v === null || v === undefined) return { nullValue: null };
   if (typeof v === "boolean") return { booleanValue: v };
   if (typeof v === "number") {
@@ -151,7 +151,7 @@ export async function fsGet(token: string, path: string): Promise<FSDoc> {
 // Firestore ドキュメント更新（PATCH + updateMask）
 // ─────────────────────────────────────────────
 
-async function fsPatch(
+export async function fsPatch(
   token: string,
   path: string,
   fields: Record<string, FVal>,
