@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.41.0
+ * shia2n-mcp エントリーポイント v0.42.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -122,6 +122,12 @@
  *             保管庫の画面を見に行かなくても 1 日分の大きさが分かるようにする。
  *          ③ 同じ日に前の版が書き出した外し対象の控えが残っていれば片づける。
  *             残すと使用量が減らず、外した効果が数字に出ないため。
+ * v0.42.0：控えから戻す試しの道具を追加（2026-08-06）
+ *          控えは取れているが一度も戻していない。戻せなければ取っている意味が無いので、
+ *          実際に 1 本通して確かめられるようにする。
+ *          munikis__restore_test：書き戻す先は「元の名前 + _restore_test」に固定。
+ *          呼ぶ側から本番の表を指定できない作りにしてある。
+ *          件数が 5000 を超える表は断る（1 回の実行での上限に当たるため）。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -153,6 +159,7 @@ import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleZeusSync } from "./cron-zeus-sync.js";
 import { runBackupSlot } from "./cron-backup.js";
+import { registerRestoreTools } from "./tools-restore.js";
 
 export interface Env {
   // Core
@@ -244,7 +251,7 @@ function isBackupLastChance(utcHour: number, utcMinute: number): boolean {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.41.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.42.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -261,6 +268,7 @@ function createMcpServer(env: Env): McpServer {
   registerShiaraboTools(server, env);
   registerMembersTools(server, env);
   registerMunikisTools(server, env);
+  registerRestoreTools(server, env);
   return server;
 }
 
