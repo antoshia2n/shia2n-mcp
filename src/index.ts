@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.40.0
+ * shia2n-mcp エントリーポイント v0.41.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -112,6 +112,16 @@
  *          ③ munikis__backup_now は「1 回で全部」から「1 回ぶん進める」に変更。
  *             finished が true になるまで繰り返し呼ぶ。restart で最初からやり直せる。
  *          cron 枠は増やしていない（既存の 2 本に相乗り）。設定の追加も不要。
+ * v0.41.0：履歴の印が付いた 13 本を控えの対象から外す（2026-08-06）
+ *          181 本の仕分けで、控えの大きさの 69% を履歴系 13 本が占めると分かった。
+ *          控えの目的は「全部消えたときに事業を復旧できること」に絞られており、
+ *          履歴系は対象外と決まっている。これはその実行。
+ *          ① cron-backup.ts v2.1.0：EXCLUDED_TABLES の 13 本を対象から外す。
+ *             表そのものは消さない。外した名前は目録に残す。
+ *          ② 書き出した大きさを数え、目録と実行記録の文面に載せる。
+ *             保管庫の画面を見に行かなくても 1 日分の大きさが分かるようにする。
+ *          ③ 同じ日に前の版が書き出した外し対象の控えが残っていれば片づける。
+ *             残すと使用量が減らず、外した効果が数字に出ないため。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -234,7 +244,7 @@ function isBackupLastChance(utcHour: number, utcMinute: number): boolean {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.40.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.41.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
