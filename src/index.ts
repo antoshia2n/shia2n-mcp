@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.39.0
+ * shia2n-mcp エントリーポイント v0.40.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -99,6 +99,19 @@
  *             （表の名前が漏れるため）。
  *          ② munikis__backup_now 追加：控えを手で 1 回動かす。毎日 4 時を待たずに
  *             直したことの効き目を確かめられる。中身は自動実行と同じ処理を呼ぶだけ。
+ * v0.40.0：控えを分けて取る（2026-08-06）
+ *          v0.39.0 で理由が読めるようになり、原因が確定した。
+ *          132 件すべてが「1 回の実行での外部呼び出しが多すぎる」で落ちていた。
+ *          表ごとの問題ではなく、1 回の実行あたりの上限に当たっていた。
+ *          ① cron-backup.ts v2.0.0：進み具合を KV に残し、JST 04:00 から 15 分おきに
+ *             続きから処理する。締めは JST 06:45。そろった回だけ記録を残す
+ *             （毎回残すと 5 件の枠が 1 日で埋まるため）。時間内に終わらなければ
+ *             最後の回で失敗として記録する。
+ *          ② 2 万件を超える表は .part2 .part3 … と分けて書き出す（audit_logs 対応）。
+ *             1 つの塊にまとめないのは、大きな中身を一度に抱えると実行が落ちるため。
+ *          ③ munikis__backup_now は「1 回で全部」から「1 回ぶん進める」に変更。
+ *             finished が true になるまで繰り返し呼ぶ。restart で最初からやり直せる。
+ *          cron 枠は増やしていない（既存の 2 本に相乗り）。設定の追加も不要。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -129,7 +142,7 @@ import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleZeusSync } from "./cron-zeus-sync.js";
-import { handleBackupCron } from "./cron-backup.js";
+import { runBackupSlot } from "./cron-backup.js";
 
 export interface Env {
   // Core
@@ -201,8 +214,27 @@ export interface Env {
                                       // MEMBERS_INTERNAL_SECRET とは別 Secret（スコープ分離：漏洩時の被害範囲最小化）
 }
 
+// ─────────────────────────────────────────────
+// データの控えの発火時刻（2026-08-06 v0.40.0）
+//   JST 04:00 に開始し、15 分おきに続きを処理して JST 06:45 で締める。
+//   UTC では 19:00 〜 21:45。cron の枠は増やさず既存の 2 本に相乗りする。
+// ─────────────────────────────────────────────
+function isBackupSlot(utcHour: number, utcMinute: number): boolean {
+  if (utcHour === 19 || utcHour === 20) return true;
+  if (utcHour === 21 && utcMinute <= 45) return true;
+  return false;
+}
+
+function isBackupStart(utcHour: number, utcMinute: number): boolean {
+  return utcHour === 19 && utcMinute === 0;
+}
+
+function isBackupLastChance(utcHour: number, utcMinute: number): boolean {
+  return utcHour === 21 && utcMinute === 45;
+}
+
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.39.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.40.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
@@ -407,19 +439,39 @@ export default {
         );
       }
 
-      // 2026-08-05：データの控え（UTC 19:00 = JST 04:00 のみ発火）
+      // 2026-08-05：データの控え（UTC 19:00 = JST 04:00 に開始）
       // Zeus 同期（JST 03:00）の 1 時間後に置く。同じ時刻に重ねると、
       // どちらの不調で遅れているのか分からなくなるため。
       // cron 枠は増やさず、既存の 0,30 の枠に相乗りする。
-      if (utcMinute === 0 && utcHour === 19) {
+      //
+      // 2026-08-06（v0.40.0）：1 回で全部やると外部呼び出しの上限に当たるため、
+      // JST 04:00 〜 06:45 の 15 分おきの発火で続きから処理する。
+      // 記録が残るのは、そろった回か、最後の回（JST 06:45）だけ。
+      if (isBackupSlot(utcHour, utcMinute)) {
         tasks.push(
-          runAndRecord(env, "backup", async () => handleBackupCron(env))
+          runBackupSlot(
+            env,
+            isBackupStart(utcHour, utcMinute),
+            isBackupLastChance(utcHour, utcMinute)
+          ).then(() => undefined)
         );
       }
     } else if (controller.cron === "15,45 * * * *") {
       // v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 reconciliation
       // UTAGE ポーリング（0,30）の 15 分後に走ることで payment_status 変更を反映
       tasks.push(handleAutoMappingCron(env));
+
+      // 2026-08-06（v0.40.0）：控えの続き。15 分おきに進めたいので、
+      // こちらの枠でも同じ判定で呼ぶ。開始は 0,30 側の JST 04:00 のみ。
+      if (isBackupSlot(utcHour, utcMinute)) {
+        tasks.push(
+          runBackupSlot(
+            env,
+            isBackupStart(utcHour, utcMinute),
+            isBackupLastChance(utcHour, utcMinute)
+          ).then(() => undefined)
+        );
+      }
     } else {
       // 想定外の cron が来た場合はログのみ（fail しない）
       console.warn(

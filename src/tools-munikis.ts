@@ -13,7 +13,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { fetchMunikisContext } from "./munikis-client.js";
 import { readAllRuns, runAndRecord } from "./cron-log.js";
-import { handleBackupCron } from "./cron-backup.js";
+import { runBackupSlot, resetBackupProgress } from "./cron-backup.js";
+import type { SlotResult } from "./cron-backup.js";
 import type { Env } from "./index.js";
 
 export function registerMunikisTools(server: McpServer, env: Env): void {
@@ -102,25 +103,34 @@ export function registerMunikisTools(server: McpServer, env: Env): void {
     }
   );
 
-  // 2026-08-06：控えを手で 1 回動かす口。
-  // 毎日 4 時の自動実行を待たずに、直したことの効き目を同じ日に確かめるために置く。
-  // 中身は自動実行と同じ処理を呼ぶだけ（別の作りを持たない＝二重管理にしない）。
-  // その日の控えは同じ場所へ上書きされる。何回動かしても結果は同じになる。
+  // 2026-08-06：控えを手で動かす口。
+  // 毎日 4 時からの自動実行を待たずに、直したことの効き目を同じ日に確かめる。
+  // v0.40.0：1 回で全部は取れない（外部呼び出しの上限）ので、1 回の呼び出しで
+  // 続きを進める形にした。finished が true になるまで繰り返し呼ぶ。
   server.tool(
     "munikis__backup_now",
-    "データの控えを手で 1 回だけ動かす。毎日 4 時の自動実行と同じ処理を呼び、同じ場所へ書き出す（何回動かしても結果は同じ）。失敗しても記録に残るため、直したことの効き目をその場で確かめられる。結果は munikis__get_context の recent_runs.backup と GET /diag の last_runs.backup にも出る。",
+    "データの控えを手で進める。1 回の呼び出しで続きを処理し、その日ぶんが全部そろうまで繰り返し呼ぶ（finished が true になったら完了）。restart=true でその日の進み具合を捨てて最初からやり直す。自動実行と同じ処理・同じ置き場を使う。結果は munikis__get_context の recent_runs.backup と GET /diag の last_runs.backup にも出る。",
     {
       confirm: z
         .literal("yes")
         .describe("実行する場合は yes を指定する（取り違えを防ぐための確認）"),
+      restart: z
+        .boolean()
+        .optional()
+        .describe("true でその日の進み具合を捨てて最初からやり直す（省略時は続きから）"),
     },
-    async () => {
+    async ({ restart }) => {
       let thrown: string | null = null;
+      let slot: SlotResult | null = null;
+
+      if (restart) await resetBackupProgress(env);
 
       try {
-        await runAndRecord(env, "backup", async () => handleBackupCron(env));
+        // 手で動かすときは、いつ呼んでも動き出せるように開始扱いにする。
+        // 締めは自分で判断するので、最後の回の扱いにはしない。
+        slot = await runBackupSlot(env, true, false);
       } catch (error) {
-        // 記録は runAndRecord の中で済んでいる。ここでは文面を返すだけ。
+        // そろった回で欠けがあった場合はここに来る。記録は済んでいる。
         thrown = error instanceof Error ? error.message : String(error);
       }
 
@@ -132,8 +142,12 @@ export function registerMunikisTools(server: McpServer, env: Env): void {
             type: "text",
             text: JSON.stringify(
               {
+                進み具合: slot,
                 recorded: runs.backup?.[0] ?? null,
                 thrown,
+                次にすること: slot?.finished
+                  ? "完了。記録を確認する"
+                  : "finished が true になるまで、もう一度この道具を呼ぶ",
               },
               null,
               2

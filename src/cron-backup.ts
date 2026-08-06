@@ -1,12 +1,5 @@
 /**
- * データの控え v1.1.0（2026-08-06）
- *
- * v1.1.0 の変更：失敗したときの理由を実行記録の文面に載せる。
- *   2026-08-06 の初回実行が「141 件が書けませんでした」だけを残して失敗し、
- *   理由が目録（R2）の中にしか無いため、外から原因を判別できなかった。
- *   目録を外へ見せる口を作ると表の名前が漏れるので、口は増やさず、
- *   実行記録の文面に「理由ごとの件数」「最後に書けた場所」「最初に失敗した場所」を入れる。
- *   起動時の状態取得（recent_runs）で読めるようになり、確認の手間が要らなくなる。
+ * データの控え v2.0.0（2026-08-06）
  *
  * 判断記録：置き場を Cloudflare に統一し、データの控えを毎日とる
  *   データは 1 日前まで戻せれば足りるとする。控えは毎日 1 回、Supabase の外に置く。
@@ -20,6 +13,23 @@
  * 置き場は Cloudflare の保管庫（R2）。Supabase の外に置くことが要件なので、
  * Supabase Storage には置かない。
  *
+ * ── v2.0.0 の変更：1 回で全部やるのをやめ、分けて取る ──
+ *   2026-08-06 の実測で、対象 181 件のうち 40〜49 件までしか書けず、
+ *   残りが全部「1 回の実行での外部呼び出しが多すぎる」で落ちていた。
+ *   これは 1 回の実行あたりの上限なので、実行を分ければ回避できる。
+ *   設定の変更も費用もかからない。
+ *
+ *   進み具合は KV に残し、15 分おきの発火のたびに続きから処理する。
+ *   その日ぶんが全部そろって初めて成功として記録する。
+ *   途中の回は記録を残さない（毎回記録すると 5 件の枠が 1 日で埋まるため）。
+ *   時間内に終わらなかった場合は、最後の回で失敗として記録する。
+ *
+ * ── v2.0.0 の変更：2 万件を超える表を分けて取る ──
+ *   audit_logs が 2 万件を超えており、控えに入り切っていなかった。
+ *   超える分は .part2 .part3 … と分けて書き出す。
+ *   1 つの塊にまとめないのは、大きな中身を一度に抱えると実行そのものが
+ *   落ちるため。戻すときは part を順に読む。
+ *
  * 設計上の要点：
  *   - 取得した中身は解釈せずそのまま書き出す。読み替えると、そこで壊れる。
  *   - 途中で 1 つ失敗しても他は続ける。全部止めると 1 つの不調で全滅する。
@@ -28,14 +38,26 @@
 
 import { Env } from "./index.js";
 import { getFirestoreToken } from "./taskmaster.js";
+import { runAndRecord } from "./cron-log.js";
 
-// 1 つの表から一度に取る上限。超えた分は目録に「取り切れていない」と残す
-const MAX_ROWS_PER_TABLE = 20000;
+/** 1 回の取得で取る行数。これを超える表は part に分けて書き出す */
+const ROWS_PER_PART = 20000;
 
-// Notion の 1 回の取得件数と、繰り返しの上限
+/** 1 つの表を何 part まで追いかけるか（20 × 2 万 = 40 万行まで） */
+const MAX_PARTS = 20;
+
+/**
+ * 1 回の発火で行う外部とのやり取りの上限。
+ * 実測で 40〜49 件（取得 + 書き出しで倍）まで通っていたので、
+ * 半分以下にして余裕を持たせる。ここを増やすと再発する。
+ */
+const MAX_OPS_PER_SLOT = 40;
+
+/** 進み具合を置いておく期間（3 日）。翌日の分は別の鍵になる */
+const PROGRESS_TTL_SECONDS = 3 * 24 * 60 * 60;
+
 const NOTION_PAGE_SIZE = 100;
 const NOTION_MAX_PAGES = 50;
-
 const NOTION_VERSION = "2025-09-03";
 const NOTION_API_BASE = "https://api.notion.com/v1";
 
@@ -73,8 +95,38 @@ interface Entry {
   total: number | null;
   /** 上限に当たって取り切れていないか */
   truncated: boolean;
+  /** 分けて書き出した数（1 なら分けていない） */
+  parts?: number;
   /** 失敗の理由 */
   error?: string;
+}
+
+type ItemKind = "supabase" | "notion" | "firestore";
+
+interface Item {
+  kind: ItemKind;
+  /** 表の名前 / 管理表の名前 / 文書の名前 */
+  name: string;
+  /** Notion の場合のみ使う */
+  id?: string;
+}
+
+interface Progress {
+  版: string;
+  対象日: string;
+  開始時刻: string;
+  items: Item[];
+  /** 次に処理する位置 */
+  次の位置: number;
+  /** 発火して処理した回数 */
+  回数: number;
+  entries: Entry[];
+  表の一覧の取得: string;
+}
+
+/** 1 回の発火で使った外部とのやり取りを数える */
+interface Budget {
+  used: number;
 }
 
 /** 日本時間での日付（YYYY-MM-DD）。朝に動くので、その日の日付で残す */
@@ -83,12 +135,17 @@ function jstDate(now: Date): string {
   return jst.toISOString().slice(0, 10);
 }
 
+function progressKey(date: string): string {
+  return `backup:progress:${date}`;
+}
+
 // ─────────────────────────────────────────────
 // Supabase
 // ─────────────────────────────────────────────
 
 /** 表の一覧を取る。定義の一覧はデータベース側が返してくれるので、決め打ちしない */
-async function listSupabaseTables(env: Env): Promise<string[]> {
+async function listSupabaseTables(env: Env, budget: Budget): Promise<string[]> {
+  budget.used += 1;
   const res = await fetch(`${env.SUPABASE_URL}/rest/v1/`, {
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
@@ -118,69 +175,105 @@ function totalFromContentRange(header: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** 1 回ぶんの取得。offset から ROWS_PER_PART 件を取る */
+async function fetchTablePage(
+  env: Env,
+  table: string,
+  offset: number,
+  budget: Budget
+): Promise<{ body: string; rows: number | null; total: number | null }> {
+  budget.used += 1;
+  const url =
+    `${env.SUPABASE_URL}/rest/v1/${encodeURIComponent(table)}` +
+    `?select=*&limit=${ROWS_PER_PART}&offset=${offset}`;
+
+  const res = await fetch(url, {
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      Accept: "application/json",
+      // 全件数を返してもらう（取り切れたかの判定に使う）
+      Prefer: "count=exact",
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`取得に失敗（${res.status}）`);
+  }
+
+  const total = totalFromContentRange(res.headers.get("content-range"));
+  const masked = MASKED_COLUMNS[table];
+
+  if (masked) {
+    // 値を持ち出さない表だけは中身を読んで、対象の列を落としてから書く
+    const parsed = (await res.json()) as Record<string, unknown>[];
+    for (const row of parsed) {
+      for (const column of masked) {
+        if (column in row) row[column] = null;
+      }
+    }
+    return { body: JSON.stringify(parsed), rows: parsed.length, total };
+  }
+
+  // それ以外は読み替えずにそのまま書く（解釈しないので壊れない・速い）
+  return { body: await res.text(), rows: null, total };
+}
+
 async function backupOneTable(
   env: Env,
   table: string,
-  prefix: string
+  prefix: string,
+  budget: Budget
 ): Promise<Entry> {
   const key = `${prefix}supabase/${table}.json`;
 
   try {
-    const url =
-      `${env.SUPABASE_URL}/rest/v1/${encodeURIComponent(table)}` +
-      `?select=*&limit=${MAX_ROWS_PER_TABLE}`;
+    const first = await fetchTablePage(env, table, 0, budget);
 
-    const res = await fetch(url, {
-      headers: {
-        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-        Accept: "application/json",
-        // 全件数を返してもらう（取り切れたかの判定に使う）
-        Prefer: "count=exact",
-      },
-    });
-
-    if (!res.ok) {
-      return {
-        key, ok: false, rows: null, total: null, truncated: false,
-        error: `取得に失敗（${res.status}）`,
-      };
-    }
-
-    const total = totalFromContentRange(res.headers.get("content-range"));
-    const masked = MASKED_COLUMNS[table];
-
-    let body: string;
-    let rows: number | null;
-
-    if (masked) {
-      // 値を持ち出さない表だけは中身を読んで、対象の列を落としてから書く
-      const parsed = (await res.json()) as Record<string, unknown>[];
-      for (const row of parsed) {
-        for (const column of masked) {
-          if (column in row) row[column] = null;
-        }
-      }
-      rows = parsed.length;
-      body = JSON.stringify(parsed);
-    } else {
-      // それ以外は読み替えずにそのまま書く（解釈しないので壊れない・速い）
-      body = await res.text();
-      rows = null;
-    }
-
-    await env.BACKUP_BUCKET.put(key, body, {
+    budget.used += 1;
+    await env.BACKUP_BUCKET.put(key, first.body, {
       httpMetadata: { contentType: "application/json; charset=utf-8" },
     });
 
-    const fetched = rows ?? (total !== null && total <= MAX_ROWS_PER_TABLE ? total : null);
+    const total = first.total;
+
+    // 2 万件以内なら 1 つの場所に収まっている
+    if (total === null || total <= ROWS_PER_PART) {
+      return {
+        key,
+        ok: true,
+        rows: first.rows ?? total,
+        total,
+        truncated: false,
+        parts: 1,
+      };
+    }
+
+    // 超える分は .part2 .part3 … と分けて書き出す
+    let parts = 1;
+    let offset = ROWS_PER_PART;
+
+    while (offset < total && parts < MAX_PARTS) {
+      const page = await fetchTablePage(env, table, offset, budget);
+      parts += 1;
+
+      budget.used += 1;
+      await env.BACKUP_BUCKET.put(
+        `${prefix}supabase/${table}.part${parts}.json`,
+        page.body,
+        { httpMetadata: { contentType: "application/json; charset=utf-8" } }
+      );
+
+      offset += ROWS_PER_PART;
+    }
 
     return {
       key,
       ok: true,
-      rows: fetched,
+      rows: Math.min(offset, total),
       total,
-      truncated: total !== null && total > MAX_ROWS_PER_TABLE,
+      truncated: offset < total,
+      parts,
     };
   } catch (error) {
     return {
@@ -197,7 +290,8 @@ async function backupOneTable(
 async function backupOneNotionSource(
   env: Env,
   source: { name: string; id: string },
-  prefix: string
+  prefix: string,
+  budget: Budget
 ): Promise<Entry> {
   const key = `${prefix}notion/${source.name}.json`;
 
@@ -209,6 +303,7 @@ async function backupOneNotionSource(
 
     while (loops < NOTION_MAX_PAGES) {
       loops += 1;
+      budget.used += 1;
 
       const res = await fetch(
         `${NOTION_API_BASE}/data_sources/${source.id}/query`,
@@ -249,11 +344,12 @@ async function backupOneNotionSource(
       }
     }
 
+    budget.used += 1;
     await env.BACKUP_BUCKET.put(key, JSON.stringify(pages), {
       httpMetadata: { contentType: "application/json; charset=utf-8" },
     });
 
-    return { key, ok: true, rows: pages.length, total: pages.length, truncated };
+    return { key, ok: true, rows: pages.length, total: pages.length, truncated, parts: 1 };
   } catch (error) {
     return {
       key, ok: false, rows: null, total: null, truncated: false,
@@ -266,99 +362,123 @@ async function backupOneNotionSource(
 // Firestore（TaskMaster）
 // ─────────────────────────────────────────────
 
-async function backupFirestore(env: Env, prefix: string): Promise<Entry[]> {
-  const documents = ["tasks", "projects"];
+async function backupOneFirestoreDoc(
+  env: Env,
+  name: string,
+  prefix: string,
+  budget: Budget
+): Promise<Entry> {
+  const key = `${prefix}firestore/${name}.json`;
 
-  let token: string;
   try {
-    token = await getFirestoreToken(env);
-  } catch (error) {
-    return documents.map((name) => ({
-      key: `${prefix}firestore/${name}.json`,
-      ok: false, rows: null, total: null, truncated: false,
-      error: error instanceof Error ? error.message : String(error),
-    }));
-  }
+    budget.used += 1;
+    const token = await getFirestoreToken(env);
 
-  const entries: Entry[] = [];
+    budget.used += 1;
+    const res = await fetch(
+      `${FIRESTORE_BASE}/users/${env.NAOKI_UID}/app_data/${name}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
 
-  for (const name of documents) {
-    const key = `${prefix}firestore/${name}.json`;
-    try {
-      const res = await fetch(
-        `${FIRESTORE_BASE}/users/${env.NAOKI_UID}/app_data/${name}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      if (!res.ok) {
-        entries.push({
-          key, ok: false, rows: null, total: null, truncated: false,
-          error: `取得に失敗（${res.status}）`,
-        });
-        continue;
-      }
-
-      const body = await res.text();
-      await env.BACKUP_BUCKET.put(key, body, {
-        httpMetadata: { contentType: "application/json; charset=utf-8" },
-      });
-
-      entries.push({ key, ok: true, rows: null, total: null, truncated: false });
-    } catch (error) {
-      entries.push({
+    if (!res.ok) {
+      return {
         key, ok: false, rows: null, total: null, truncated: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+        error: `取得に失敗（${res.status}）`,
+      };
     }
-  }
 
-  return entries;
+    const body = await res.text();
+
+    budget.used += 1;
+    await env.BACKUP_BUCKET.put(key, body, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
+
+    return { key, ok: true, rows: null, total: null, truncated: false, parts: 1 };
+  } catch (error) {
+    return {
+      key, ok: false, rows: null, total: null, truncated: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 // ─────────────────────────────────────────────
-// 本体
+// 進み具合
 // ─────────────────────────────────────────────
 
-export async function handleBackupCron(
-  env: Env
-): Promise<{ count: number; detail: string }> {
-  if (!env.BACKUP_BUCKET) {
-    throw new Error("保管庫（R2）が結び付いていません。設定を確認してください。");
-  }
-
-  const now = new Date();
-  const date = jstDate(now);
-  const prefix = `backup/${date}/`;
-  const entries: Entry[] = [];
-
-  // 1. Supabase
-  let tables: string[] = [];
-  let tableListError: string | null = null;
+async function loadProgress(env: Env, date: string): Promise<Progress | null> {
   try {
-    tables = await listSupabaseTables(env);
+    const raw = await env.OAUTH_KV.get(progressKey(date));
+    return raw ? (JSON.parse(raw) as Progress) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveProgress(env: Env, progress: Progress): Promise<void> {
+  await env.OAUTH_KV.put(progressKey(progress.対象日), JSON.stringify(progress), {
+    expirationTtl: PROGRESS_TTL_SECONDS,
+  });
+}
+
+/** その日の対象を組み立てる。並びは Supabase → Notion → Firestore の順 */
+async function buildItems(
+  env: Env,
+  budget: Budget
+): Promise<{ items: Item[]; 表の一覧の取得: string }> {
+  let tables: string[] = [];
+  let 表の一覧の取得 = "成功";
+
+  try {
+    tables = await listSupabaseTables(env, budget);
   } catch (error) {
-    tableListError = error instanceof Error ? error.message : String(error);
+    表の一覧の取得 = `失敗：${error instanceof Error ? error.message : String(error)}`;
   }
 
-  for (const table of tables) {
-    entries.push(await backupOneTable(env, table, prefix));
+  const items: Item[] = [
+    ...tables.map((name) => ({ kind: "supabase" as const, name })),
+    ...NOTION_DATA_SOURCES.map((s) => ({ kind: "notion" as const, name: s.name, id: s.id })),
+    { kind: "firestore" as const, name: "tasks" },
+    { kind: "firestore" as const, name: "projects" },
+  ];
+
+  return { items, 表の一覧の取得 };
+}
+
+async function processItem(
+  env: Env,
+  item: Item,
+  prefix: string,
+  budget: Budget
+): Promise<Entry> {
+  if (item.kind === "supabase") {
+    return backupOneTable(env, item.name, prefix, budget);
   }
-
-  // 2. Notion
-  for (const source of NOTION_DATA_SOURCES) {
-    entries.push(await backupOneNotionSource(env, source, prefix));
+  if (item.kind === "notion") {
+    return backupOneNotionSource(env, { name: item.name, id: item.id! }, prefix, budget);
   }
+  return backupOneFirestoreDoc(env, item.name, prefix, budget);
+}
 
-  // 3. Firestore
-  entries.push(...(await backupFirestore(env, prefix)));
+// ─────────────────────────────────────────────
+// 目録と締め
+// ─────────────────────────────────────────────
 
-  // 目録。取り切れていないもの・失敗したものがひと目で分かる形にする
+async function finalize(
+  env: Env,
+  progress: Progress,
+  prefix: string,
+  時間切れ: boolean
+): Promise<{ count: number; detail: string }> {
+  const entries = progress.entries;
   const succeeded = entries.filter((e) => e.ok);
   const failed = entries.filter((e) => !e.ok);
   const truncated = entries.filter((e) => e.truncated);
+  const 未処理 = progress.items.length - progress.次の位置;
 
   // 失敗の理由を文言ごとに数える。1 件ずつ並べると長くなりすぎるため、
-  // 同じ理由はまとめて件数で示す。文言は 80 字で切る（記録の置き場が KV のため）。
+  // 同じ理由はまとめて件数で示す。文言は 80 字で切る（置き場が KV のため）。
   const reasonCounts = new Map<string, number>();
   for (const entry of failed) {
     const reason = (entry.error ?? "理由なし").slice(0, 80);
@@ -368,24 +488,29 @@ export async function handleBackupCron(
     .sort((a, b) => b[1] - a[1])
     .map(([reason, count]) => `${reason} × ${count}`);
 
-  // どこで途切れたかを見るための 2 点。順番に処理しているので、
-  // 「最後に書けた場所」と「最初に失敗した場所」が並ぶと打ち切りの形が分かる。
   const lastOkKey = succeeded.length > 0 ? succeeded[succeeded.length - 1].key : null;
   const firstFailedKey = failed.length > 0 ? failed[0].key : null;
   const truncatedKeys = truncated.map((e) => e.key);
+  const 分けて書いたもの = succeeded
+    .filter((e) => (e.parts ?? 1) > 1)
+    .map((e) => `${e.key}（${e.parts} 分割）`);
 
   const manifest = {
-    版: "1.1.0",
-    取得時刻: now.toISOString(),
-    対象日: date,
-    表の一覧の取得: tableListError ? `失敗：${tableListError}` : "成功",
+    版: "2.0.0",
+    対象日: progress.対象日,
+    開始時刻: progress.開始時刻,
+    完了時刻: new Date().toISOString(),
+    発火回数: progress.回数,
+    表の一覧の取得: progress.表の一覧の取得,
     件数: {
-      対象: entries.length,
+      対象: progress.items.length,
       書けた: succeeded.length,
       失敗: failed.length,
+      未処理,
       取り切れていない: truncated.length,
     },
     失敗の理由の内訳: reasonBreakdown,
+    分けて書き出したもの: 分けて書いたもの,
     最後に書けた場所: lastOkKey,
     最初に失敗した場所: firstFailedKey,
     取り切れていない場所: truncatedKeys,
@@ -399,20 +524,27 @@ export async function handleBackupCron(
     { httpMetadata: { contentType: "application/json; charset=utf-8" } }
   );
 
+  const 欠けあり =
+    progress.表の一覧の取得 !== "成功" ||
+    failed.length > 0 ||
+    truncated.length > 0 ||
+    未処理 > 0;
+
   // 1 つでも欠けたら失敗として記録に残す。全部そろって初めて「戻せる」ため
-  if (tableListError || failed.length > 0 || truncated.length > 0) {
+  if (欠けあり) {
     const reasons: string[] = [];
-    if (tableListError) reasons.push(`表の一覧を取得できず（${tableListError}）`);
+    if (progress.表の一覧の取得 !== "成功") {
+      reasons.push(`表の一覧を取得できず（${progress.表の一覧の取得}）`);
+    }
+    if (時間切れ && 未処理 > 0) {
+      reasons.push(`時間内に終わらず ${未処理} 件が未処理`);
+    }
     if (failed.length > 0) {
-      reasons.push(`対象 ${entries.length} 件のうち ${failed.length} 件が書けませんでした`);
+      reasons.push(`対象 ${progress.items.length} 件のうち ${failed.length} 件が書けませんでした`);
     }
     if (truncated.length > 0) {
-      reasons.push(
-        `${truncated.length} 件が取り切れていません（${truncatedKeys.join("、")}）`
-      );
+      reasons.push(`${truncated.length} 件が取り切れていません（${truncatedKeys.join("、")}）`);
     }
-
-    // 理由は上位 3 種まで。全件は目録にある。
     if (reasonBreakdown.length > 0) {
       const top = reasonBreakdown.slice(0, 3).join("、");
       const rest = reasonBreakdown.length > 3 ? `、ほか ${reasonBreakdown.length - 3} 種` : "";
@@ -426,8 +558,133 @@ export async function handleBackupCron(
     );
   }
 
+  const 分割注記 =
+    分けて書いたもの.length > 0 ? `（うち ${分けて書いたもの.length} 件は分割）` : "";
+
   return {
     count: succeeded.length,
-    detail: `${date} の控えを ${succeeded.length} 件書き出しました（データ・管理表・タスク）`,
+    detail:
+      `${progress.対象日} の控えを ${succeeded.length} 件書き出しました${分割注記}。` +
+      `${progress.回数} 回に分けて実行（データ・管理表・タスク）`,
   };
+}
+
+// ─────────────────────────────────────────────
+// 本体：1 回ぶんの発火
+// ─────────────────────────────────────────────
+
+export interface SlotResult {
+  /** その日ぶんが全部そろったか */
+  finished: boolean;
+  /** 出番が無かった（その日は開始前、またはすでに終わっている） */
+  skipped: boolean;
+  処理済み: number;
+  対象: number;
+}
+
+/**
+ * 1 回ぶんの発火。続きから処理して、終わったら記録を残す。
+ *
+ * @param isStart      その日の最初の回か（true なら新しく組み立てる）
+ * @param isLastChance その日の最後の回か（true なら終わっていなくても記録に残す）
+ */
+export async function runBackupSlot(
+  env: Env,
+  isStart: boolean,
+  isLastChance: boolean
+): Promise<SlotResult> {
+  if (!env.BACKUP_BUCKET) {
+    throw new Error("保管庫（R2）が結び付いていません。設定を確認してください。");
+  }
+
+  const now = new Date();
+  const date = jstDate(now);
+  const prefix = `backup/${date}/`;
+  const budget: Budget = { used: 0 };
+
+  let progress = await loadProgress(env, date);
+
+  if (!progress) {
+    // 開始の回でなければ出番なし。途中から始めても中途半端な控えになるため
+    if (!isStart) {
+      return { finished: false, skipped: true, 処理済み: 0, 対象: 0 };
+    }
+    const built = await buildItems(env, budget);
+    progress = {
+      版: "2.0.0",
+      対象日: date,
+      開始時刻: now.toISOString(),
+      items: built.items,
+      次の位置: 0,
+      回数: 0,
+      entries: [],
+      表の一覧の取得: built.表の一覧の取得,
+    };
+  }
+
+  // すでにその日ぶんが終わっている
+  if (progress.次の位置 >= progress.items.length) {
+    return {
+      finished: true,
+      skipped: true,
+      処理済み: progress.次の位置,
+      対象: progress.items.length,
+    };
+  }
+
+  progress.回数 += 1;
+
+  // 上限に当たる手前で止める。1 件ごとに使った回数を見て判断する
+  while (progress.次の位置 < progress.items.length && budget.used < MAX_OPS_PER_SLOT) {
+    const item = progress.items[progress.次の位置];
+    progress.entries.push(await processItem(env, item, prefix, budget));
+    progress.次の位置 += 1;
+  }
+
+  const finished = progress.次の位置 >= progress.items.length;
+
+  await saveProgress(env, progress);
+
+  console.log(
+    "[backup] slot done",
+    JSON.stringify({
+      対象日: date,
+      回数: progress.回数,
+      処理済み: progress.次の位置,
+      対象: progress.items.length,
+      使った回数: budget.used,
+      finished,
+    })
+  );
+
+  // 途中の回は記録を残さない。毎回残すと 5 件の枠が 1 日で埋まり、
+  // 前の日の結果が見えなくなるため。
+  if (!finished && !isLastChance) {
+    return {
+      finished: false,
+      skipped: false,
+      処理済み: progress.次の位置,
+      対象: progress.items.length,
+    };
+  }
+
+  await runAndRecord(env, "backup", async () =>
+    finalize(env, progress!, prefix, !finished)
+  );
+
+  return {
+    finished,
+    skipped: false,
+    処理済み: progress.次の位置,
+    対象: progress.items.length,
+  };
+}
+
+/**
+ * 手で動かすとき用。その日の進み具合を捨てて最初からやり直す。
+ * 何回呼んでも同じ日の同じ場所へ書き出す。
+ */
+export async function resetBackupProgress(env: Env): Promise<void> {
+  const date = jstDate(new Date());
+  await env.OAUTH_KV.delete(progressKey(date));
 }
