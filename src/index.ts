@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.37.0
+ * shia2n-mcp エントリーポイント v0.39.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -89,6 +89,16 @@
  *          Cloudflare 側の Secret 4 本の削除は、この版の反映後に Naoki が行う。
  *          あわせて、冒頭の版表記（v0.34.0 のまま）と MCP サーバーの版（0.32.0 のまま）が
  *          実物とずれていたので、いずれも 0.37.0 にそろえた。
+ * v0.38.0：haAku__update_goals 追加（把握くんの目標値を書き換える道具・2026-08-05）
+ * v0.39.0：控えの失敗を外から読めるようにする（2026-08-06）
+ *          2026-08-06 の初回実行が失敗し、対象 181 件のうち 40 件しか書けなかったが、
+ *          理由が目録（R2）の中にしか無く、外から原因を判別できなかった。
+ *          ① cron-backup.ts v1.1.0：失敗の理由を文言ごとに数え、実行記録の文面に
+ *             「理由ごとの件数（上位3種）」「最後に書けた場所」「最初に失敗した場所」
+ *             「取り切れていない表」を載せる。目録を外へ見せる口は作らない
+ *             （表の名前が漏れるため）。
+ *          ② munikis__backup_now 追加：控えを手で 1 回動かす。毎日 4 時を待たずに
+ *             直したことの効き目を確かめられる。中身は自動実行と同じ処理を呼ぶだけ。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -192,7 +202,7 @@ export interface Env {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.38.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.39.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);

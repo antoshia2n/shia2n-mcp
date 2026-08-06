@@ -1,5 +1,12 @@
 /**
- * データの控え v1.0.0（2026-08-05）
+ * データの控え v1.1.0（2026-08-06）
+ *
+ * v1.1.0 の変更：失敗したときの理由を実行記録の文面に載せる。
+ *   2026-08-06 の初回実行が「141 件が書けませんでした」だけを残して失敗し、
+ *   理由が目録（R2）の中にしか無いため、外から原因を判別できなかった。
+ *   目録を外へ見せる口を作ると表の名前が漏れるので、口は増やさず、
+ *   実行記録の文面に「理由ごとの件数」「最後に書けた場所」「最初に失敗した場所」を入れる。
+ *   起動時の状態取得（recent_runs）で読めるようになり、確認の手間が要らなくなる。
  *
  * 判断記録：置き場を Cloudflare に統一し、データの控えを毎日とる
  *   データは 1 日前まで戻せれば足りるとする。控えは毎日 1 回、Supabase の外に置く。
@@ -350,16 +357,38 @@ export async function handleBackupCron(
   const failed = entries.filter((e) => !e.ok);
   const truncated = entries.filter((e) => e.truncated);
 
+  // 失敗の理由を文言ごとに数える。1 件ずつ並べると長くなりすぎるため、
+  // 同じ理由はまとめて件数で示す。文言は 80 字で切る（記録の置き場が KV のため）。
+  const reasonCounts = new Map<string, number>();
+  for (const entry of failed) {
+    const reason = (entry.error ?? "理由なし").slice(0, 80);
+    reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+  }
+  const reasonBreakdown = [...reasonCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, count]) => `${reason} × ${count}`);
+
+  // どこで途切れたかを見るための 2 点。順番に処理しているので、
+  // 「最後に書けた場所」と「最初に失敗した場所」が並ぶと打ち切りの形が分かる。
+  const lastOkKey = succeeded.length > 0 ? succeeded[succeeded.length - 1].key : null;
+  const firstFailedKey = failed.length > 0 ? failed[0].key : null;
+  const truncatedKeys = truncated.map((e) => e.key);
+
   const manifest = {
-    版: "1.0.0",
+    版: "1.1.0",
     取得時刻: now.toISOString(),
     対象日: date,
     表の一覧の取得: tableListError ? `失敗：${tableListError}` : "成功",
     件数: {
+      対象: entries.length,
       書けた: succeeded.length,
       失敗: failed.length,
       取り切れていない: truncated.length,
     },
+    失敗の理由の内訳: reasonBreakdown,
+    最後に書けた場所: lastOkKey,
+    最初に失敗した場所: firstFailedKey,
+    取り切れていない場所: truncatedKeys,
     除外: "環境変数の値（dv_env_vars.value）は控えに含めていません",
     明細: entries,
   };
@@ -374,8 +403,24 @@ export async function handleBackupCron(
   if (tableListError || failed.length > 0 || truncated.length > 0) {
     const reasons: string[] = [];
     if (tableListError) reasons.push(`表の一覧を取得できず（${tableListError}）`);
-    if (failed.length > 0) reasons.push(`${failed.length} 件が書けませんでした`);
-    if (truncated.length > 0) reasons.push(`${truncated.length} 件が取り切れていません`);
+    if (failed.length > 0) {
+      reasons.push(`対象 ${entries.length} 件のうち ${failed.length} 件が書けませんでした`);
+    }
+    if (truncated.length > 0) {
+      reasons.push(
+        `${truncated.length} 件が取り切れていません（${truncatedKeys.join("、")}）`
+      );
+    }
+
+    // 理由は上位 3 種まで。全件は目録にある。
+    if (reasonBreakdown.length > 0) {
+      const top = reasonBreakdown.slice(0, 3).join("、");
+      const rest = reasonBreakdown.length > 3 ? `、ほか ${reasonBreakdown.length - 3} 種` : "";
+      reasons.push(`理由の内訳：${top}${rest}`);
+    }
+    if (lastOkKey) reasons.push(`最後に書けた場所：${lastOkKey}`);
+    if (firstFailedKey) reasons.push(`最初に失敗した場所：${firstFailedKey}`);
+
     throw new Error(
       `控えに欠けがあります：${reasons.join(" / ")}。詳しくは ${prefix}manifest.json`
     );
