@@ -7,9 +7,22 @@ import type { Env } from "./index.js";
  * しあらぼ管理システム（shiarabo-admin）読み取りツール群。
  * Supabase の shr_students テーブルを直接参照。
  *
- * テーブル：shr_students（shr_overrides は同テーブルに統合済み）
+ * テーブル：shr_students
  * 命名規約：`shiarabo__<action>`
  * v0.24.0 で追加（依頼書：35f9c6c1-c439-813a-9cf5-c249f7618349）
+ *
+ * ── 2026-08-07 の変更：email を返すのをやめた ──
+ *   shr_students に email 列は存在しない（2026-08-07 に全列を実測）。
+ *   それにもかかわらず get_student は email を組み立てて返しており、
+ *   常に空文字が返るため、使う側からは「全員メール未登録」に見えていた。
+ *   メールは会員データ側が持つ。連絡先が要る場面は contact 列を使う。
+ *   統括判断（2026-08-07）：表に列を足さず、道具の側から外す。
+ *
+ * ── 未確認（2026-08-07 時点） ──
+ *   旧コメントにあった「shr_overrides は shr_students に統合済み」は
+ *   実物で裏が取れていない。shr_overrides は 14 件のまま残っており、
+ *   最終更新は 2026-04-18 で止まっている。移し終えた残骸なのか、
+ *   まだ使われているのかは画面側のコードを見て確定する（期限 2026-08-11）。
  */
 
 // ─── ステージ定義（constants.js と整合） ──────────────────────────────────────
@@ -48,7 +61,6 @@ async function sbFetch(
 interface StudentRow {
   id: number;
   name: string;
-  email?: string;
   status?: string;
   stage?: string;
   issues?: string;
@@ -130,7 +142,7 @@ export function registerShiaraboTools(server: McpServer, env: Env): void {
   // ─── 2. shiarabo__get_student ─────────────────────────────────────────────
   server.tool(
     "shiarabo__get_student",
-    "しあらぼ生徒の詳細情報をIDで取得する。shiarabo__list_students で id を確認してから使う。戻り値: { ok, student: {全フィールド} }",
+    "しあらぼ生徒の詳細情報をIDで取得する。shiarabo__list_students で id を確認してから使う。戻り値: { ok, student: {id, name, status, stage, stage_label, issues, strategy, payment, contact, archived, sort_order, last_mtg, next_mtg, next_action, renewal_likelihood, monthly_fee, proposal_status, created_at, updated_at} }。email は shr_students に列が無いため返さない（連絡先は contact）。",
     {
       id: z.number().describe("生徒の id（shiarabo__list_students の id フィールド）"),
     },
@@ -148,7 +160,6 @@ export function registerShiaraboTools(server: McpServer, env: Env): void {
         student: {
           id:                 r.id,
           name:               r.name,
-          email:              r.email ?? "",
           status:             r.status ?? "",
           stage:              r.stage ?? "",
           stage_label:        stageLabel(r.stage),
