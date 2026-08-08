@@ -124,7 +124,8 @@ async function fetchSMData(base: string, secret?: string): Promise<{
 // ─────────────────────────────────────────────
 
 async function getRevenueSummary(env: Env) {
-  const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager-black.vercel.app";
+  // 2026-08-08：設定値が無いときの行き先も新しい住所に合わせる（保険）
+  const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager.shia2n.jp";
   const { payments, contracts, singles, budgets, businesses } = await fetchSMData(
     base,
     env.SALES_MANAGER_INTERNAL_SECRET
