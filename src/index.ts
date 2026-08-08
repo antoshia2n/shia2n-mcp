@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.42.0
+ * shia2n-mcp エントリーポイント v0.43.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -128,6 +128,15 @@
  *          munikis__restore_test：書き戻す先は「元の名前 + _restore_test」に固定。
  *          呼ぶ側から本番の表を指定できない作りにしてある。
  *          件数が 5000 を超える表は断る（1 回の実行での上限に当たるため）。
+ * v0.43.0：起動のまとめ取得の取りこぼしを直す（2026-08-08）
+ *          munikis-client.ts のみ変更。3 点。
+ *          ① ページ送りが無く、Sessions は先頭 100 件、Decisions と Tasks は先頭 30 件しか
+ *             見ていなかった。実物は 240 / 291 / 317 件。並べ替えは取ったあとに
+ *             手元でやっていたため「直近 30 件」にもなっていなかった。
+ *          ② 除外する状態の名前が実物と食い違っていた（Tasks は「破棄」ではなく「廃案」。
+ *             Decisions に「完了」「破棄」は存在しない）。撤回を除く現行の見え方は変えていない。
+ *          ③ 未完了の総数・担当別の内訳・呼び出したチャットの担当ぶんの一覧を返すようにした。
+ *             起動のたびに担当で数え直す手作業をなくすため。
  */
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -251,7 +260,7 @@ function isBackupLastChance(utcHour: number, utcMinute: number): boolean {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.42.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: "0.43.0" });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
