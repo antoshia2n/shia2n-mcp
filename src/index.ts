@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.43.0
+ * shia2n-mcp エントリーポイント v0.44.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -137,7 +137,13 @@
  *             Decisions に「完了」「破棄」は存在しない）。撤回を除く現行の見え方は変えていない。
  *          ③ 未完了の総数・担当別の内訳・呼び出したチャットの担当ぶんの一覧を返すようにした。
  *             起動のたびに担当で数え直す手作業をなくすため。
+ * v0.44.0：版番号の置き場を 1 つにする（2026-08-08）
+ *          それまで版番号は 2 か所にあった。ここ（道具の名乗り）と diag.ts（点検画面が
+ *          返す値）で数え方が別で、点検画面には 0.18.0 と出ていた。実物より 25 古い。
+ *          src/version.ts を新設し、どちらもそこを読む形にした。版を上げるときは
+ *          version.ts の 1 行だけを書き換える。
  */
+import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
@@ -260,7 +266,7 @@ function isBackupLastChance(utcHour: number, utcMinute: number): boolean {
 }
 
 function createMcpServer(env: Env): McpServer {
-  const server = new McpServer({ name: "shia2n-mcp", version: "0.43.0" });
+  const server = new McpServer({ name: "shia2n-mcp", version: APP_VERSION });
   registerHighShinTools(server, env);
   registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);

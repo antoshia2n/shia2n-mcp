@@ -1,5 +1,9 @@
 /**
- * /diag 公開診断エンドポイント v0.17.0
+ * /diag 公開診断エンドポイント
+ *
+ * 版番号は version.ts の APP_VERSION 1 か所だけを見る（2026-08-08 v0.44.0）。
+ * それまでこのファイルは独自の版番号を持っており、点検画面が返す値が
+ * 本体の版と食い違っていた。
  *
  * - 認証不要（機密情報は一切返さない）
  * - レート制限: IPベース・1分あたり5回（OAUTH_KV使用）
@@ -21,8 +25,7 @@
  */
 import type { Env } from "./index.js";
 import { readAllRuns } from "./cron-log.js";
-
-const VERSION = "0.18.0";
+import { APP_VERSION } from "./version.js";
 const RATE_LIMIT_PER_MINUTE = 5;
 
 function isPresent(val: unknown): boolean {
@@ -157,7 +160,7 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
   return Response.json(
     {
       app: "shia2n-mcp",
-      version: VERSION,
+      version: APP_VERSION,
       timestamp: new Date().toISOString(),
       db_tables: "n/a (mcp wrapper - no direct db)",
       recent_errors: [],
