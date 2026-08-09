@@ -35,6 +35,8 @@ export const KNOWN_JOBS = [
   "neta_mail",
   "backup",
   "selftest",
+  // 2026-08-09 追加：Buffer の反応の数字を ContentOS の成績へ戻す取り込み
+  "contentos_metrics",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];

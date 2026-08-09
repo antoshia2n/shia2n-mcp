@@ -18,7 +18,9 @@ import type { Env } from "./index.js";
  *          （要件定義 v1.2 F6：3ac9c6c1-c439-8175-88e5-e3d5747cf898）
  */
 
-async function callContentOsInternalApi<T = unknown>(
+// cron（毎日の取り込み）からも同じ窓口を使うため export する。
+// 認証と設定の確認をここ 1 か所に置いておくため、cron 側で書き写さない。
+export async function callContentOsInternalApi<T = unknown>(
   env: Env,
   path: string,
   body: Record<string, unknown>
@@ -423,6 +425,17 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
       if (args.labels !== undefined) payload.labels = args.labels;
 
       const result = await callContentOsInternalApi(env, "update-post", payload);
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 13. content_os__sync_buffer_metrics ─────────────────────────────
+  server.tool(
+    "content_os__sync_buffer_metrics",
+    "Buffer に入っている投稿後の反応の数字（表示回数・いいね・返信・リポスト・クリック）を ContentOS の投稿へ書き戻し、直近90日の相対順位から自動の成績（auto_score）を付け直す。人手の評価（score）には触れない。毎日1回この処理は自動で走るので、ふだん呼ぶ必要はない。今すぐ数字を最新にしたいとき、または取り込みが動いているかを確かめるときに使う。投稿当日のものは取り込まず（0が入るため）、投稿から21日を過ぎたものは確定として触らない。戻り値: { ok, summary: { buffer_posts, contentos_posts, matched, too_new, finalized, unmatched, numbers_written, scores_written, skipped_by_limit }, errors }。",
+    {},
+    async () => {
+      const result = await callContentOsInternalApi(env, "sync-buffer-metrics", {});
       return asMcpTextResult(result);
     }
   );

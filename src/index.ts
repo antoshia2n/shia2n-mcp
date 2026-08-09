@@ -150,6 +150,17 @@
  *          触れる行は名前が「YYYY-MM 事業名（自動）」の形のものだけに縛ってあり、
  *          Naoki が手で入れた行には当たらない。設定の追加は無し
  *          （SALES_MANAGER_INTERNAL_SECRET を読み取りと共用する）。
+ * v0.46.0：Buffer の反応の数字を ContentOS の成績へ戻す取り込みを毎日 1 回起動（2026-08-09）
+ *          依頼：https://www.notion.so/3b59c6c1c439818c9224ed5c9bfab9b8
+ *          ① cron-contentos-metrics.ts を新設。UTC 03:00（JST 12:00）の 1 回だけ、
+ *             ContentOS の /api/internal/sync-buffer-metrics を叩く。
+ *             本体は ContentOS 側にある（投稿の表を持っているのが向こうだけのため）。
+ *             cron の枠は増やしていない（既存の 0,30 に相乗り）。
+ *          ② content_os__sync_buffer_metrics を追加。手で 1 回動かして確かめる用。
+ *          ③ cron-log.ts に contentos_metrics を足した。これで /diag の last_runs と
+ *             munikis__get_context の recent_runs に自動で出る。
+ *          設定の追加は無し（CONTENT_OS_API_BASE と CONTENT_OS_INTERNAL_SECRET を
+ *          既存の読み書きと共用する）。Buffer の鍵は ContentOS 側にだけ置く。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -181,6 +192,7 @@ import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleZeusSync } from "./cron-zeus-sync.js";
+import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { runBackupSlot } from "./cron-backup.js";
 import { registerRestoreTools } from "./tools-restore.js";
 
@@ -476,6 +488,19 @@ export default {
               detail:
                 "取り込みの開始までを確認（何件入ったかは Zeus 側にあり、ここでは分かりません）",
             };
+          })
+        );
+      }
+
+      // 2026-08-09：Buffer の反応の数字を ContentOS の成績へ戻す
+      // （UTC 03:00 = JST 12:00 のみ発火）
+      // Buffer 側の数字は 1 日 1 回まとめて更新される（2026-08-09 の実測では
+      // JST 10:52）。その後に取りに行く時刻として正午を選んだ。
+      // Zeus 同期（JST 03:00）・データの控え（JST 04:00〜06:45）とは重ならない。
+      if (utcMinute === 0 && utcHour === 3) {
+        tasks.push(
+          runAndRecord(env, "contentos_metrics", async () => {
+            return await handleContentOsMetricsSync(env);
           })
         );
       }
