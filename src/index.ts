@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.44.0
+ * shia2n-mcp エントリーポイント v0.45.0
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -142,6 +142,14 @@
  *          返す値）で数え方が別で、点検画面には 0.18.0 と出ていた。実物より 25 古い。
  *          src/version.ts を新設し、どちらもそこを読む形にした。版を上げるときは
  *          version.ts の 1 行だけを書き換える。
+ * v0.45.0：売上管理に月の売上を記録する口を追加（2026-08-09）
+ *          依頼：https://www.notion.so/3b39c6c1c4398171997ad5fc5d8c8918
+ *          sales_manager__record_monthly_revenue を追加。tools-sales-manager.ts のみ変更。
+ *          書き先は売上管理側に新設した受け口 /api/sm-record で、合言葉が必須。
+ *          既存の画面用の書き込み口には触れていない（画面は合言葉を持てないため）。
+ *          触れる行は名前が「YYYY-MM 事業名（自動）」の形のものだけに縛ってあり、
+ *          Naoki が手で入れた行には当たらない。設定の追加は無し
+ *          （SALES_MANAGER_INTERNAL_SECRET を読み取りと共用する）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

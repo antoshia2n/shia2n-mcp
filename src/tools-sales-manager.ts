@@ -1,4 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 
 /**
@@ -14,6 +16,163 @@ export function registerSalesManagerTools(server: McpServer, env: Env): void {
     async () => {
       const data = await getRevenueSummary(env);
       return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
+    }
+  );
+
+  // ─── 月の売上を記録する（2026-08-09 追加・v0.45.0）─────────────────────────
+  //
+  // 依頼：https://www.notion.so/3b39c6c1c4398171997ad5fc5d8c8918
+  //
+  // 書き先は売上管理側に新設した受け口 /api/sm-record。合言葉が必須。
+  // 既存の画面用の書き込み口は使わない（あちらは合言葉のチェックが無く、
+  // 画面が合言葉を持てないため必須にできない）。
+  //
+  // 触れる行は、名前が「YYYY-MM 事業名（自動）」の形のものだけに
+  // 受け口の側で縛ってある。Naoki が手で入れた行には当たらない。
+  //
+  // 受け取るのは確定した金額だけ。見込みはこの口では扱わない
+  // （見込みは把握くん側の手前の数字が持っており、同じ事実を 2 か所に置くと必ず食い違う）。
+  server.tool(
+    "sales_manager__record_monthly_revenue",
+    "売上管理に月の売上を1件記録する。メンシプ・X広告収益・教材販売など、契約や入金の形になっていない月ごとの売上を入れるときに使う。同じ年月・同じ事業の区分に2回目を送っても行は増えず、前に入れた行を書き換える。Naoki が画面から手で入れた行には触れない（この口が作る行は名前が「YYYY-MM 事業名（自動）」に固定されているため）。受け取るのは確定した金額だけで、見込みは扱わない。事業の区分は売上管理に登録済みの名前しか受け付けず、無い名前を渡すと登録済みの一覧を添えて断る。戻り値: { ok, action（created=新しく足した / updated=前の行を書き換えた）, row（入った行そのもの）, month: {year_month, month_idx, singles_total（その月の単発売上の合計）, singles_by_business（その月の区分ごとの金額）, singles_count}, summary: {month_confirmed（画面と同じ当月の確定）, month_goal, by_business, target_month_confirmed（指定した月の確定。今年の範囲のときだけ入る）} }",
+    {
+      year_month: z
+        .string()
+        .describe("対象の年月。YYYY-MM の形（例: 2026-08）。必須"),
+      business: z
+        .string()
+        .describe(
+          "事業の区分の名前（例: メンシプ / X広告収益 / 教材販売）。売上管理に登録済みの名前をそのまま渡す。sales_manager__get_revenue_summary の by_business に出てくる名前と同じ"
+        ),
+      amount: z
+        .number()
+        .describe("金額（円）。整数で渡す。0 以上"),
+      count: z
+        .number()
+        .optional()
+        .describe(
+          "人数。しあらぼ継続の契約更新の名数など、金額と一緒に残したい人数がある場合だけ渡す。備考の欄に「更新 N 名」の形で入る"
+        ),
+      note: z
+        .string()
+        .optional()
+        .describe("備考。残したい補足があるときだけ渡す。人数と両方渡した場合は「更新 N 名 / 備考」の形で並ぶ"),
+    },
+    async (args) => {
+      const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager.shia2n.jp";
+      const secret = env.SALES_MANAGER_INTERNAL_SECRET;
+
+      // 書き込みの口は合言葉が必須。無いまま呼ぶと必ず断られるので、
+      // 外へ出す前にここで止めて、設定が足りないことが分かる文で返す。
+      if (!secret) {
+        throw new Error(
+          "SALES_MANAGER_INTERNAL_SECRET が設定されていません。書き込みの口は合言葉が必須のため、書き込みは行っていません"
+        );
+      }
+
+      if (!/^\d{4}-\d{2}$/.test(args.year_month)) {
+        throw new Error(
+          `year_month は YYYY-MM の形で渡してください（受け取った値: ${args.year_month}）`
+        );
+      }
+      if (!Number.isInteger(args.amount) || args.amount < 0) {
+        throw new Error(
+          `amount は 0 以上の整数で渡してください（受け取った値: ${String(args.amount)}）`
+        );
+      }
+      if (args.count !== undefined && (!Number.isInteger(args.count) || args.count < 0)) {
+        throw new Error(
+          `count は 0 以上の整数で渡してください（受け取った値: ${String(args.count)}）`
+        );
+      }
+
+      const res = await fetch(`${base}/api/sm-record`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${secret}`,
+        },
+        body: JSON.stringify({
+          year_month: args.year_month,
+          business:   args.business,
+          amount:     args.amount,
+          count:      args.count,
+          note:       args.note,
+        }),
+      });
+
+      const text = await res.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(
+          `売上管理からの返事を読めませんでした（状態 ${res.status}）。書き込みは行われていない可能性があります: ${text.slice(0, 200)}`
+        );
+      }
+
+      if (!res.ok) {
+        const o = parsed as { error?: string; reason?: string; available?: string[] };
+        const detail = [o.error, o.reason].filter(Boolean).join(" / ");
+        const avail = o.available?.length
+          ? `　登録されている区分: ${o.available.join(" / ")}`
+          : "";
+        throw new Error(
+          `売上管理が書き込みを断りました（状態 ${res.status}）: ${detail || text.slice(0, 200)}${avail}`
+        );
+      }
+
+      const written = parsed as {
+        ok: boolean;
+        action: string;
+        row: unknown;
+        month: {
+          year_month: string;
+          month_idx: number;
+          singles_total: number;
+          singles_by_business: Record<string, number>;
+          singles_count: number;
+        };
+      };
+
+      // 書いたあとの姿を、画面と同じ集計でも見せる。
+      // 取得し直さずに確かめられるようにするため。
+      let summary: {
+        month_confirmed: number | null;
+        month_goal: number | null;
+        by_business: Record<string, number> | null;
+        target_month_confirmed: number | null;
+      } = {
+        month_confirmed: null,
+        month_goal: null,
+        by_business: null,
+        target_month_confirmed: null,
+      };
+
+      try {
+        const rev = await getRevenueSummary(env);
+        const hit = rev.chart_data.find((d) => d.abs === written.month.month_idx);
+        summary = {
+          month_confirmed:        rev.month.confirmed,
+          month_goal:             rev.month.goal,
+          by_business:            rev.by_business,
+          // 指定した月が今年の範囲に無いときは chart_data に出てこないので null のまま
+          target_month_confirmed: hit ? hit.conf : null,
+        };
+      } catch (e) {
+        // 集計が取れなくても、書き込み自体は済んでいる。
+        // ここで失敗を投げると「書けたのに失敗した」と読めてしまうため、
+        // 集計だけを空にして返す。
+        console.warn("[sales_manager__record_monthly_revenue] 集計の取得に失敗", e);
+      }
+
+      return asMcpTextResult({
+        ok:     true,
+        action: written.action,
+        row:    written.row,
+        month:  written.month,
+        summary,
+      });
     }
   );
 }
