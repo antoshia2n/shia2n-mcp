@@ -37,6 +37,10 @@ export const KNOWN_JOBS = [
   "selftest",
   // 2026-08-09 追加：Buffer の反応の数字を ContentOS の成績へ戻す取り込み
   "contentos_metrics",
+  // 2026-08-10 追加：Zeus の取り込みが何件入ったか。
+  // 書くのは zeus-worker 側（同じ KV・同じ鍵の形 cronlog:zeus_import）。
+  // 既存の zeus_sync は「起動できた」の記録なので、置き換えず別の欄にする。
+  "zeus_import",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];
