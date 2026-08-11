@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.47.0（版の実物は version.ts の APP_VERSION を見る）
+ * shia2n-mcp エントリーポイント v0.48.0（版の実物は version.ts の APP_VERSION を見る）
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -170,6 +170,13 @@
  *          結果全体を信頼できないと返す。
  *          1 回の実行で外へ出す呼び出しは 40 本で頭打ちにした（無料の枠は 50 本。
  *          2026-08-10 に Zeus の取り込みがこの上限で落ちているため）。
+ * v0.48.0：置き場の点検の口を 2 回叩く形にした（place-check.ts）
+ *          タスク：https://www.notion.so/3b99c6c1c4398107bbccf34015d25d69
+ *          1 回目は HEAD、そこで 200 番台が返らなかった行だけ 2 回目に GET で確かめ直す。
+ *          きっかけは記録くんで、画面は普通に出るのに HEAD にだけ 500 を返す作りだった。
+ *          このままだと呼ぶたびに同じ確かめをやり直すことになる。
+ *          外への呼び出しが上限に当たらないよう、叩く先を 30 本・確かめ直しを 12 本で
+ *          頭打ちにした（最悪でも 一覧の取り込み 2 ＋ 30 ＋ 12 で 44 本・無料の枠は 50 本）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

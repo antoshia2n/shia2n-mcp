@@ -1,5 +1,5 @@
 /**
- * GET /place-check  置き場が生きているかを 1 画面で見る口（v0.47.0 新設）
+ * GET /place-check  置き場が生きているかを 1 画面で見る口
  *
  * タスク：https://www.notion.so/3b99c6c1c43981ea86cde8be9a14c1bf
  *
@@ -18,6 +18,14 @@
  *   - 1 回の実行で外へ出せる呼び出しの本数には上限がある（無料の枠は 50 本）。
  *     2026-08-10 に Zeus の取り込みがこの上限で落ちているため、叩く先を
  *     MAX_TARGETS 本で頭打ちにし、超えた分は「今回は調べていない」と明示して返す。
+ *
+ * v0.48.0（2026-08-11）の直し：2 回叩く形にした
+ *   1 回目は HEAD（軽い叩き方）。ここで 200 番台が返らなかった行だけ、
+ *   2 回目にふつうの叩き方（GET）でもう一度確かめる。
+ *   きっかけ：記録くんが HEAD にだけ 500 を返す作りで、画面は普通に出るのに
+ *   「応答はあるが開かない」と並んだ。呼ぶたびに同じ確かめをやり直すことになるため。
+ *   2 回目の本数は MAX_RETRIES で頭打ちにし、外への呼び出しが上限に当たらないようにする
+ *   （最悪でも 一覧の取り込み 2 ＋ MAX_TARGETS ＋ MAX_RETRIES で 44 本）。
  */
 import type { Env } from "./index.js";
 import { APP_VERSION } from "./version.js";
@@ -37,10 +45,13 @@ const PING_TIMEOUT_MS = 4000;
 /**
  * 1 回の実行で叩く住所の上限。
  * 無料の枠は 1 回の実行につき外への呼び出し 50 本まで。
- * 一覧の取り込みで 1〜2 本使うため、余裕を見て 40 本で止める。
+ * 一覧の取り込みで 1〜2 本、確かめ直しで最大 MAX_RETRIES 本を使うため 30 本で止める。
  * 2026-08-11 時点で住所が入っている行は 20 行（実測）。
  */
-const MAX_TARGETS = 40;
+const MAX_TARGETS = 30;
+
+/** 200 番台が返らなかった行を、ふつうの叩き方で確かめ直す本数の上限 */
+const MAX_RETRIES = 12;
 
 /**
  * 対照に置く行の名前。
@@ -64,6 +75,7 @@ interface Result {
   判定: Verdict;
   状況番号?: number;
   応答時間ms?: number;
+  叩き方?: string;
   理由?: string;
 }
 
@@ -151,7 +163,10 @@ async function fetchRows(env: Env): Promise<{ rows: Row[]; error?: string }> {
 }
 
 /** 住所を 1 つ叩く */
-async function ping(url: string): Promise<{
+async function ping(
+  url: string,
+  method: "HEAD" | "GET"
+): Promise<{
   判定: Verdict;
   状況番号?: number;
   応答時間ms: number;
@@ -161,21 +176,13 @@ async function ping(url: string): Promise<{
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), PING_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { method: "HEAD", signal: controller.signal });
+    const res = await fetch(url, { method, signal: controller.signal });
     clearTimeout(id);
     const 応答時間ms = Date.now() - start;
     if (res.status >= 200 && res.status < 400) {
       return { 判定: "開く", 状況番号: res.status, 応答時間ms };
     }
-    return {
-      判定: "応答はあるが開かない",
-      状況番号: res.status,
-      応答時間ms,
-      理由:
-        res.status === 405
-          ? "この住所は今回の叩き方（HEAD）を受け付けない。閉じているとは限らない"
-          : undefined,
-    };
+    return { 判定: "応答はあるが開かない", 状況番号: res.status, 応答時間ms };
   } catch (e) {
     clearTimeout(id);
     const 応答時間ms = Date.now() - start;
@@ -224,9 +231,10 @@ export async function handlePlaceCheck(request: Request, env: Env): Promise<Resp
   const 叩く = 住所あり.slice(0, MAX_TARGETS);
   const 見送り = 住所あり.slice(MAX_TARGETS);
 
+  // 1 回目：HEAD（軽い叩き方）
   const 叩いた結果: Result[] = await Promise.all(
     叩く.map(async (r) => {
-      const p = await ping(r.本番URL as string);
+      const p = await ping(r.本番URL as string, "HEAD");
       return {
         名前: r.名前,
         使用: r.使用,
@@ -234,8 +242,30 @@ export async function handlePlaceCheck(request: Request, env: Env): Promise<Resp
         判定: p.判定,
         状況番号: p.状況番号,
         応答時間ms: p.応答時間ms,
+        叩き方: "HEAD",
         理由: p.理由,
       };
+    })
+  );
+
+  // 2 回目：200 番台が返らなかった行だけ、ふつうの叩き方（GET）で確かめ直す。
+  // HEAD にだけエラーを返す作りのサーバーがあるため（実例：記録くん・2026-08-11）。
+  const 開かなかった行 = 叩いた結果.filter((r) => r.判定 !== "開く");
+  const 確かめ直す = 開かなかった行.slice(0, MAX_RETRIES);
+  const 確かめ直せなかった = 開かなかった行.length - 確かめ直す.length;
+
+  await Promise.all(
+    確かめ直す.map(async (r) => {
+      const 前回の番号 = r.状況番号;
+      const p = await ping(r.本番URL as string, "GET");
+      r.判定 = p.判定;
+      r.状況番号 = p.状況番号;
+      r.応答時間ms = p.応答時間ms;
+      r.理由 = p.理由;
+      r.叩き方 =
+        p.判定 === "開く"
+          ? `HEAD では ${前回の番号 ?? "返らず"} だったが、ふつうの叩き方（GET）では開いた`
+          : "HEAD とふつうの叩き方（GET）の両方で開かなかった";
     })
   );
 
@@ -279,8 +309,12 @@ export async function handlePlaceCheck(request: Request, env: Env): Promise<Resp
       開かない: 数える("開かない"),
       住所の登録が無い: 数える("住所の登録が無い"),
       今回は調べていない: 見送り.length,
+      ふつうの叩き方で確かめ直した: 確かめ直す.length,
     },
     結果: 全結果,
     今回は調べていない: 見送り.map((r) => r.名前),
+    ...(確かめ直せなかった > 0
+      ? { 確かめ直しの上限に当たった件数: 確かめ直せなかった }
+      : {}),
   });
 }
