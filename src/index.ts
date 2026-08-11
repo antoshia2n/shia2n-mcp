@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.45.0
+ * shia2n-mcp エントリーポイント v0.47.0（版の実物は version.ts の APP_VERSION を見る）
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -161,6 +161,15 @@
  *             munikis__get_context の recent_runs に自動で出る。
  *          設定の追加は無し（CONTENT_OS_API_BASE と CONTENT_OS_INTERNAL_SECRET を
  *          既存の読み書きと共用する）。Buffer の鍵は ContentOS 側にだけ置く。
+ * v0.47.0：置き場が生きているかを 1 画面で見る口を追加（GET /place-check・place-check.ts 新設）
+ *          タスク：https://www.notion.so/3b99c6c1c43981ea86cde8be9a14c1bf
+ *          置き場の一覧（Systems）の全行を読み、本番の住所が入っている行を並べて叩き、
+ *          名前と「開く／応答はあるが開かない／開かない／住所の登録が無い」を返す。
+ *          住所の一覧はこのコードに持たず、毎回 Notion 側を読む（食い違いを作らないため）。
+ *          対照として shia2n-mcp 自身の行を必ず見て、そこが開いていなければ
+ *          結果全体を信頼できないと返す。
+ *          1 回の実行で外へ出す呼び出しは 40 本で頭打ちにした（無料の枠は 50 本。
+ *          2026-08-10 に Zeus の取り込みがこの上限で落ちているため）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -185,6 +194,7 @@ import { registerMunikisTools } from "./tools-munikis.js";
 import { AuthHandler } from "./auth-handler.js";
 import { handleTaskmasterTasks, handleTaskmasterAddTask, handleTaskmasterUpdateTask, handleTaskmasterCreateProject, handleTaskmasterDeleteProject, handleTaskmasterDiag } from "./taskmaster.js";
 import { handleDiag } from "./diag.js";
+import { handlePlaceCheck } from "./place-check.js";
 import { handleScheduled } from "./cron-neta-mail.js";
 import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
@@ -366,6 +376,12 @@ export default {
 
     if (url.pathname === "/diag" && request.method === "GET") {
       return handleDiag(request, env);
+    }
+
+    // v0.47.0：置き場が生きているかを 1 画面で見る口（認証不要・秘密の値は返さない）
+    // タスク：https://www.notion.so/3b99c6c1c43981ea86cde8be9a14c1bf
+    if (url.pathname === "/place-check" && request.method === "GET") {
+      return handlePlaceCheck(request, env);
     }
 
     if (url.pathname.startsWith("/taskmaster/")) {
