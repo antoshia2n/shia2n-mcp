@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.48.0（版の実物は version.ts の APP_VERSION を見る）
+ * shia2n-mcp エントリーポイント v0.49.0（版の実物は version.ts の APP_VERSION を見る）
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -177,6 +177,21 @@
  *          このままだと呼ぶたびに同じ確かめをやり直すことになる。
  *          外への呼び出しが上限に当たらないよう、叩く先を 30 本・確かめ直しを 12 本で
  *          頭打ちにした（最悪でも 一覧の取り込み 2 ＋ 30 ＋ 12 で 44 本・無料の枠は 50 本）。
+ * v0.49.0：売上管理の住所の関門を機械から通れるようにした（2026-08-12）
+ *          タスク：https://www.notion.so/3b69c6c1c43981d9b56cf08f01c633af
+ *          売上管理（sales-manager.shia2n.jp）の手前に Cloudflare Access の関門を
+ *          置くため、そこを通って呼ぶ側にサービス用の合言葉を載せる。
+ *          ① src/cf-access.ts を新設。CF-Access-Client-Id と
+ *             CF-Access-Client-Secret の 2 つを、両方そろっているときだけ見出しに載せる。
+ *          ② tools-sales-manager.ts の取得 5 本（/api/sm-payments・sm-contracts・
+ *             sm-singles・sm-businesses・sm-budgets）と書き込み 1 本（/api/sm-record）に
+ *             その見出しを足した。売上管理側の受け口が見る合言葉（Authorization）は
+ *             別物で、両方送る。
+ *          ③ diag.ts の疎通確認でも、売上管理の行だけ合言葉を載せて叩く。
+ *             載せないと、アプリが生きていてもログイン画面に跳ね返されて
+ *             「開かない」と出るため。あわせて 2 つの設定の有無を点検の口に出した。
+ *          関門がまだ無い住所へ送っても余分な見出しとして無視されるだけなので、
+ *          先にこちらを反映し、動くことを見てから関門をかける順番が採れる。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -252,6 +267,13 @@ export interface Env {
   // 既存の合言葉は使い回さない（既存の呼び出し元を壊さないため）。
   // 未設定のときは見出しを付けずに従来どおり取得する（移行期間中に止めないため）。
   SALES_MANAGER_INTERNAL_SECRET?: string;
+  // 2026-08-12 追加：Cloudflare Access（入口の関門）を機械から通るための
+  // サービス用の合言葉。売上管理の住所の手前に関門を置いたため、
+  // ブラウザのログインを通らない shia2n-mcp からの呼び出しにはこれが要る。
+  // 2 つそろっているときだけ見出しを付ける（片方だけでは通れないため）。
+  // 秘密の値なので画面側の Secret で管理する（wrangler.jsonc には書かない）。
+  CF_ACCESS_CLIENT_ID?: string;
+  CF_ACCESS_CLIENT_SECRET?: string;
   // v0.17.0 追加
   NOTION_TOKEN: string;
   ANTHROPIC_API_KEY: string;

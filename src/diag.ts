@@ -26,6 +26,7 @@
 import type { Env } from "./index.js";
 import { readAllRuns } from "./cron-log.js";
 import { APP_VERSION } from "./version.js";
+import { cfAccessHeaders } from "./cf-access.js";
 const RATE_LIMIT_PER_MINUTE = 5;
 
 function isPresent(val: unknown): boolean {
@@ -51,14 +52,19 @@ async function checkRateLimit(request: Request, env: Env): Promise<boolean> {
 
 async function pingService(
   base: string,
-  path?: string
+  path?: string,
+  headers?: Record<string, string>
 ): Promise<{ ok: boolean; latency_ms: number; http_status?: number; error?: string }> {
   const start = Date.now();
   const target = path ? base.replace(/\/+$/, "") + path : base;
   try {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 2000);
-    const resp = await fetch(target, { method: "HEAD", signal: controller.signal });
+    const resp = await fetch(target, {
+      method: "HEAD",
+      signal: controller.signal,
+      ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+    });
     clearTimeout(id);
     // path を指定した場合は「その口が実在すること」まで見たいので 4xx も失敗にする。
     // path なし（入口を叩く従来どおりの4件）は挙動を変えない。
@@ -99,18 +105,28 @@ const ENV_KEYS: (keyof Env)[] = [
   // 2026-08-03：Sales Manager の取得口の合言葉（段階1で追加）。
   // 未設定だと合言葉なしで取りに行くため、段階4（必須化）の前に present を確認する。
   "SALES_MANAGER_INTERNAL_SECRET",
+  // 2026-08-12：Cloudflare Access（入口の関門）を機械から通るためのサービス用の合言葉。
+  // 2 つそろっていないと、関門をかけた住所への呼び出しがログイン画面に跳ね返される。
+  // 値そのものは出さず、有無だけを返す。
+  "CF_ACCESS_CLIENT_ID",
+  "CF_ACCESS_CLIENT_SECRET",
 ];
 
 // path を書いた行だけ、入口ではなくその道を叩く。
 // sales_manager：入口は画面のページで、HEAD でも画面を丸ごと作るため 2 秒に間に合わない。
 // 軽い口（/api/diag・HEAD は即返し）へ向ける。原因と対処は 2026-05-04 に特定済みで、
 // 3 か月そのままだったものを今回反映する。
-const SERVICES: { name: string; envKey: keyof Env; path?: string }[] = [
+//
+// 2026-08-12：sales_manager は住所の手前に Access の関門があるため、
+//   サービス用の合言葉を載せずに叩くとログイン画面へ跳ね返され、
+//   アプリが生きていても「開かない」と出てしまう。accessGated を立てた行だけ
+//   合言葉を載せて叩く。
+const SERVICES: { name: string; envKey: keyof Env; path?: string; accessGated?: true }[] = [
   { name: "high_shin",     envKey: "HIGH_SHIN_API_BASE"     },
   { name: "zeus",          envKey: "ZEUS_API_BASE"          },
   { name: "form_kun",      envKey: "FORM_KUN_API_BASE"      },
   { name: "pay_kun",       envKey: "PAY_KUN_API_BASE"       },
-  { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag" },
+  { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true },
 ];
 
 export async function handleDiag(request: Request, env: Env): Promise<Response> {
@@ -131,12 +147,16 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
 
   // 各サービスへの疎通確認（並列）
   const connectivityEntries = await Promise.all(
-    SERVICES.map(async ({ name, envKey, path }) => {
+    SERVICES.map(async ({ name, envKey, path, accessGated }) => {
       const base = env[envKey] as string | undefined;
       if (!isPresent(base)) {
         return [name, { ok: false, reason: "env_missing" }] as const;
       }
-      const result = await pingService(base!, path);
+      const result = await pingService(
+        base!,
+        path,
+        accessGated ? cfAccessHeaders(env) : undefined
+      );
       // どの道を叩いたかを結果に載せる（住所そのものは載せない）。
       return [name, path ? { ...result, path } : result] as const;
     })

@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
+import { cfAccessHeaders } from "./cf-access.js";
 import type { Env } from "./index.js";
 
 /**
@@ -86,11 +87,15 @@ export function registerSalesManagerTools(server: McpServer, env: Env): void {
         );
       }
 
+      // 2026-08-12：住所の手前に Access の関門を置いたため、
+      //   ブラウザのログインを通らないこの呼び出しにはサービス用の合言葉が要る。
+      //   合言葉（Authorization）は売上管理側の受け口が見るもので、別物。両方送る。
       const res = await fetch(`${base}/api/sm-record`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${secret}`,
+          ...cfAccessHeaders(env),
         },
         body: JSON.stringify({
           year_month: args.year_month,
@@ -253,7 +258,11 @@ function getBudgetGoal(budgets: Budget[], bizNames: Set<string>, abs: number): n
 // データ取得
 // ─────────────────────────────────────────────
 
-async function fetchSMData(base: string, secret?: string): Promise<{
+async function fetchSMData(
+  base: string,
+  secret: string | undefined,
+  accessHeaders: Record<string, string>
+): Promise<{
   payments: Payment[];
   contracts: Contract[];
   singles: Single[];
@@ -264,9 +273,17 @@ async function fetchSMData(base: string, secret?: string): Promise<{
   //   Sales Manager 側は段階2で「あれば通す・無くても通す」で受けるため、
   //   ここで先に送り始めても本番は止まらない。
   //   合言葉が未設定のときは見出しを付けない（設定漏れで取得が全滅しないため）。
-  const init: RequestInit | undefined = secret
-    ? { headers: { Authorization: `Bearer ${secret}` } }
-    : undefined;
+  //
+  // 2026-08-12：住所の手前に Access の関門を置いたため、
+  //   ここにサービス用の合言葉（CF-Access-Client-Id / CF-Access-Client-Secret）も載せる。
+  //   関門をまだ置いていない住所へ送っても、余分な見出しとして無視されるだけで害は無い。
+  //   これにより「先に呼び出し側へ入れてから関門をかける」順番が採れる。
+  const headers: Record<string, string> = {
+    ...accessHeaders,
+    ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
+  };
+  const init: RequestInit | undefined =
+    Object.keys(headers).length > 0 ? { headers } : undefined;
 
   const [payments, contracts, singles, businesses, budgets] = await Promise.all([
     fetch(`${base}/api/sm-payments`, init).then(r => r.json() as Promise<Payment[]>),
@@ -287,7 +304,8 @@ async function getRevenueSummary(env: Env) {
   const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager.shia2n.jp";
   const { payments, contracts, singles, budgets, businesses } = await fetchSMData(
     base,
-    env.SALES_MANAGER_INTERNAL_SECRET
+    env.SALES_MANAGER_INTERNAL_SECRET,
+    cfAccessHeaders(env)
   );
 
   const cur     = currAbs();
