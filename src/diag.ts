@@ -177,6 +177,33 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
   // 自動で動くものの直近の実行結果（新しいものが先頭・処理ごとに最大 5 件）
   const last_runs = await readAllRuns(env);
 
+  // 関門の合言葉の「形」だけを返す（2026-08-12 追加）。
+  //   値そのものは絶対に出さない。出すのは 文字数・末尾の形・前後の空白の有無 の 3 つだけ。
+  //   足した理由：あり／なし だけでは、貼り付けのときに一部が欠けた値も「あり」に見えるため、
+  //   設定を正しく入れたのに関門を通れない状態を、画面から切り分けられなかった。
+  //   Cloudflare が発行する Client ID は「32 文字＋.access」の 39 文字、
+  //   Client Secret は 64 文字（2026-08-12 に公式の説明で確認した形）。
+  const shapeOf = (v: string | undefined) =>
+    v === undefined || v === ""
+      ? { 設定: "なし" as const }
+      : {
+          設定: "あり" as const,
+          文字数: v.length,
+          前後の空白: v !== v.trim() ? "ある（要修正）" : "なし",
+        };
+  const idRaw = env.CF_ACCESS_CLIENT_ID;
+  const access_token_shape = {
+    CF_ACCESS_CLIENT_ID: {
+      ...shapeOf(idRaw),
+      末尾が_access: idRaw ? idRaw.trim().endsWith(".access") : false,
+      想定の文字数: 39,
+    },
+    CF_ACCESS_CLIENT_SECRET: {
+      ...shapeOf(env.CF_ACCESS_CLIENT_SECRET),
+      想定の文字数: 64,
+    },
+  };
+
   return Response.json(
     {
       app: "shia2n-mcp",
@@ -187,6 +214,7 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
       env: envStatus,
       switches,
       storage,
+      access_token_shape,
       last_runs,
       connectivity,
     },

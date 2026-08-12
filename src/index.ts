@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.49.0（版の実物は version.ts の APP_VERSION を見る）
+ * shia2n-mcp エントリーポイント v0.50.0（版の実物は version.ts の APP_VERSION を見る）
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -192,6 +192,12 @@
  *             「開かない」と出るため。あわせて 2 つの設定の有無を点検の口に出した。
  *          関門がまだ無い住所へ送っても余分な見出しとして無視されるだけなので、
  *          先にこちらを反映し、動くことを見てから関門をかける順番が採れる。
+ * v0.50.0：関門の合言葉の「形」を点検の口に出した（2026-08-12・diag.ts のみ変更）
+ *          きっかけ：関門をかけたあと、設定は「あり」なのに機械が通れない状態になった。
+ *          あり／なし だけでは、貼り付けのときに一部が欠けた値も「あり」に見えるため、
+ *          値が悪いのか決まりが悪いのかを画面から切り分けられなかった。
+ *          出すのは 文字数・末尾が .access か・前後の空白の有無 の 3 つだけで、
+ *          値そのものは絶対に出さない（点検の口は認証なしで開けるため）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
