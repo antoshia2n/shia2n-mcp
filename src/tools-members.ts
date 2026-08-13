@@ -17,10 +17,16 @@ import {
   postMembersGet,
   postMembersUpdate,
 } from "./members-client.js";
+import { cfAccessHeaders } from "./cf-access.js";
 
 interface MembersEnv {
   MEMBERS_API_BASE: string;
   MEMBERS_INTERNAL_TOKEN: string;
+  // 2026-08-13 追加：会員管理くんの住所の手前に置いた入口の関門を
+  // 機械から通るためのサービス用の合言葉。2 つそろっているときだけ見出しに載る。
+  // 未設定でも動く（関門が無い状態と同じ振る舞い）。
+  CF_ACCESS_CLIENT_ID?: string;
+  CF_ACCESS_CLIENT_SECRET?: string;
 }
 
 export function registerMembersTools(server: McpServer, env: MembersEnv): void {
@@ -49,7 +55,8 @@ export function registerMembersTools(server: McpServer, env: MembersEnv): void {
       const result = await postMembersSearch(
         env.MEMBERS_API_BASE,
         env.MEMBERS_INTERNAL_TOKEN,
-        { query_type, query, limit }
+        { query_type, query, limit },
+        cfAccessHeaders(env)
       );
       return {
         content: [
@@ -75,7 +82,8 @@ export function registerMembersTools(server: McpServer, env: MembersEnv): void {
       const result = await postMembersGet(
         env.MEMBERS_API_BASE,
         env.MEMBERS_INTERNAL_TOKEN,
-        { member_id }
+        { member_id },
+        cfAccessHeaders(env)
       );
       return {
         content: [
@@ -148,7 +156,8 @@ export function registerMembersTools(server: McpServer, env: MembersEnv): void {
       const result = await postMembersUpdate(
         env.MEMBERS_API_BASE,
         env.MEMBERS_INTERNAL_TOKEN,
-        { member_id, updates, reason, preview }
+        { member_id, updates, reason, preview },
+        cfAccessHeaders(env)
       );
       return {
         content: [

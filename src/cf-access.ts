@@ -1,4 +1,14 @@
-import type { Env } from "./index.js";
+/**
+ * この 2 つの値さえ持っていれば呼べる形にしてある（2026-08-13）。
+ * 以前は index.ts の Env をそのまま受け取っていたが、
+ * 会員管理くんの道具（tools-members.ts）は自分用の小さな型を持っており、
+ * Env をそのまま渡せなかった。必要な 2 つだけを条件にすることで、
+ * Env でも小さな型でもそのまま渡せる。
+ */
+export interface CfAccessEnv {
+  CF_ACCESS_CLIENT_ID?: string;
+  CF_ACCESS_CLIENT_SECRET?: string;
+}
 
 /**
  * Cloudflare Access（入口の関門）を機械から通るための見出しを作る。
@@ -17,7 +27,7 @@ import type { Env } from "./index.js";
  * 関門がまだ無い住所へ送っても害は無い（余分な見出しとして無視される）。
  *   これにより「先に呼び出し側へ入れてから関門をかける」順番が採れる。
  */
-export function cfAccessHeaders(env: Env): Record<string, string> {
+export function cfAccessHeaders(env: CfAccessEnv): Record<string, string> {
   const id = env.CF_ACCESS_CLIENT_ID;
   const secret = env.CF_ACCESS_CLIENT_SECRET;
   if (!id || !secret) return {};
@@ -31,6 +41,6 @@ export function cfAccessHeaders(env: Env): Record<string, string> {
  * サービス用の合言葉が 2 つそろっているかどうか。
  * 値そのものは返さない（点検の口に出すのは有無だけ）。
  */
-export function hasCfAccessCredentials(env: Env): boolean {
+export function hasCfAccessCredentials(env: CfAccessEnv): boolean {
   return Boolean(env.CF_ACCESS_CLIENT_ID && env.CF_ACCESS_CLIENT_SECRET);
 }

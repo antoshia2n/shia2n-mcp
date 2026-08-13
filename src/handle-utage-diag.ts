@@ -14,6 +14,7 @@
 
 import type { Env } from "./index.js";
 import { listUtageAccounts } from "./utage-client.js";
+import { cfAccessHeaders } from "./cf-access.js";
 
 const DEFAULT_UTAGE_API_BASE = "https://api.utage-system.com/v1";
 
@@ -85,7 +86,13 @@ export async function handleUtageDiag(env: Env): Promise<Response> {
   };
   if (envCheck.MEMBERS_API_BASE_set) {
     try {
-      const response = await fetch(membersEndpoint, { method: "GET" });
+      // 2026-08-13：会員管理くんの住所の手前に入口の関門を置くため、
+      // サービス用の合言葉を載せる。載せないと、アプリが生きていても
+      // ログイン画面に跳ね返されて「つながらない」と出る。
+      const response = await fetch(membersEndpoint, {
+        method: "GET",
+        headers: cfAccessHeaders(env),
+      });
       membersCheck.reachable = response.ok;
       membersCheck.status = response.status;
       if (!response.ok) {

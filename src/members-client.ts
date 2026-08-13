@@ -9,6 +9,13 @@
  *   - postMembersSearch / postMembersGet / postMembersUpdate
  *   - 認証は MEMBERS_INTERNAL_TOKEN
  *     （sync-utage-batch 用の MEMBERS_INTERNAL_SECRET とは別 Secret：スコープ分離）
+ * v1.2.0 (2026-08-13)：入口の関門（Cloudflare Access）用の見出しを受け取れるようにした。
+ *   members.shia2n.jp の手前に関門を置くと、内部 API への POST も
+ *   ログイン画面へ跳ね返される。呼び出し元が cfAccessHeaders(env) を渡す形にし、
+ *   このファイルは受け取った見出しを Authorization と一緒に載せるだけにする。
+ *   省略時は今までどおり何も載せない（既存の呼び出し元を壊さないため）。
+ *   関門がまだ無い住所へ送っても、余分な見出しとして無視されるだけなので、
+ *   先にこちらを反映し、動くことを見てから関門をかける順番が採れる。
  */
 
 import type { UtageReader } from "./utage-client.js";
@@ -37,7 +44,8 @@ export interface SyncUtageBatchResponse {
 export async function postSyncUtageBatch(
   apiBase: string,
   internalSecret: string,
-  payload: SyncUtageBatchPayload
+  payload: SyncUtageBatchPayload,
+  accessHeaders: Record<string, string> = {}
 ): Promise<SyncUtageBatchResponse> {
   const url = `${apiBase.replace(/\/$/, "")}/api/internal/sync-utage-batch`;
   const response = await fetch(url, {
@@ -45,6 +53,7 @@ export async function postSyncUtageBatch(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${internalSecret}`,
+      ...accessHeaders,
     },
     body: JSON.stringify(payload),
   });
@@ -141,7 +150,8 @@ async function postMembersInternal<T>(
   apiBase: string,
   internalToken: string,
   path: string,
-  payload: unknown
+  payload: unknown,
+  accessHeaders: Record<string, string> = {}
 ): Promise<T> {
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   const response = await fetch(url, {
@@ -149,6 +159,7 @@ async function postMembersInternal<T>(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${internalToken}`,
+      ...accessHeaders,
     },
     body: JSON.stringify(payload),
   });
@@ -167,13 +178,15 @@ async function postMembersInternal<T>(
 export async function postMembersSearch(
   apiBase: string,
   internalToken: string,
-  payload: MembersSearchPayload
+  payload: MembersSearchPayload,
+  accessHeaders: Record<string, string> = {}
 ): Promise<MembersSearchResponse> {
   return postMembersInternal<MembersSearchResponse>(
     apiBase,
     internalToken,
     "/api/internal/members-search",
-    payload
+    payload,
+    accessHeaders
   );
 }
 
@@ -183,13 +196,15 @@ export async function postMembersSearch(
 export async function postMembersGet(
   apiBase: string,
   internalToken: string,
-  payload: MembersGetPayload
+  payload: MembersGetPayload,
+  accessHeaders: Record<string, string> = {}
 ): Promise<MembersGetResponse> {
   return postMembersInternal<MembersGetResponse>(
     apiBase,
     internalToken,
     "/api/internal/members-get",
-    payload
+    payload,
+    accessHeaders
   );
 }
 
@@ -199,12 +214,14 @@ export async function postMembersGet(
 export async function postMembersUpdate(
   apiBase: string,
   internalToken: string,
-  payload: MembersUpdatePayload
+  payload: MembersUpdatePayload,
+  accessHeaders: Record<string, string> = {}
 ): Promise<MembersUpdateResponse> {
   return postMembersInternal<MembersUpdateResponse>(
     apiBase,
     internalToken,
     "/api/internal/members-update",
-    payload
+    payload,
+    accessHeaders
   );
 }

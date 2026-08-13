@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.50.0（版の実物は version.ts の APP_VERSION を見る）
+ * shia2n-mcp エントリーポイント v0.51.0（版の実物は version.ts の APP_VERSION を見る）
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -198,6 +198,23 @@
  *          値が悪いのか決まりが悪いのかを画面から切り分けられなかった。
  *          出すのは 文字数・末尾が .access か・前後の空白の有無 の 3 つだけで、
  *          値そのものは絶対に出さない（点検の口は認証なしで開けるため）。
+ * v0.51.0：会員管理くんを叩く 6 本にも関門の合言葉を載せた（2026-08-13）
+ *          タスク：https://www.notion.so/3b99c6c1c439817f9d1de0db7d444f08
+ *          会員管理くん（members.shia2n.jp）の手前に Cloudflare Access の関門を
+ *          置くため、そこを通って呼ぶ側にサービス用の合言葉を載せる。
+ *          売上管理（v0.49.0）と同じ形で、合言葉は同じ 2 つを使い回す
+ *          （CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET・追加の設定は要らない）。
+ *          ① cf-access.ts が受け取る型を、必要な 2 つだけを持つ形に広げた。
+ *             tools-members.ts は自分用の小さな型を持っており Env を渡せなかったため。
+ *          ② 会員管理くんを叩く 6 本すべてに見出しを足した。
+ *             30 分ごとの読者の取り込み（cron-utage-polling → sync-utage-batch）／
+ *             15 分と 45 分の自動写像（cron-auto-mapping → apply-auto-mapping-batch）／
+ *             取り込み直しの口（handle-utage-backfill → sync-utage-batch）／
+ *             members__search・members__get・members__update の 3 本／
+ *             点検の口（handle-utage-diag の会員管理くんへの疎通確認）。
+ *             会員管理くん側の受け口が見る合言葉（Authorization）は別物で、両方送る。
+ *          関門がまだ無い住所へ送っても余分な見出しとして無視されるだけなので、
+ *          先にこちらを反映し、動くことを見てから関門をかける順番が採れる。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

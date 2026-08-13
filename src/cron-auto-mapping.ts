@@ -15,6 +15,7 @@
  */
 
 import type { Env } from "./index.js";
+import { cfAccessHeaders } from "./cf-access.js";
 
 export interface ApplyAutoMappingBatchResponse {
   ok: boolean;
@@ -37,6 +38,9 @@ export async function handleAutoMappingCron(env: Env): Promise<void> {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${env.MEMBERS_INTERNAL_SECRET}`,
+      // 2026-08-13：会員管理くんの住所の手前に入口の関門を置くため、
+      // サービス用の合言葉を載せる。合言葉が未設定なら空で、今までどおり。
+      ...cfAccessHeaders(env),
     },
     body: JSON.stringify({ trigger: "cron_scheduled" }),
   });
