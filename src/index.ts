@@ -550,12 +550,10 @@ export default {
       if (utcMinute === 0 && utcHour === 18) {
         tasks.push(
           runAndRecord(env, "zeus_sync", async () => {
-            await handleZeusSync(env);
-            return {
-              count: null,
-              detail:
-                "取り込みの開始までを確認（何件入ったかは Zeus 側にあり、ここでは分かりません）",
-            };
+            // 2026-08-14：取り込み元 5 つを 1 つずつ起動する形に変えた。
+            // 何本起動できたかは handleZeusSync が返す。何件入ったかは
+            // zeus-worker が自分で書く zeus_import に 1 本ごとに残る。
+            return await handleZeusSync(env);
           })
         );
       }
