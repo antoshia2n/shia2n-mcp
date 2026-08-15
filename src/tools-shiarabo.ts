@@ -226,7 +226,12 @@ export function registerShiaraboTools(server: McpServer, env: Env): void {
       }
 
       // 3. 書く
-      await sbPatch(env, `/shr_students?id=eq.${args.id}`, args.updates as Row);
+      //    更新時刻は呼び出し側からは受け付けない（UPDATE_FORBIDDEN_COLUMNS）が、
+      //    道具の側で必ず入れる。表に自動で時刻を入れる仕掛けが無く、画面の側だけが
+      //    入れていたため、道具から書くと更新時刻が動かないままだった（2026-08-15 実測）。
+      //    数字の欄は中身に更新日を含む定義のため、いつの値かが分からなくなる。
+      const patch: Row = { ...(args.updates as Row), updated_at: new Date().toISOString() };
+      await sbPatch(env, `/shr_students?id=eq.${args.id}`, patch);
 
       // 4. 取り直す（返り値が成功でも、入ったかどうかは取り直すまで分からない）
       const afterRows = await sbGet(env, `/shr_students?select=*&id=eq.${args.id}&limit=1`);
