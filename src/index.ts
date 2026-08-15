@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.51.0（版の実物は version.ts の APP_VERSION を見る）
+ * shia2n-mcp エントリーポイント v0.52.0（版の実物は version.ts の APP_VERSION を見る）
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -213,6 +213,20 @@
  *             会員管理くん側の受け口が見る合言葉（Authorization）は別物で、両方送る。
  *          関門がまだ無い住所へ送っても余分な見出しとして無視されるだけなので、
  *          先にこちらを反映し、動くことを見てから関門をかける順番が採れる。
+ * v0.52.0：しあらぼ管理の道具を作り直し、書く道具を 1 本足した（2026-08-15）
+ *          依頼書：https://www.notion.so/3bd9c6c1c439819a9b1ee47437e09cf4
+ *          ① 読む 2 本が、表の列を道具の中に名前で並べて持っていたため、
+ *             2026-08-15 に列を 32 から 22 へ入れ替えたときに落ちていた
+ *             （一覧＝400 で停止・1 件＝消えた列を空文字で返す）。
+ *             同じことは 2026-08-07 にも起きている（存在しない email を返し続けた）。
+ *             2 回目のため個別の直しをやめ、列を指定せずに取って、
+ *             返さない列だけを名前で持つ形に変えた。列が増減しても落ちない。
+ *          ② 書く道具 shiarabo__update_student を追加。1 回 1 人・
+ *             氏名と連絡先は書き換え不可・preview で前後の値だけ確認・
+ *             書いたあとに取り直して結果を返す（会員の道具と同じ形）。
+ *          ③ 段階（S0〜S4）の日本語への言い換えを外した。値そのものを
+ *             領域の名前へ入れ替える方針になり、古い対応表が当たらないため。
+ *          変えたのは src/tools-shiarabo.ts と src/version.ts のみ。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
