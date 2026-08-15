@@ -45,10 +45,8 @@
  *          （方針変更 Decision 3959c6c1-c439-81f9-9cac-e2dd3a93ac0d / 2026-07-06）
  *          Slack 自動投稿 cron を廃止：cron-weekly-review.ts 削除・
  *          scheduled ハンドラから日曜 00:00 UTC 分岐削除・handleWeeklyReviewCron import 削除
- *          代替として munikis__get_context のレスポンスに weekly_review_due フラグを追加
- *          （実装は munikis-client.ts 側）
- *          Naoki は「Google カレンダー繰返予定（日曜 09:00 JST）+ Claude 起動時フラグ」の
- *          二段構えで週次レビュー発火を管理する
+ *          代替として munikis__get_context のレスポンスに weekly_review_due フラグを追加した。
+ *          このフラグは 2026-08-15 に削除済み（週次レビューそのものが 2026-08-11 に廃止された）。
  * v0.33.0：ネタ9本メールに入切スイッチ（NETA_MAIL_ENABLED）を追加
  *          Anthropic 側の残高切れで毎日 2 回（JST 03:00 / 07:00）失敗が続くため、
  *          Naoki の方針「一旦止める」を受けて既定を止まる側にする。
@@ -481,7 +479,7 @@ export default {
     // v0.31.0：cron は 2 本（"0,30 * * * *" と "15,45 * * * *"）
     // controller.cron で分岐する（Free プラン 5 本上限内・現状 2 本使用）。
     // v0.30.0 で追加した週次レビュー Slack 投稿は v0.31.0 で廃止済み（方針変更 Decision による）。
-    // 週次レビュー未起票検知は munikis__get_context の weekly_review_due フラグに移行。
+    // 週次レビューは 2026-08-11 に廃止。起動時の合図も 2026-08-15 に削除済み。
     const scheduledDate = new Date(controller.scheduledTime);
     const utcHour = scheduledDate.getUTCHours();
     const utcMinute = scheduledDate.getUTCMinutes();
