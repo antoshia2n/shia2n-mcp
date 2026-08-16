@@ -41,6 +41,9 @@ export const KNOWN_JOBS = [
   // 書くのは zeus-worker 側（同じ KV・同じ鍵の形 cronlog:zeus_import）。
   // 既存の zeus_sync は「起動できた」の記録なので、置き換えず別の欄にする。
   "zeus_import",
+  // 2026-08-16 追加：数字の 1 画面（把握くん）の上位の目標を毎晩 1 回入れる処理。
+  // 依頼書：https://www.notion.so/3be9c6c1c439818992dccf7adb533c5a
+  "haaku_fill",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];

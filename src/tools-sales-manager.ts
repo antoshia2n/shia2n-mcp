@@ -299,7 +299,9 @@ async function fetchSMData(
 // 集計メイン（useRevenue.js の stats useMemo を移植）
 // ─────────────────────────────────────────────
 
-async function getRevenueSummary(env: Env) {
+// 2026-08-16：毎晩の処理（cron-haaku-fill.ts）からも同じ集計を使うため export する。
+// 同じ計算をもう 1 つ書くと、片方だけ直したときに数字が食い違うため。
+export async function getRevenueSummary(env: Env) {
   // 2026-08-08：設定値が無いときの行き先も新しい住所に合わせる（保険）
   const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager.shia2n.jp";
   const { payments, contracts, singles, budgets, businesses } = await fetchSMData(

@@ -851,3 +851,61 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
     }
   );
 }
+
+// ─── 上位の目標の現在値だけを書き換える（2026-08-16 追加・毎晩の処理から使う） ──
+//
+// 依頼書：https://www.notion.so/3be9c6c1c439818992dccf7adb533c5a
+// 判断記録：https://www.notion.so/3be9c6c1c439811880f1f73726d4bae2
+//
+// haAku__update_daily_report と同じ場所（users/{uid}/app_data/os_kgis）へ書く。
+// 道具の側の作りは変えていない。毎晩の処理から同じ書き方を使い回すために、
+// 現在値の書き換えだけを関数として切り出した。
+//
+// 日報の 4 欄と手前の数字には触れない。指定した id が見つからなければ、
+// 1 件も書かずに止める（半分だけ入った状態を作らないため）。
+export async function applyKgiCurrents(
+  env: Env,
+  patches: { id: string; current: number }[]
+): Promise<{ id: string; title: string; current: number | null }[]> {
+  if (patches.length === 0) return [];
+
+  const uid = env.NAOKI_UID;
+  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    throw new Error(
+      "Firebase env not configured (NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY)"
+    );
+  }
+
+  const token   = await getFirestoreToken(env);
+  const kgiPath = `users/${uid}/app_data/os_kgis`;
+
+  const kgis = await loadArrayDocStrict<KgiDef>(token, uid, "os_kgis");
+  if (kgis.length === 0) {
+    throw new Error("上位の目標が 1 件も読み取れませんでした。書き込みは行っていません");
+  }
+
+  const next = kgis.map((g) => ({ ...g }));
+  for (const patch of patches) {
+    if (!Number.isFinite(patch.current)) {
+      throw new Error(
+        `上位の目標「${patch.id}」に渡された値が数値ではありません。書き込みは行っていません`
+      );
+    }
+    const hit = next.find((g) => g.id === patch.id);
+    if (!hit) {
+      const names = next.map((g) => `${g.title}(${g.id})`).join(" / ");
+      throw new Error(
+        `指定された上位の目標が見つかりません（id=${patch.id}）。登録されているもの: ${names}。書き込みは行っていません`
+      );
+    }
+    hit.current = patch.current;
+  }
+
+  await fsPatch(token, kgiPath, { value: toFVal(next) }, ["value"]);
+
+  // 書いたあとに読み直して、入った値をそのまま返す
+  const after = await loadArrayDoc<KgiDef>(token, uid, "os_kgis");
+  return after
+    .filter((g) => patches.some((p) => p.id === g.id))
+    .map((g) => ({ id: g.id, title: g.title, current: g.current ?? null }));
+}

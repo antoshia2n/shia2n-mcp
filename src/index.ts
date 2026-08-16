@@ -227,6 +227,23 @@
  *          ③ 段階（S0〜S4）の日本語への言い換えを外した。値そのものを
  *             領域の名前へ入れ替える方針になり、古い対応表が当たらないため。
  *          変えたのは src/tools-shiarabo.ts と src/version.ts のみ。
+ *
+ * v0.53.0：数字の 1 画面（把握くん）の上位の目標 2 欄を毎晩 1 回入れる（2026-08-16）
+ *          依頼書：https://www.notion.so/3be9c6c1c439818992dccf7adb533c5a
+ *          判断記録：https://www.notion.so/3be9c6c1c439811880f1f73726d4bae2
+ *          ① cron-haaku-fill.ts を新設。UTC 18:30（JST 03:30）の 1 回だけ、
+ *             売上管理の当月の確定を万円に直したものと、しあらぼ管理の
+ *             アーカイブを除いた人数を、把握くんの上位の目標へ書く。
+ *             cron の枠は増やしていない（既存の 0,30 に相乗り）。
+ *          ② tools-haaku.ts に applyKgiCurrents を足した。現在値の書き換えだけを
+ *             切り出したもので、道具の側の作りは変えていない。
+ *          ③ tools-sales-manager.ts の getRevenueSummary を export にした。
+ *             同じ集計をもう 1 つ書くと、片方だけ直したときに食い違うため。
+ *          ④ cron-log.ts に haaku_fill を足した。これで /diag の last_runs と
+ *             起動時の状態取得にも出る。
+ *          インプは入れない。ContentOS は投稿ごとの累計の表示回数を上書きで
+ *             持つだけで、日ごとの増分を残していないため、その日ぶんの値を
+ *             作れない（2026-08-16 Naoki 判断で人が入れる側に残す）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -260,6 +277,7 @@ import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleZeusSync } from "./cron-zeus-sync.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
+import { handleHaakuFill } from "./cron-haaku-fill.js";
 import { runBackupSlot } from "./cron-backup.js";
 import { registerRestoreTools } from "./tools-restore.js";
 
@@ -579,6 +597,21 @@ export default {
         tasks.push(
           runAndRecord(env, "contentos_metrics", async () => {
             return await handleContentOsMetricsSync(env);
+          })
+        );
+      }
+
+      // 2026-08-16：数字の 1 画面（把握くん）の上位の目標 2 欄を入れる
+      // （UTC 18:30 = JST 03:30 のみ発火）
+      // 依頼書：https://www.notion.so/3be9c6c1c439818992dccf7adb533c5a
+      // 入れるのは着金としあらぼの在籍の 2 つだけ。インプは人が入れる側に残す
+      // （ContentOS が日ごとの増分を持っていないため・2026-08-16 Naoki 判断）。
+      // Zeus の取り込み（JST 03:00）とデータの控え（JST 04:00 開始）の間に置いた。
+      // cron 枠は増やさず、既存の 0,30 の枠に相乗りする。
+      if (utcMinute === 30 && utcHour === 18) {
+        tasks.push(
+          runAndRecord(env, "haaku_fill", async () => {
+            return await handleHaakuFill(env);
           })
         );
       }
