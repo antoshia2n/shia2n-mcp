@@ -206,6 +206,14 @@ const KGI_PERIODS = ["annual", "monthly", "weekly", "daily"];
 const KPI_PERIODS = ["daily", "weekly", "monthly"];
 
 /**
+ * 日ごとの記録は年ごとの文書（os_daily_{年}）に分かれている。
+ * 欄を消す前に「その欄の数字がすでに入っていないか」を数えるとき、
+ * どの年まで遡って見るかの下限。これより前の年は見ていないため、
+ * 数えた年の一覧を戻り値に入れて、どこまで見たかが分かるようにしてある。
+ */
+const DAILY_SCAN_FROM_YEAR = 2024;
+
+/**
  * 把握くんの画面が付けているのと同じ形の id を作る。
  * 形：id_{協定世界時のミリ秒}_{英数字5文字}
  * 2026-08-17 実測：登録されている 8 本すべてがこの形（例 id_1786027582369_5v247）。
@@ -879,15 +887,16 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
     }
   );
 
-  // ─── 5. haAku__add_kpi ────────────────────────────────────────────────────
+  // ─── 6. haAku__add_kpi ────────────────────────────────────────────────────
   //
   // 2026-08-17 追加。これまで手前の数字（KPI）を新しく作る口が無く、
   // 画面からしか足せなかった。毎晩の自動で埋める欄を足すたびに Naoki の手が
   // 1 回増えるため、作る側も道具から通す。
   //
-  // 消す口は作らない。手前の数字を消すと、日ごとの記録に残っている実績の
-  // 行き先が黙って無くなるため。要らなくなったときは名前と月次目標の
-  // 書き換え（haAku__update_goals）で足りる。
+  // 消す口は 2026-08-17 に足した（下の haAku__remove_kpi）。
+  // 同じ日の午前に「消す口は作らない・要らなくなったら名前と月次目標の
+  // 書き換えで足りる」と書いたが、これは当たっていなかった。
+  // 名前や月次目標を書き換えても、欄は画面に出続けるため。
   server.tool(
     "haAku__add_kpi",
     "haAku に手前の数字（KPI）を 1 本追加する。日ごとに実績を積む欄の器を作るときに使う。" +
@@ -1021,6 +1030,123 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
       });
     }
   );
+
+  // ─── 7. haAku__remove_kpi ─────────────────────────────────────────────────
+  //
+  // 2026-08-17 追加。手前の数字を画面から 1 本外すための口。
+  //
+  // 外す印（hidden）を持っているのは上位の目標だけで、手前の数字は持っていない。
+  // 画面は登録されている手前の数字をそのまま並べるため、名前を変えても
+  // 月次目標を外しても出続ける。親ごと隠す手も、親を使い続けているときは
+  // 使えない（例：インプ（日次）の親は X収益で、X収益は残す）。
+  // したがって画面から外す道は「欄そのものを消す」しかない。
+  //
+  // ただし「消すと日ごとの記録の行き先が黙って無くなる」という心配は残る。
+  // そこで、その欄の数字が日ごとの記録に 1 件でも入っていれば既定では消さず、
+  // 件数を添えて止める。それでも消すときだけ remove_anyway を渡してもらう。
+  // 消すのは欄の定義だけで、日ごとの記録には手を触れない（数字は残る）。
+  server.tool(
+    "haAku__remove_kpi",
+    "haAku から手前の数字（KPI）を 1 本消す。画面に出さなくするときに使う。" +
+      "消すのは欄の定義だけで、日ごとの記録に入っている数字には触れない（数字はそのまま残る）。" +
+      "既定では、日ごとの記録にその欄の数字が 1 件でも入っていれば、件数を添えて何も書かずに止める。" +
+      "それでも消すときは remove_anyway に true を渡す。" +
+      "相手は id か title のどちらかで指定し、見つからない・同じ名前が複数あるときは何も書かずに止める。" +
+      "戻り値: { ok, removed: {id, title, value_count, scanned_years}, kpis: [{id, title, unit, period, monthlyTarget, kgiId}] }（書き込んだあとに読み直した値）",
+    {
+      id: z
+        .string()
+        .optional()
+        .describe("消す手前の数字の id。haAku__get_kpi_progress の kpis で確認する"),
+      title: z
+        .string()
+        .optional()
+        .describe("消す手前の数字の名前。id の代わりに使える。同じ名前が複数あるときは止まる"),
+      remove_anyway: z
+        .boolean()
+        .optional()
+        .describe(
+          "日ごとの記録に数字が入っていても消すときだけ true を渡す。省略時は false（数字があれば消さずに止める）"
+        ),
+    },
+    async (args) => {
+      const uid = env.NAOKI_UID;
+      if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+        throw new Error("Firebase env not configured (NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY)");
+      }
+
+      if (!args.id && !args.title) {
+        throw new Error(
+          "消す相手が指定されていません（id か title のどちらかが要ります）。書き込みは行っていません"
+        );
+      }
+
+      const token = await getFirestoreToken(env);
+      const kpiPath = `users/${uid}/app_data/os_kpis`;
+
+      const kpis = await loadArrayDocStrict<KpiDef>(token, uid, "os_kpis");
+      if (kpis.length === 0) {
+        throw new Error("手前の数字が 1 件も読み取れませんでした。書き込みは行っていません");
+      }
+
+      const target = findOneByIdOrTitle(kpis, { id: args.id, title: args.title }, "手前の数字");
+
+      // 日ごとの記録に、この欄の数字がすでに入っていないかを先に数える
+      const thisYear = Number(todayJst().slice(0, 4));
+      const scannedYears: string[] = [];
+      let valueCount = 0;
+      for (let y = DAILY_SCAN_FROM_YEAR; y <= thisYear; y++) {
+        const year = String(y);
+        scannedYears.push(year);
+        const daily = await loadDailyYearStrict(token, uid, year);
+        for (const rec of Object.values(daily)) {
+          if (typeof rec?.kpiValues?.[target.id] === "number") valueCount++;
+        }
+      }
+
+      if (valueCount > 0 && args.remove_anyway !== true) {
+        throw new Error(
+          `手前の数字「${target.title}」には日ごとの記録が ${valueCount} 件あります` +
+            `（${scannedYears.join(" / ")} 年を確認）。欄を消すと、この数字の行き先が無くなります。` +
+            "それでも消すときは remove_anyway に true を渡してください。書き込みは行っていません"
+        );
+      }
+
+      const next = kpis.filter((k) => k.id !== target.id).map((k) => ({ ...k }));
+      await fsPatch(token, kpiPath, { value: toFVal(next) }, ["value"]);
+
+      // 書いたあとに読み直して、消えたことと本数を確かめてから返す
+      const after = await loadArrayDoc<KpiDef>(token, uid, "os_kpis");
+      if (after.some((k) => k.id === target.id)) {
+        throw new Error(
+          `書いたあとの読み直しで「${target.title}」がまだ残っています（id=${target.id}）。消えていない可能性があります`
+        );
+      }
+      if (after.length !== kpis.length - 1) {
+        throw new Error(
+          `書いたあとの読み直しで本数が合いません（消す前 ${kpis.length} 本 / 消したあと ${after.length} 本）`
+        );
+      }
+
+      return asMcpTextResult({
+        ok: true,
+        removed: {
+          id: target.id,
+          title: target.title,
+          value_count: valueCount,
+          scanned_years: scannedYears,
+        },
+        kpis: after.map((k) => ({
+          id: k.id,
+          title: k.title,
+          unit: k.unit,
+          period: k.period,
+          monthlyTarget: k.monthlyTarget,
+          kgiId: k.kgiId,
+        })),
+      });
+    }
+  );
 }
 
 // ─── 上位の目標の現在値だけを書き換える（2026-08-16 追加・毎晩の処理から使う） ──
@@ -1081,103 +1207,8 @@ export async function applyKgiCurrents(
     .map((g) => ({ id: g.id, title: g.title, current: g.current ?? null }));
 }
 
-// ─── 手前の数字の実績を日ごとに書き込む（2026-08-17 追加・毎晩の処理から使う）──
-//
-// haAku__update_daily_report と同じ場所（users/{uid}/app_data/os_daily_{年}）へ書く。
-// 道具の側の作りは変えていない。毎晩の処理から同じ書き方を使い回すために、
-// 手前の数字の実績の書き込みだけを関数として切り出した。
-//
-// 日報の 4 欄と上位の目標には触れない。渡した日・渡した欄だけを差し替え、
-// 渡さなかったものは元の値のまま残す。
-//
-// 1 年をまたぐ範囲（12/31 と 1/1 など）も、年ごとに分けて書き込む。
-// 読み取りに失敗したときは書かずに止める（空で上書きして 1 年分を消さないため）。
-export async function applyKpiDailyValues(
-  env: Env,
-  entries: { date: string; kpiId: string; value: number }[]
-): Promise<{ date: string; kpiId: string; value: number }[]> {
-  if (entries.length === 0) return [];
-
-  const uid = env.NAOKI_UID;
-  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
-    throw new Error(
-      "Firebase env not configured (NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY)"
-    );
-  }
-
-  for (const e of entries) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(e.date)) {
-      throw new Error(`date は YYYY-MM-DD 形式で渡してください（受け取った値: ${e.date}）`);
-    }
-    if (!Number.isFinite(e.value)) {
-      throw new Error(
-        `手前の数字「${e.kpiId}」の ${e.date} に渡された値が数値ではありません。書き込みは行っていません`
-      );
-    }
-  }
-
-  const token = await getFirestoreToken(env);
-
-  // 書く前に、指定された手前の数字が実在するかを見る。
-  // 無い id へ書くと、日ごとの記録に行き先の無い数字が積もるため。
-  const kpis = await loadArrayDocStrict<KpiDef>(token, uid, "os_kpis");
-  for (const kpiId of new Set(entries.map((e) => e.kpiId))) {
-    if (!kpis.some((k) => k.id === kpiId)) {
-      const names = kpis.map((k) => `${k.title}(${k.id})`).join(" / ");
-      throw new Error(
-        `指定された手前の数字が見つかりません（id=${kpiId}）。登録されているもの: ${names}。書き込みは行っていません`
-      );
-    }
-  }
-
-  // 年ごとにまとめる（保存先が年で分かれているため）
-  const byYear = new Map<string, typeof entries>();
-  for (const e of entries) {
-    const year = e.date.slice(0, 4);
-    const list = byYear.get(year) ?? [];
-    list.push(e);
-    byYear.set(year, list);
-  }
-
-  for (const [year, list] of byYear) {
-    const dailyPath = `users/${uid}/app_data/os_daily_${year}`;
-    const dailyByDate = await loadDailyYearStrict(token, uid, year);
-
-    const nextDaily: Record<string, DailyRecord> = { ...dailyByDate };
-    for (const e of list) {
-      const prev = nextDaily[e.date] ?? {};
-      nextDaily[e.date] = {
-        ...prev,
-        kpiValues: { ...(prev.kpiValues ?? {}), [e.kpiId]: e.value },
-      };
-    }
-
-    await fsPatch(token, dailyPath, { value: toFVal(nextDaily) }, ["value"]);
-  }
-
-  // 書いたあとに読み直して、入った値をそのまま返す
-  const out: { date: string; kpiId: string; value: number }[] = [];
-  for (const year of byYear.keys()) {
-    const after = await loadDailyYearStrict(token, uid, year);
-    for (const e of byYear.get(year) ?? []) {
-      const v = after[e.date]?.kpiValues?.[e.kpiId];
-      out.push({ date: e.date, kpiId: e.kpiId, value: typeof v === "number" ? v : NaN });
-    }
-  }
-  return out;
-}
-
-/** 手前の数字の一覧を返す（毎晩の処理が名前から id を引くために使う） */
-export async function listKpiDefs(
-  env: Env
-): Promise<{ id: string; title: string; unit: string; kgiId: string }[]> {
-  const uid = env.NAOKI_UID;
-  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
-    throw new Error(
-      "Firebase env not configured (NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY)"
-    );
-  }
-  const token = await getFirestoreToken(env);
-  const kpis = await loadArrayDocStrict<KpiDef>(token, uid, "os_kpis");
-  return kpis.map((k) => ({ id: k.id, title: k.title, unit: k.unit, kgiId: k.kgiId }));
-}
+// 手前の数字の実績を日ごとに書き込む口（applyKpiDailyValues）と、
+// 名前から id を引く口（listKpiDefs）は 2026-08-17 に落とした。
+// 同じ日の午前に足したもので、呼んでいたのは毎晩 3:30 のインプ（日次）だけ。
+// その処理を外したため呼び元が 0 になった。
+// 日ごとの実績を書く道は haAku__update_daily_report に残っている。

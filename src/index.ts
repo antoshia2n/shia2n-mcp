@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.52.0（版の実物は version.ts の APP_VERSION を見る）
+ * shia2n-mcp エントリーポイント v0.54.0（版の実物は version.ts の APP_VERSION を見る）
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -244,6 +244,28 @@
  *          インプは入れない。ContentOS は投稿ごとの累計の表示回数を上書きで
  *             持つだけで、日ごとの増分を残していないため、その日ぶんの値を
  *             作れない（2026-08-16 Naoki 判断で人が入れる側に残す）。
+ *
+ * v0.54.0：インプ（日次）を毎晩 3:30 から外し、手前の数字を消す口を足した（2026-08-17）
+ *          この 1 つ前の 0.53.0 のときに、版を上げずにインプ（日次）を足した回がある。
+ *          そのときの中身：ContentOS に日ごとの表示回数を返す口を置き、
+ *          cron-haaku-fill.ts から 21 日ぶんを毎晩入れ直す形にし、
+ *          tools-haaku.ts に haAku__add_kpi と 2 つの切り出しを足した。
+ *          履歴に行を足していなかったので、ここに残す。
+ *          今回（0.54.0）で変えたのは 4 つ。
+ *          ① cron-haaku-fill.ts からインプ（日次）を外した。入れるのは
+ *             着金としあらぼの 2 つに戻る。取り下げの理由は不具合ではなく、
+ *             入れていた数字を見る予定が無いこと（Naoki 判断）。
+ *             足した側は 1 度も動いていない（初回の 03:30 より前に外した）。
+ *          ② tools-haaku.ts に haAku__remove_kpi を足した。手前の数字を
+ *             1 本消す口。外す印を持つのは上位の目標だけで、手前の数字は
+ *             名前を変えても月次目標を外しても画面に出続けるため、
+ *             画面から外す道は欄を消すしかない。日ごとの記録に数字が
+ *             1 件でも入っていれば、件数を添えて何も書かずに止める。
+ *          ③ tools-haaku.ts から applyKpiDailyValues と listKpiDefs を落とした。
+ *             ①で呼び元が 0 になったため。
+ *          ④ ContentOS 側の日ごとの表示回数を返す口はそのまま残した。
+ *             呼ばれなくなるだけで害が無く、消すと手が 1 回増えるため。
+ *             使っていない口として 8/24 の仕分けに載せる。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
