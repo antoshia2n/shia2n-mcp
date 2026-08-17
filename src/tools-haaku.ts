@@ -43,6 +43,12 @@ interface KgiDef {
   current?: number;
   period?: string;
   deadline?: string;
+  // 2026-08-17 追加：画面側で上位の目標を 2 段に分けたため、その 2 欄を読めるようにした。
+  //   parentKgiId … 空なら 1 段目（最終目標）、他の目標の id が入っていれば 2 段目（事業の目標）
+  //   hidden      … true ならホームと一覧から外している（数字と過去の記録は残っている）
+  // どちらもこの道具からは書き換えない。書き換えるのは画面だけ。
+  parentKgiId?: string;
+  hidden?: boolean;
 }
 
 interface DailyRecord {
@@ -372,7 +378,7 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
   // ─── 1. haAku__get_kpi_progress ───────────────────────────────────────────
   server.tool(
     "haAku__get_kpi_progress",
-    "haAku の KPI 進捗を取得する。秘書室の朝レポートで当月の KPI 達成状況を確認するときに使う。各 KPI の月次目標・当月累計実績・達成率・当日実績を返す。戻り値: { ok, date, month, kpis: [{id, title, unit, period, monthlyTarget, monthly_actual, today_actual, pct, kgiId}], kgis: [{id, title, target, unit, current}] }",
+    "haAku の KPI 進捗を取得する。秘書室の朝レポートで当月の KPI 達成状況を確認するときに使う。各 KPI の月次目標・当月累計実績・達成率・当日実績を返す。戻り値: { ok, date, month, kpis: [{id, title, unit, period, monthlyTarget, monthly_actual, today_actual, pct, kgiId}], kgis: [{id, title, target, unit, current, parent_kgi_id, hidden}] }。parent_kgi_id が空なら 1 段目（最終目標）、他の目標の id が入っていれば 2 段目（事業の目標）。hidden が true ならホームと一覧から外している（数字は残っている）",
     {
       date: z
         .string()
@@ -438,6 +444,8 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           target:  g.target,
           unit:    g.unit,
           current: g.current ?? null,
+          parent_kgi_id: g.parentKgiId ?? null,
+          hidden:        g.hidden === true,
         })),
       });
     }
@@ -498,7 +506,7 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
   // ─── 3. haAku__update_daily_report ────────────────────────────────────────
   server.tool(
     "haAku__update_daily_report",
-    "haAku の指定日の日報を書き込む（部分更新）。Naoki が話した内容を4欄と数値に振り分けて記録するときに使う。渡した項目だけ更新し、渡さなかった項目はもとの値を保つ。同じ日に2回目を送っても行は増えず上書きになる。KGI の現在値（メンシプ会員数など）も同じ道具で更新できる。戻り値: { ok, date, updated, report: {goal, achieved, reflection, improvement}, kpi_values: {kpiId: number}, kpi_labels: {kpiId: {title, unit}}, kgis: [{id, title, target, unit, current}] }（すべて書き込んだあとに読み直した値）",
+    "haAku の指定日の日報を書き込む（部分更新）。Naoki が話した内容を4欄と数値に振り分けて記録するときに使う。渡した項目だけ更新し、渡さなかった項目はもとの値を保つ。同じ日に2回目を送っても行は増えず上書きになる。KGI の現在値（メンシプ会員数など）も同じ道具で更新できる。戻り値: { ok, date, updated, report: {goal, achieved, reflection, improvement}, kpi_values: {kpiId: number}, kpi_labels: {kpiId: {title, unit}}, kgis: [{id, title, target, unit, current, parent_kgi_id, hidden}] }（すべて書き込んだあとに読み直した値）",
     {
       date: z
         .string()
@@ -652,6 +660,8 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           target:  g.target,
           unit:    g.unit,
           current: g.current ?? null,
+          parent_kgi_id: g.parentKgiId ?? null,
+          hidden:        g.hidden === true,
         })),
       });
     }
@@ -754,6 +764,8 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           period:   g.period ?? null,
           deadline: g.deadline ?? null,
           current:  g.current ?? null,
+          parent_kgi_id: g.parentKgiId ?? null,
+          hidden:        g.hidden === true,
         })),
         kpis: kpisAfter.map((k) => ({
           id:            k.id,
@@ -769,7 +781,7 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
   // ─── 5. haAku__add_kgi ────────────────────────────────────────────────────
   server.tool(
     "haAku__add_kgi",
-    "haAku に上位の目標（KGI）を1本追加する。目標の器を作るときに使う。値がまだ決まっていない場合は target を渡さなければ空のまま作れる。同じ名前がすでにある場合は、何も書かずに止める。戻り値: { ok, added: {id, title}, kgis: [{id, title, target, unit, period, deadline, current}] }（書き込んだあとに読み直した値）",
+    "haAku に上位の目標（KGI）を1本追加する。目標の器を作るときに使う。値がまだ決まっていない場合は target を渡さなければ空のまま作れる。同じ名前がすでにある場合は、何も書かずに止める。戻り値: { ok, added: {id, title}, kgis: [{id, title, target, unit, period, deadline, current, parent_kgi_id, hidden}] }（書き込んだあとに読み直した値）",
     {
       title: z
         .string()
@@ -846,6 +858,8 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           period:   g.period ?? null,
           deadline: g.deadline ?? null,
           current:  g.current ?? null,
+          parent_kgi_id: g.parentKgiId ?? null,
+          hidden:        g.hidden === true,
         })),
       });
     }
