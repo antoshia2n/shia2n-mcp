@@ -1,5 +1,5 @@
 /**
- * shia2n-mcp エントリーポイント v0.54.0（版の実物は version.ts の APP_VERSION を見る）
+ * shia2n-mcp エントリーポイント v0.55.0（版の実物は version.ts の APP_VERSION を見る）
  *
  * v0.8.0：GET /taskmaster/tasks・/taskmaster/diag 追加
  * v0.9.0：taskmaster__list_tasks 追加
@@ -266,6 +266,14 @@
  *          ④ ContentOS 側の日ごとの表示回数を返す口はそのまま残した。
  *             呼ばれなくなるだけで害が無く、消すと手が 1 回増えるため。
  *             使っていない口として 8/24 の仕分けに載せる。
+ * v0.55.0：公式サイト（シアニンの積み上げラボ）の道具 6 本を呼ぶようにした（2026-08-18）
+ *          依頼書：https://www.notion.so/3bf9c6c1c43981ee81e8cf692af8f83b
+ *          tools-tsumiage.ts は 0.54.0 のあとに先へ置いてあり、どこからも
+ *          呼ばれていなかった。この版で index.ts から呼ぶ。
+ *          見る表は tl_contents / tl_note_links / tl_users の 3 本（2026-08-18 作成）。
+ *          tl_users（ログインした人）はこの道具から触らない。連絡先が入るため、
+ *          書くのは画面の側の口だけにする。消す道具も作らない（status を archived にする）。
+ *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -302,6 +310,7 @@ import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
 import { runBackupSlot } from "./cron-backup.js";
 import { registerRestoreTools } from "./tools-restore.js";
+import { registerTsumiageTools } from "./tools-tsumiage.js";
 
 export interface Env {
   // Core
@@ -418,6 +427,7 @@ function createMcpServer(env: Env): McpServer {
   registerMembersTools(server, env);
   registerMunikisTools(server, env);
   registerRestoreTools(server, env);
+  registerTsumiageTools(server, env);
   return server;
 }
 
