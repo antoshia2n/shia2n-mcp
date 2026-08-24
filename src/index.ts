@@ -274,6 +274,17 @@
  *          tl_users（ログインした人）はこの道具から触らない。連絡先が入るため、
  *          書くのは画面の側の口だけにする。消す道具も作らない（status を archived にする）。
  *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
+ * v0.56.0：学ぶくんにセミナーアーカイブを入れる道具を 2 本足した（2026-08-24）
+ *          依頼書：https://www.notion.so/3c69c6c1c439817fa18dcd0931f9bb54
+ *          mn__peek       … 読むだけ。表の欄と今ある棚を返す
+ *          mn__put_seminar … 一覧の 1 行を入れる。年の棚が無ければ作る
+ *          学ぶくんの画面の口は Firebase のログインの証明を要求し、MCP 側から
+ *          その証明は作れない。よって画面と同じ表へ Supabase 経由で直接書く。
+ *          見る表は mn_programs / mn_courses / mn_contents の 3 本と、
+ *          読むだけで mn_curriculums / mn_curriculum_programs の 2 本。
+ *          画面の口で棚を作ると Notion のプロジェクトDBにも行が増えるが、
+ *          この道具は表へ直接書くので増えない（増やさないことを選んでいる）。
+ *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -292,6 +303,7 @@ import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
+import { registerManabuSeminarTools } from "./tools-manabu-seminar.js";
 import { registerShiaraboTools } from "./tools-shiarabo.js";
 import { registerMembersTools } from "./tools-members.js";
 import { registerMunikisTools } from "./tools-munikis.js";
@@ -423,6 +435,7 @@ function createMcpServer(env: Env): McpServer {
   registerHaakuTools(server, env);
   registerKnowledgeTagTools(server, env);
   registerManabuTools(server, env);
+  registerManabuSeminarTools(server, env);
   registerShiaraboTools(server, env);
   registerMembersTools(server, env);
   registerMunikisTools(server, env);
