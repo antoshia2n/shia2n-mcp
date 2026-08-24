@@ -296,6 +296,15 @@
  *          日付の欄そのものを足すのは別の行にした。学ぶくん本体の画面 4 か所を
  *          直す必要があるため。並び順の欄に 20240110 の形で入っているので、
  *          欄を足した日にそこから写せる（データの作り直しは要らない）。
+ * v0.58.0：学ぶくんに、配る先を作る道具を 2 本足した（2026-08-24・統括の判定 7）
+ *          mn__put_curriculum … カリキュラムを作り、プログラムと学ぶ人を結ぶ
+ *          mn__learner_view   … 学ぶ人の画面に何が出るかを、画面と同じ道すじで返す
+ *          あわせて mn__peek に、棚ごとの件数と、会員とカリキュラムの結びを足した。
+ *          会員は番号だけを返し、名前と連絡先は返さない。
+ *          学ぶ人の画面は管理者では開けない（管理者は会員側に入れない作り）ため、
+ *          出る・出ないの判定は mn__learner_view で行う。
+ *          見る表は mn_curriculums / mn_curriculum_programs / mn_member_curriculums の
+ *          3 本と、読むだけで shr_members。設定の追加は無い。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

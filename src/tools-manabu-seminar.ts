@@ -43,6 +43,7 @@ const T_COURSES = "mn_courses";
 const T_CONTENTS = "mn_contents";
 const T_CURRICULUMS = "mn_curriculums";
 const T_CURRICULUM_PROGRAMS = "mn_curriculum_programs";
+const T_MEMBER_CURRICULUMS = "mn_member_curriculums";
 
 /** 1 回の呼び出しで入れられる上限 */
 const MAX_ROWS = 50;
@@ -248,7 +249,21 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
         `${T_CONTENTS}?select=id,course_id,title,order_index&order=order_index`
       );
       result["コンテンツの件数"] = contents.length;
-      result["コンテンツの題名"] = contents.map((c) => `${c.order_index} ${c.title}`);
+      const byCourse: Record<string, number> = {};
+      for (const c of contents) {
+        byCourse[c.course_id] = (byCourse[c.course_id] ?? 0) + 1;
+      }
+      result["棚ごとの件数"] = byCourse;
+
+      // 学ぶ人（ログインと結びついている会員だけ）。名前も連絡先も返さない
+      const members = await sbGet(env, `shr_members?select=id,user_id`);
+      const loginable = members.filter((m) => m.user_id);
+      result["会員の数"] = { 全体: members.length, ログインと結びついている人: loginable.length };
+      result["ログインと結びついている人の番号"] = loginable.map((m) => m.id);
+      result["会員とカリキュラムの結び"] = await sbGet(
+        env,
+        `${T_MEMBER_CURRICULUMS}?select=id,member_id,curriculum_id,active`
+      );
 
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
@@ -448,6 +463,260 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
           },
         ],
       };
+    }
+  );
+
+  // ─────────────────────────────────────────────
+  // カリキュラムを作り、プログラムと学ぶ人を結ぶ
+  // ─────────────────────────────────────────────
+  server.tool(
+    "mn__put_curriculum",
+    "カリキュラムを作り、プログラムと学ぶ人を結ぶ。カリキュラムが既にあれば作らずにそれを使う。結び直しても二重にならない。move_from があれば、その名前のカリキュラムから同じ人の結びを外してから付け替える。dry_run=true で何もせずに予定だけ返す。",
+    {
+      title: z.string().describe("カリキュラムの名前（例：しあらぼ）"),
+      slug: z
+        .string()
+        .optional()
+        .describe("住所に使う英小文字・数字・ハイフン（3〜50 文字）。省略すると設定しない"),
+      program_titles: z
+        .array(z.string())
+        .optional()
+        .describe("このカリキュラムに結ぶプログラムの名前。既に結ばれていれば何もしない"),
+      member_ids: z
+        .array(z.string())
+        .optional()
+        .describe("結ぶ学ぶ人の番号。mn__peek の「ログインと結びついている人の番号」から渡す"),
+      move_from: z
+        .string()
+        .optional()
+        .describe("この名前のカリキュラムに同じ人の結びがあれば外す（付け替え）"),
+      user_id: z.string().optional().describe("持ち主。省略すると今あるカリキュラムまたはプログラムから読み取る"),
+      dry_run: z.boolean().optional().describe("true で何もせずに予定だけ返す"),
+    },
+    async ({ title, slug, program_titles, member_ids, move_from, user_id, dry_run }) => {
+      const curriculums = await sbGet(
+        env,
+        `${T_CURRICULUMS}?select=id,user_id,title,slug,order_index&order=order_index`
+      );
+      const programs = await sbGet(env, `${T_PROGRAMS}?select=id,user_id,title`);
+
+      let owner = user_id;
+      if (!owner) {
+        const owners = Array.from(
+          new Set([...curriculums, ...programs].map((r) => r.user_id).filter(Boolean))
+        );
+        if (owners.length !== 1) {
+          throw new Error(
+            `持ち主を決められませんでした（${owners.length} 種類）。user_id を指定してください`
+          );
+        }
+        owner = owners[0] as string;
+      }
+
+      // 結ぶ相手のプログラムを先に全部見つける。1 つでも見つからなければ何もせず止める
+      const targetPrograms = (program_titles ?? []).map((t) => {
+        const p = programs.find((x) => x.title === t && x.user_id === owner);
+        if (!p) throw new Error(`プログラムが見つかりません（${t}）。名前をそのまま渡してください`);
+        return p;
+      });
+
+      const 予定: Record<string, unknown> = {
+        カリキュラム: title,
+        結ぶプログラム: targetPrograms.map((p) => p.title),
+        結ぶ人の数: (member_ids ?? []).length,
+        外す元: move_from ?? "なし",
+      };
+      if (dry_run) {
+        return { content: [{ type: "text", text: JSON.stringify({ 予定, したこと: "なし（試し）" }, null, 2) }] };
+      }
+
+      // カリキュラム
+      let curriculum = curriculums.find((c) => c.title === title && c.user_id === owner);
+      let curriculumCreated = false;
+      if (!curriculum) {
+        const maxOrder = curriculums.reduce(
+          (m, c) => (typeof c.order_index === "number" && c.order_index > m ? c.order_index : m),
+          -1
+        );
+        const row: Record<string, unknown> = {
+          user_id: owner,
+          title,
+          description: "",
+          order_index: maxOrder + 1,
+        };
+        if (slug) row.slug = slug;
+        curriculum = await sbInsert(env, T_CURRICULUMS, row);
+        curriculumCreated = true;
+      }
+
+      // プログラムを結ぶ
+      const links = await sbGet(
+        env,
+        `${T_CURRICULUM_PROGRAMS}?select=curriculum_id,program_id,order_index&curriculum_id=eq.${encodeURIComponent(
+          curriculum.id
+        )}`
+      );
+      const 結んだプログラム: string[] = [];
+      let order = links.reduce(
+        (m, l) => (typeof l.order_index === "number" && l.order_index > m ? l.order_index : m),
+        -1
+      );
+      for (const p of targetPrograms) {
+        if (links.some((l) => l.program_id === p.id)) continue;
+        order += 1;
+        await sbInsert(env, T_CURRICULUM_PROGRAMS, {
+          curriculum_id: curriculum.id,
+          program_id: p.id,
+          order_index: order,
+        });
+        結んだプログラム.push(p.title);
+      }
+
+      // 学ぶ人を結ぶ
+      const 結んだ人: string[] = [];
+      const 外した人: string[] = [];
+      if (member_ids && member_ids.length > 0) {
+        const all = await sbGet(
+          env,
+          `${T_MEMBER_CURRICULUMS}?select=id,member_id,curriculum_id,active`
+        );
+        const from = move_from
+          ? curriculums.find((c) => c.title === move_from && c.user_id === owner)
+          : null;
+
+        for (const mid of member_ids) {
+          const hit = all.find((r) => r.member_id === mid && r.curriculum_id === curriculum.id);
+          if (hit) {
+            if (hit.active !== true) {
+              await sbUpdateById(env, T_MEMBER_CURRICULUMS, hit.id, { active: true });
+              結んだ人.push(mid);
+            }
+          } else {
+            await sbInsert(env, T_MEMBER_CURRICULUMS, {
+              user_id: owner,
+              member_id: mid,
+              curriculum_id: curriculum.id,
+            });
+            結んだ人.push(mid);
+          }
+
+          if (from) {
+            const old = all.find(
+              (r) => r.member_id === mid && r.curriculum_id === from.id && r.active === true
+            );
+            if (old) {
+              await sbUpdateById(env, T_MEMBER_CURRICULUMS, old.id, { active: false });
+              外した人.push(mid);
+            }
+          }
+        }
+      }
+
+      // 書いたあとに取り直す
+      const after = await sbGet(
+        env,
+        `${T_MEMBER_CURRICULUMS}?select=id&curriculum_id=eq.${encodeURIComponent(
+          curriculum.id
+        )}&active=is.true`
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                カリキュラム: { id: curriculum.id, title, 新しく作った: curriculumCreated },
+                結んだプログラム: 結んだプログラム,
+                結んだ人の数: 結んだ人.length,
+                外した人の数: 外した人.length,
+                このカリキュラムに結ばれている人の数: after.length,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // ─────────────────────────────────────────────
+  // 学ぶ人の画面に何が出るかを、画面と同じ道すじで確かめる
+  // ─────────────────────────────────────────────
+  server.tool(
+    "mn__learner_view",
+    "指定した学ぶ人の画面に何が出るかを返す。画面と同じ道すじ（結ばれているカリキュラム → プログラム → 公開中のコース → 公開中のコンテンツ）をたどるので、画面を開かずに出る・出ないを判定できる。書き込みは一切しない。",
+    {
+      member_id: z.string().describe("学ぶ人の番号（mn__peek で取れる）"),
+      course_title: z
+        .string()
+        .optional()
+        .describe("この名前のコースの中身も 1 件目から数件だけ返す（例：2024年）"),
+    },
+    async ({ member_id, course_title }) => {
+      const mc = await sbGet(
+        env,
+        `${T_MEMBER_CURRICULUMS}?select=curriculum_id&member_id=eq.${encodeURIComponent(
+          member_id
+        )}&active=is.true`
+      );
+      const curriculumIds = mc.map((r) => r.curriculum_id);
+      if (curriculumIds.length === 0) {
+        return {
+          content: [
+            { type: "text", text: JSON.stringify({ 見えるもの: "なし（カリキュラムに結ばれていない）" }, null, 2) },
+          ],
+        };
+      }
+
+      const allCurriculums = await sbGet(env, `${T_CURRICULUMS}?select=id,title,active`);
+      const links = await sbGet(env, `${T_CURRICULUM_PROGRAMS}?select=curriculum_id,program_id`);
+      const programIds = links
+        .filter((l) => curriculumIds.includes(l.curriculum_id))
+        .map((l) => l.program_id);
+      const allPrograms = await sbGet(env, `${T_PROGRAMS}?select=id,title,active`);
+      const courses = await sbGet(
+        env,
+        `${T_COURSES}?select=id,program_id,title,active,order_index&order=order_index`
+      );
+      const contents = await sbGet(
+        env,
+        `${T_CONTENTS}?select=id,course_id,title,active,order_index&order=order_index`
+      );
+
+      const 見えるコース = courses
+        .filter((c) => programIds.includes(c.program_id) && c.active !== false)
+        .map((c) => ({
+          コース: c.title,
+          件数: contents.filter((ct) => ct.course_id === c.id && ct.active !== false).length,
+        }));
+
+      const result: Record<string, unknown> = {
+        結ばれているカリキュラム: allCurriculums
+          .filter((c) => curriculumIds.includes(c.id))
+          .map((c) => c.title),
+        見えるプログラム: allPrograms
+          .filter((p) => programIds.includes(p.id) && p.active !== false)
+          .map((p) => p.title),
+        見えるコース: 見えるコース,
+      };
+
+      if (course_title) {
+        const target = courses.find(
+          (c) => c.title === course_title && programIds.includes(c.program_id)
+        );
+        if (!target) {
+          result[`${course_title} の中身`] = "この人には見えない";
+        } else {
+          const list = contents
+            .filter((ct) => ct.course_id === target.id && ct.active !== false)
+            .map((ct) => ct.title);
+          result[`${course_title} の中身`] = { 件数: list.length, 先頭の3本: list.slice(0, 3) };
+        }
+      }
+
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
 }
