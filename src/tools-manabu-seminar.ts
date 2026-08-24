@@ -2,6 +2,26 @@
  * 学ぶくん：セミナーアーカイブを入れる道具（2026-08-24）
  * tools-manabu-seminar.ts
  *
+ * v0.3.0（2026-08-24・統括の判定 10〜13）：棚の名前と、同じ行かどうかの鍵を選べるようにし、
+ *   読む口と直す口を 1 本ずつ足した。
+ *   ・A：mn__put_seminar に course_title（棚の名前をそのまま指定）と
+ *        match_by（同じ行かどうかの鍵：date か video_url）を足した。
+ *        あわせて 1 行ごとの order_index と、日付の呼び名（date_label）も渡せるようにした。
+ *        年の棚しか作れず、鍵が日付に固定されていたため、
+ *        「その他のアーカイブ」を作ることも、同じ公開日の行を入れることもできなかった。
+ *   ・B：mn__video_urls を新設。今の棚が持っている動画の番号を返す（読むだけ）。
+ *        YouTube の全件から棚にある分を引いて、原稿に無い本数を機械で確定するために使う。
+ *   ・C：mn__fix_backslash を新設。本文と説明の中の「\#」を「#」に直す（読み書き両方・dry_run あり）。
+ *        原稿を文章の形で取り出すと「#」の前に逆斜線が付くため、
+ *        入れた行のタグに残っている可能性がある。残っているかを読む口が無いので、
+ *        直す口が同時に「何件変わったか」を返す形にしてある。
+ *
+ * ★ 鍵に video_url を使うのは、原稿に無い動画（その他のアーカイブ）を入れるときだけにする。
+ *   すでに入っている年の棚の 142 行には、同じ動画を指す行が 1 組ある
+ *   （2025 年 9/23 わかりやすい説明の基本 ／ 9/24 努力を習慣にするマインドセット）。
+ *   この鍵で 142 行を流し直すと、その組が 1 本に潰れて 2025 年が 73 から 72 になる。
+ *   年の棚を入れ直すときは match_by を date のままにすること（統括の判定 12・2026-08-24）。
+ *
  * v0.2.0（2026-08-24）：日付を題名から外した。あわせてまとめて入れられるようにした。
  *   ・題名は題名だけにする。日付は「説明」の先頭と本文の先頭に置く。
  *     学ぶくんに日付の欄が無く、一覧の札は題名とその下の説明の 2 行で出るため、
@@ -50,6 +70,9 @@ const MAX_ROWS = 50;
 
 /** 説明の欄に入れる長さの上限 */
 const DESC_MAX = 200;
+
+/** 直す対象の 2 文字。ここを広げない（広げると原稿の意図した文字まで消える） */
+const BACKSLASH_HASH = "\\#";
 
 function sbHeaders(env: Env): Record<string, string> {
   return {
@@ -121,8 +144,20 @@ function youtubeId(url: string | undefined): string | null {
 }
 
 /**
+ * 入れてある本文から動画の番号を取り出す。
+ * 本文には {{youtube:動画ID}} の形と、末尾の [YouTube で開く](住所) の形の
+ * 両方が入りうるので、どちらからも拾う。見つからなければ null。
+ */
+function videoIdFromBody(body: string | null | undefined): string | null {
+  if (!body) return null;
+  const tag = body.match(/\{\{youtube:([a-zA-Z0-9_-]{11})\}\}/);
+  if (tag) return tag[1];
+  return youtubeId(body);
+}
+
+/**
  * 日付（2024-01-10）を並び順の数（20240110）にする。
- * この数は日付そのものなので、同じものかどうかの見分けにも使う。
+ * この数は日付そのものなので、鍵が date のときは見分けにも使う。
  * 読めない形なら 0 を返さず、はっきり止める。
  */
 function dateKey(date: string): number {
@@ -141,6 +176,7 @@ interface SeminarRow {
   video_url?: string;
   mindmap_url?: string;
   slide_url?: string;
+  order_index?: number;
 }
 
 /** 説明の欄。日付を先頭に置き、題名とは別の行に出るようにする */
@@ -150,11 +186,11 @@ function buildDescription(row: SeminarRow): string {
   return (head + body).slice(0, DESC_MAX);
 }
 
-/** 本文を組み立てる。日付は先頭に置く */
-function buildBody(row: SeminarRow): string {
+/** 本文を組み立てる。日付は先頭に置く。呼び名は渡されたものを使う */
+function buildBody(row: SeminarRow, dateLabel: string): string {
   const parts: string[] = [];
 
-  parts.push(`開催日：${row.date}`);
+  parts.push(`${dateLabel}：${row.date}`);
 
   const vid = youtubeId(row.video_url);
   if (vid) {
@@ -270,23 +306,236 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
   );
 
   // ─────────────────────────────────────────────
-  // セミナーの一覧を学ぶくんに入れる
+  // B：今の棚が持っている動画の番号を返す（読むだけ）
+  // ─────────────────────────────────────────────
+  server.tool(
+    "mn__video_urls",
+    "学ぶくんに今入っている行が持っている動画の番号を返す（読むだけ・書き込みは一切しない）。YouTube の全件からこの一覧を引くと、まだ入れていない動画が機械で確定できる。同じ動画を 2 つ以上の行が指している場合はその組も返す。",
+    {
+      course_titles: z
+        .array(z.string())
+        .optional()
+        .describe("この名前のコースだけに絞る。省略すると全部の棚を見る"),
+      include_list: z
+        .boolean()
+        .optional()
+        .describe("true で動画の番号を全部並べて返す（既定 true）"),
+    },
+    async ({ course_titles, include_list }) => {
+      const courses = await sbGet(
+        env,
+        `${T_COURSES}?select=id,title,program_id,order_index&order=order_index`
+      );
+      const target = course_titles
+        ? courses.filter((c) => course_titles.includes(c.title))
+        : courses;
+
+      // 名前で絞ったのに 1 つも当たらなければ、0 件を答えにしないで止める
+      if (course_titles && target.length === 0) {
+        throw new Error(
+          `その名前のコースがありません（${course_titles.join(
+            ", "
+          )}）。今ある名前：${courses.map((c) => c.title).join(", ")}`
+        );
+      }
+
+      const contents = await sbGet(
+        env,
+        `${T_CONTENTS}?select=id,course_id,title,order_index,body_markdown&order=order_index`
+      );
+
+      const 棚ごと: Record<string, { 件数: number; 動画あり: number; 動画なし: number }> = {};
+      const idToRows: Record<string, string[]> = {};
+      const 動画なしの題名: string[] = [];
+
+      for (const c of target) {
+        const rows = contents.filter((ct) => ct.course_id === c.id);
+        let withVideo = 0;
+        for (const r of rows) {
+          const vid = videoIdFromBody(r.body_markdown);
+          if (vid) {
+            withVideo += 1;
+            (idToRows[vid] ??= []).push(`${c.title} ${r.title}`);
+          } else {
+            動画なしの題名.push(`${c.title} ${r.title}`);
+          }
+        }
+        棚ごと[c.title] = {
+          件数: rows.length,
+          動画あり: withVideo,
+          動画なし: rows.length - withVideo,
+        };
+      }
+
+      const ids = Object.keys(idToRows).sort();
+      const 重なり = ids
+        .filter((v) => idToRows[v].length > 1)
+        .map((v) => ({ 動画の番号: v, 指している行: idToRows[v] }));
+
+      const result: Record<string, unknown> = {
+        見た棚: target.map((c) => c.title),
+        見た行の合計: target.reduce((m, c) => m + (棚ごと[c.title]?.件数 ?? 0), 0),
+        動画を持っている行: Object.values(棚ごと).reduce((m, v) => m + v.動画あり, 0),
+        別々の動画の番号の数: ids.length,
+        棚ごと: 棚ごと,
+        同じ動画を指している組: 重なり,
+        動画を持っていない行の題名: 動画なしの題名,
+      };
+      if (include_list !== false) {
+        result["動画の番号の一覧"] = ids;
+      }
+
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // ─────────────────────────────────────────────
+  // C：本文と説明の中の「\#」を「#」に直す
+  // ─────────────────────────────────────────────
+  server.tool(
+    "mn__fix_backslash",
+    "学ぶくんに入っている行の題名・説明・本文の中の「\\#」を「#」に直す。原稿を文章の形で取り出すと「#」の前に逆斜線が付くため、その残りを落とす。直す対象はこの 2 文字だけで、他の逆斜線には触らない。dry_run=true で書かずに、何件当たるかだけを返す。",
+    {
+      course_titles: z
+        .array(z.string())
+        .min(1)
+        .describe("直す対象のコースの名前（例：2023年）。名前が 1 つも当たらなければ止まる"),
+      dry_run: z.boolean().optional().describe("true で書かずに、当たる件数と題名だけ返す"),
+    },
+    async ({ course_titles, dry_run }) => {
+      const courses = await sbGet(env, `${T_COURSES}?select=id,title&order=order_index`);
+      const target = courses.filter((c) => course_titles.includes(c.title));
+
+      // 名前が当たらないまま 0 件を返さない。当たらない名前があれば全部書いて止める
+      const missing = course_titles.filter((t) => !courses.some((c) => c.title === t));
+      if (missing.length > 0) {
+        throw new Error(
+          `その名前のコースがありません（${missing.join(", ")}）。今ある名前：${courses
+            .map((c) => c.title)
+            .join(", ")}`
+        );
+      }
+
+      const contents = await sbGet(
+        env,
+        `${T_CONTENTS}?select=id,course_id,title,description,body_markdown,order_index&order=order_index`
+      );
+
+      const 当たった: { コース: string; 題名: string; 場所: string[] }[] = [];
+      const 棚ごと: Record<string, { 見た件数: number; 当たった件数: number }> = {};
+
+      for (const c of target) {
+        const rows = contents.filter((ct) => ct.course_id === c.id);
+        let hitCount = 0;
+
+        for (const r of rows) {
+          const 場所: string[] = [];
+          const next: Record<string, unknown> = {};
+
+          for (const field of ["title", "description", "body_markdown"] as const) {
+            const before = (r as any)[field] as string | null | undefined;
+            if (typeof before === "string" && before.includes(BACKSLASH_HASH)) {
+              場所.push(field);
+              next[field] = before.split(BACKSLASH_HASH).join("#");
+            }
+          }
+
+          if (場所.length === 0) continue;
+          hitCount += 1;
+          当たった.push({ コース: c.title, 題名: r.title, 場所: 場所 });
+
+          if (!dry_run) {
+            await sbUpdateById(env, T_CONTENTS, r.id, {
+              ...next,
+              updated_at: new Date().toISOString(),
+            });
+          }
+        }
+
+        棚ごと[c.title] = { 見た件数: rows.length, 当たった件数: hitCount };
+      }
+
+      // 書いたあとに取り直して、残っていないことを確かめる
+      let 直したあとに残っている件数: number | string = "調べていない（試しのため）";
+      if (!dry_run) {
+        const after = await sbGet(
+          env,
+          `${T_CONTENTS}?select=id,course_id,title,description,body_markdown`
+        );
+        const targetIds = target.map((c) => c.id);
+        直したあとに残っている件数 = after.filter(
+          (r) =>
+            targetIds.includes(r.course_id) &&
+            [r.title, r.description, r.body_markdown].some(
+              (v) => typeof v === "string" && v.includes(BACKSLASH_HASH)
+            )
+        ).length;
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                書いたかどうか: dry_run ? "書いていない（試し）" : "書いた",
+                見た棚: target.map((c) => c.title),
+                棚ごと: 棚ごと,
+                当たった行の合計: 当たった.length,
+                直したあとに残っている件数: 直したあとに残っている件数,
+                当たった行: 当たった,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // ─────────────────────────────────────────────
+  // A：セミナーの一覧を学ぶくんに入れる
   // ─────────────────────────────────────────────
   server.tool(
     "mn__put_seminar",
-    "セミナーの一覧の行を学ぶくんに入れる（1 回に最大 50 本）。年の棚（コース）が無ければ作る。同じ棚に同じ日付の行があれば書き換えるので、何回動かしても同じ結果になる。dry_run=true にすると書かずに組み立てた中身だけを返す。",
+    "セミナーの一覧の行を学ぶくんに入れる（1 回に最大 50 本）。棚（コース）が無ければ作る。棚は year（2024 と渡すと「2024年」）か course_title（名前をそのまま）のどちらか一方で指定する。同じ行かどうかの鍵は match_by で選ぶ：date（既定・同じ棚に同じ日付の行があれば書き換える）か video_url（同じ動画を指す行があれば書き換える）。★ video_url を鍵にするのは原稿に無い動画を入れるときだけにすること。年の棚の 142 行には同じ動画を指す行が 1 組あり、この鍵で流し直すと 1 本に潰れる（統括の判定 12・2026-08-24）。dry_run=true にすると書かずに組み立てた中身だけを返す。",
     {
-      year: z.string().describe("年の棚の名前に使う 4 桁（例：2024）。行は全部この棚に入る"),
+      year: z
+        .string()
+        .optional()
+        .describe("年の棚の名前に使う 4 桁（例：2024）。棚の名前は「2024年」になる"),
+      course_title: z
+        .string()
+        .optional()
+        .describe("棚の名前をそのまま指定する（例：その他のアーカイブ）。year とは同時に使えない"),
+      course_order_index: z
+        .number()
+        .optional()
+        .describe("棚を新しく作るときの並び順。省略すると year の数、course_title のときは末尾"),
+      course_description: z.string().optional().describe("棚を新しく作るときの説明"),
+      match_by: z
+        .enum(["date", "video_url"])
+        .optional()
+        .describe("同じ行かどうかの鍵（既定 date）。video_url は原稿に無い動画を入れるときだけ"),
+      date_label: z
+        .string()
+        .optional()
+        .describe("本文の先頭に置く日付の呼び名（既定：開催日）。公開日を入れるときは 公開日 と渡す"),
       rows: z
         .array(
           z.object({
-            date: z.string().describe("開催日（2024-01-10 の形）"),
+            date: z.string().describe("日付（2024-01-10 の形）"),
             title: z.string().describe("セミナーの題名（日付は入れない）"),
             summary: z.string().optional().describe("概要の文章。原稿のものをそのまま"),
             tags: z.string().optional().describe("タグの行をそのまま（整形しない）"),
             video_url: z.string().optional().describe("動画の住所"),
             mindmap_url: z.string().optional().describe("マインドマップの住所"),
             slide_url: z.string().optional().describe("スライドの住所"),
+            order_index: z
+              .number()
+              .optional()
+              .describe("並び順。省略すると日付の数（20240110）になる"),
           })
         )
         .min(1)
@@ -295,32 +544,80 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
       program_title: z
         .string()
         .optional()
-        .describe("年の棚を束ねるプログラムの名前（既定：しあらぼセミナーアーカイブ）"),
+        .describe("棚を束ねるプログラムの名前（既定：しあらぼセミナーアーカイブ）"),
       user_id: z
         .string()
         .optional()
         .describe("持ち主。省略すると今あるプログラムから読み取る（1 種類でなければ止まる）"),
       dry_run: z.boolean().optional().describe("true で書かずに中身だけ返す"),
     },
-    async ({ year, rows, program_title, user_id, dry_run }) => {
+    async ({
+      year,
+      course_title,
+      course_order_index,
+      course_description,
+      match_by,
+      date_label,
+      rows,
+      program_title,
+      user_id,
+      dry_run,
+    }) => {
       const programTitle = program_title ?? "しあらぼセミナーアーカイブ";
-      const courseTitle = `${year}年`;
+      const matchBy = match_by ?? "date";
+      const dateLabel = date_label ?? "開催日";
+
+      // 棚の指定は year か course_title のどちらか一方。両方でも両方無しでも止める
+      if ((year && course_title) || (!year && !course_title)) {
+        throw new Error(
+          "棚の指定は year か course_title のどちらか一方にしてください（両方または両方無しは受け付けません）"
+        );
+      }
+      const courseTitle = course_title ?? `${year}年`;
 
       // 先に全部組み立てる。日付の形が悪い行があれば、1 行も書かずにここで止まる
-      const built = rows.map((r) => ({
-        row: r as SeminarRow,
-        key: dateKey(r.date),
-        description: buildDescription(r as SeminarRow),
-        body: buildBody(r as SeminarRow),
-      }));
+      const built = rows.map((r) => {
+        const row = r as SeminarRow;
+        const dk = dateKey(row.date);
+        return {
+          row,
+          dateKey: dk,
+          orderIndex: typeof row.order_index === "number" ? row.order_index : dk,
+          videoId: youtubeId(row.video_url),
+          description: buildDescription(row),
+          body: buildBody(row, dateLabel),
+        };
+      });
 
-      // 同じ日付が 2 行あると、あとの行が前の行を消してしまう。先に止める
-      const keys = built.map((b) => b.key);
-      const dupKeys = keys.filter((k, i) => keys.indexOf(k) !== i);
-      if (dupKeys.length > 0) {
-        throw new Error(
-          `同じ日付の行が渡されています（${Array.from(new Set(dupKeys)).join(", ")}）。1 回の呼び出しでは日付が重ならないようにしてください`
-        );
+      // 鍵が重なっていると、あとの行が前の行を消してしまう。書く前に止める
+      if (matchBy === "date") {
+        const keys = built.map((b) => b.dateKey);
+        const dup = keys.filter((k, i) => keys.indexOf(k) !== i);
+        if (dup.length > 0) {
+          throw new Error(
+            `同じ日付の行が渡されています（${Array.from(new Set(dup)).join(
+              ", "
+            )}）。鍵が date のときは 1 回の呼び出しで日付が重ならないようにしてください`
+          );
+        }
+      } else {
+        const noVideo = built.filter((b) => !b.videoId).map((b) => b.row.title);
+        if (noVideo.length > 0) {
+          throw new Error(
+            `鍵が video_url なのに動画の住所が読めない行があります（${noVideo.join(
+              " / "
+            )}）。全部の行に YouTube の住所を入れてください`
+          );
+        }
+        const vids = built.map((b) => b.videoId as string);
+        const dup = vids.filter((v, i) => vids.indexOf(v) !== i);
+        if (dup.length > 0) {
+          throw new Error(
+            `同じ動画を指す行が渡されています（${Array.from(new Set(dup)).join(
+              ", "
+            )}）。1 回の呼び出しで動画が重ならないようにしてください`
+          );
+        }
       }
 
       if (dry_run) {
@@ -333,11 +630,14 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
                   試しに組み立てただけ: true,
                   プログラム: programTitle,
                   コース: courseTitle,
+                  鍵: matchBy,
+                  日付の呼び名: dateLabel,
                   本数: built.length,
                   中身: built.map((b) => ({
                     題名: b.row.title,
                     説明: b.description,
-                    並び順: b.key,
+                    並び順: b.orderIndex,
+                    動画の番号: b.videoId,
                     本文: b.body,
                   })),
                 },
@@ -382,7 +682,7 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
         programCreated = true;
       }
 
-      // 年の棚（コース）を探す。無ければ作る
+      // 棚（コース）を探す。無ければ作る
       const courses = await sbGet(
         env,
         `${T_COURSES}?select=id,user_id,program_id,title,order_index&program_id=eq.${encodeURIComponent(
@@ -392,27 +692,51 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
       let course = courses.find((c) => c.title === courseTitle);
       let courseCreated = false;
       if (!course) {
+        const maxCourseOrder = courses.reduce(
+          (m, c) => (typeof c.order_index === "number" && c.order_index > m ? c.order_index : m),
+          -1
+        );
+        const order =
+          typeof course_order_index === "number"
+            ? course_order_index
+            : year
+            ? Number(year)
+            : maxCourseOrder + 1;
         course = await sbInsert(env, T_COURSES, {
           user_id: owner,
           program_id: program.id,
           title: courseTitle,
-          description: `${year} 年のセミナー`,
-          order_index: Number(year),
+          description: course_description ?? (year ? `${year} 年のセミナー` : courseTitle),
+          order_index: order,
         });
         courseCreated = true;
       }
 
-      // 棚の中の今の行を一度だけ取る（日付で見分ける）
+      // 棚の中の今の行を一度だけ取る。鍵が video_url のときは本文も取る
+      const select =
+        matchBy === "video_url"
+          ? "id,title,order_index,body_markdown"
+          : "id,title,order_index";
       const existing = await sbGet(
         env,
-        `${T_CONTENTS}?select=id,title,order_index&course_id=eq.${encodeURIComponent(course.id)}`
+        `${T_CONTENTS}?select=${select}&course_id=eq.${encodeURIComponent(course.id)}`
       );
+      const existingVideo: Record<string, any> = {};
+      if (matchBy === "video_url") {
+        for (const e of existing) {
+          const v = videoIdFromBody(e.body_markdown);
+          if (v && !existingVideo[v]) existingVideo[v] = e;
+        }
+      }
 
       const 足した: string[] = [];
       const 書き換えた: string[] = [];
 
       for (const b of built) {
-        const hit = existing.find((c) => c.order_index === b.key);
+        const hit =
+          matchBy === "video_url"
+            ? existingVideo[b.videoId as string]
+            : existing.find((c) => c.order_index === b.dateKey);
         const payload = {
           user_id: owner,
           course_id: course.id,
@@ -421,7 +745,7 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
           content_type: "rich",
           body_markdown: b.body,
           linkset_data: null,
-          order_index: b.key,
+          order_index: b.orderIndex,
           active: true,
         };
         if (hit) {
@@ -450,6 +774,7 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
               {
                 プログラム: { id: program.id, title: programTitle, 新しく作った: programCreated },
                 コース: { id: course.id, title: courseTitle, 新しく作った: courseCreated },
+                鍵: matchBy,
                 渡された本数: built.length,
                 足した本数: 足した.length,
                 書き換えた本数: 書き換えた.length,

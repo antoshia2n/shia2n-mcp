@@ -305,6 +305,25 @@
  *          出る・出ないの判定は mn__learner_view で行う。
  *          見る表は mn_curriculums / mn_curriculum_programs / mn_member_curriculums の
  *          3 本と、読むだけで shr_members。設定の追加は無い。
+ * v0.59.0：学ぶくんの棚の名前と、同じ行かどうかの鍵を選べるようにした（2026-08-24・統括の判定 10〜13）
+ *          依頼書：https://www.notion.so/3c69c6c1c439817fa18dcd0931f9bb54
+ *          ① mn__put_seminar に course_title（棚の名前をそのまま指定）と
+ *            match_by（鍵：date か video_url）を足した。1 行ごとの order_index と、
+ *            本文の先頭に置く日付の呼び名（date_label）も渡せるようにした。
+ *            棚が「◯◯年」しか作れず、鍵が日付に固定されていたため、
+ *            「その他のアーカイブ」を作ることも、同じ公開日の行を入れることもできなかった。
+ *            限定公開 331 本の公開日は 123 通りしかなく、1 日に 33 本ある日がある。
+ *          ② mn__video_urls を新設（読むだけ）。今の棚が持っている動画の番号を返す。
+ *            YouTube の全件から引いて、まだ入れていない本数を機械で確定するために使う。
+ *          ③ mn__fix_backslash を新設。題名・説明・本文の中の「\#」を「#」に直す。
+ *            原稿を文章の形で取り出すと「#」の前に逆斜線が付くため、その残りを落とす。
+ *            残っているかを読む口が無いので、直す口が「何件変わったか」を返す形にした。
+ *            触るのはこの 2 文字だけで、他の逆斜線には触らない。
+ *          ★ 鍵に video_url を使うのは原稿に無い動画を入れるときだけ。年の棚の 142 行には
+ *            同じ動画を指す行が 1 組あり（2025 年 9/23 と 9/24）、この鍵で流し直すと
+ *            1 本に潰れて 2025 年が 73 から 72 になる（統括の判定 12）。
+ *          変えたのは src/tools-manabu-seminar.ts と src/version.ts と src/index.ts のみ。
+ *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
