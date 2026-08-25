@@ -1,3 +1,11 @@
+/**
+ * shia2n-mcp / src/tools-sales-manager.ts / 第2版（2026-08-25 開発部）
+ *
+ * 第2版で直したこと
+ *   事業別の当月確定（by_business）が、有効な契約に紐づく支払いだけを数えていた。
+ *   止まった契約の入金が丸ごと落ち、当月の確定（monthConf）と合わなくなっていた。
+ *   支払いの行の business で数える形に変え、画面と同じ定義に揃えた。
+ */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
@@ -186,7 +194,7 @@ export function registerSalesManagerTools(server: McpServer, env: Env): void {
 // 型定義
 // ─────────────────────────────────────────────
 
-type Payment  = { paid: boolean; month_idx: number; amount: number; actual_amount?: number | null; contract_id?: string; due_date?: string | null };
+type Payment  = { paid: boolean; month_idx: number; amount: number; actual_amount?: number | null; contract_id?: string; due_date?: string | null; business?: string };
 type Contract = { id: string; status: string; type: string; start_month_idx?: number; total_count?: number; amount: number; business?: string };
 type Single   = { month_idx: number; amount: number; business?: string };
 type Budget   = { biz: string; month_idx: number; amount: number };
@@ -408,12 +416,19 @@ export async function getRevenueSummary(env: Env) {
     singles.filter(s => s.month_idx === nxt).reduce((a, s) => a + s.amount, 0);
 
   // 事業別当月確定
+  //
+  // 2026-08-25 の直し（開発部）：
+  //   以前は「有効な契約に紐づく支払い」だけを数えていた。そのため、止まった契約の
+  //   入金（契約が終わった月額の最終回など）が事業別から丸ごと落ちていた。
+  //   すぐ上の当月の確定（monthConf）は契約を見ずに数えているので、両者が食い違う。
+  //   実測（2026-08-25）：当月の確定 648,000 に対し事業別の合計は 626,000 で、
+  //   差の 22,000 は契約が stopped になっている行 1 本ぶんだった。
+  //   画面（sales-manager の components/sm/useAppData.ts）は支払いの行の business を
+  //   見ているので、そちらに揃える。この口の説明にある「画面と同じ数字」を満たす形。
   const byBusiness: Record<string, number> = {};
   for (const biz of bizList) {
-    const bizContracts = contracts.filter(c => c.business === biz.name && c.status === "active");
     const conf = payments
-      .filter(p => p.paid && p.month_idx === cur)
-      .filter(p => bizContracts.some(c => c.id === p.contract_id))
+      .filter(p => p.paid && p.month_idx === cur && p.business === biz.name)
       .reduce((a, p) => a + (p.actual_amount ?? p.amount), 0);
     const singleConf = singles
       .filter(s => s.month_idx === cur && s.business === biz.name)
