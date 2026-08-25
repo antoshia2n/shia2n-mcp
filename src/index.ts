@@ -305,6 +305,9 @@
  *          出る・出ないの判定は mn__learner_view で行う。
  *          見る表は mn_curriculums / mn_curriculum_programs / mn_member_curriculums の
  *          3 本と、読むだけで shr_members。設定の追加は無い。
+ * v0.61.0：進化ラボに記事を 1 本入れる口を新設した（2026-08-25）
+ *          evolab__put_article。受け口は shia2n-site の /api/ingest/contents。
+ *          設定を 2 つ足した：SITE_API_BASE（省略可）と SITE_INGEST_SECRET。
  * v0.60.0：学ぶくんの棚の中の題名を、目に頼らず突き合わせられるようにした（2026-08-25）
  *          依頼書：https://www.notion.so/3c69c6c1c4398149a2abf111295e8883
  *          mn__titles を新設（読むだけ）。棚を指定すると、その棚の全行の
@@ -374,6 +377,7 @@ import { handleHaakuFill } from "./cron-haaku-fill.js";
 import { runBackupSlot } from "./cron-backup.js";
 import { registerRestoreTools } from "./tools-restore.js";
 import { registerTsumiageTools } from "./tools-tsumiage.js";
+import { registerEvolabTools } from "./tools-evolab.js";
 
 export interface Env {
   // Core
@@ -408,6 +412,11 @@ export interface Env {
   FIREBASE_SA_EMAIL: string;
   FIREBASE_SA_PRIVATE_KEY: string;
   NAOKI_UID: string;
+  // 進化ラボ（公式サイト）。記事を入れる口を叩くため。
+  // SITE_API_BASE は省略可（省略時は evolab.shia2n.jp）。
+  // SITE_INGEST_SECRET は shia2n-site 側に入れたのと同じ値。
+  SITE_API_BASE?: string;
+  SITE_INGEST_SECRET?: string;
   // Sales Manager
   SALES_MANAGER_API_BASE: string;
   // 2026-08-03：Sales Manager の取得口の合言葉（この用途で新規作成した Secret）。
@@ -492,6 +501,7 @@ function createMcpServer(env: Env): McpServer {
   registerMunikisTools(server, env);
   registerRestoreTools(server, env);
   registerTsumiageTools(server, env);
+  registerEvolabTools(server, env);
   return server;
 }
 
