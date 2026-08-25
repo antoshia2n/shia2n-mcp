@@ -155,6 +155,33 @@ function videoIdFromBody(body: string | null | undefined): string | null {
   return youtubeId(body);
 }
 
+/** 本文の中の「[マインドマップ](住所)」から住所だけを取り出す。無ければ null */
+function mindmapUrlFromBody(body: string | null | undefined): string | null {
+  if (!body) return null;
+  const m = body.match(/\[マインドマップ\]\(([^)]+)\)/);
+  return m ? m[1].trim() : null;
+}
+
+/** 題名の文字（コードポイント）の数 */
+function titleLength(title: string): number {
+  return [...title].length;
+}
+
+/**
+ * 文字列の要約値（FNV-1a・32 ビット・10 進で返す）。
+ * UTF-8 の並びに対して計算する。1 文字でも違えば必ず別の数になるので、
+ * 題名を書き写さずに、数どうしで突き合わせるために使う。
+ */
+function fnv1a(s: string): number {
+  const bytes = new TextEncoder().encode(s);
+  let h = 0x811c9dc5;
+  for (const b of bytes) {
+    h ^= b;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
 /**
  * 日付（2024-01-10）を並び順の数（20240110）にする。
  * この数は日付そのものなので、鍵が date のときは見分けにも使う。
@@ -1039,6 +1066,122 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
             .map((ct) => ct.title);
           result[`${course_title} の中身`] = { 件数: list.length, 先頭の3本: list.slice(0, 3) };
         }
+      }
+
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  // ─────────────────────────────────────────────
+  // D：棚の中の題名と、その指紋を返す（読むだけ）
+  //
+  // なぜ指紋を一緒に返すか：
+  //   返ってきた題名を元の原稿と突き合わせるには、いま応答へ書き写す工程が要る。
+  //   その二度目の書き写しで無意識に直してしまうと、差 0 件と出て誤りが隠れる。
+  //   文字ではなく数（文字数の合計・要約値）で比べれば、1 文字違えば必ずずれる。
+  // ─────────────────────────────────────────────
+  server.tool(
+    "mn__titles",
+    "学ぶくんの棚に入っている行の題名を全数で返す（読むだけ・書き込みは一切しない）。題名そのものに加えて、1 行ごとと棚ごとの指紋（題名の文字数と要約値）を返す。入れたあとに、元の原稿から同じ指紋を機械で出して数どうしを比べれば、題名の取り違えを目に頼らず見つけられる。マインドマップの住所も一緒に返すので、まだ入れていないマインドマップの本数も機械で確定できる。",
+    {
+      course_titles: z
+        .array(z.string())
+        .optional()
+        .describe("この名前のコースだけに絞る。省略すると全部の棚を見る"),
+      include_list: z
+        .boolean()
+        .optional()
+        .describe("true で 1 行ごとの中身を全部並べて返す（既定 true）。false にすると棚ごとの数だけ返る"),
+    },
+    async ({ course_titles, include_list }) => {
+      const courses = await sbGet(
+        env,
+        `${T_COURSES}?select=id,title,program_id,order_index&order=order_index`
+      );
+      const target = course_titles
+        ? courses.filter((c) => course_titles.includes(c.title))
+        : courses;
+
+      // 名前で絞ったのに 1 つも当たらなければ、0 件を答えにしないで止める
+      if (course_titles && target.length === 0) {
+        throw new Error(
+          `その名前のコースがありません（${course_titles.join(
+            ", "
+          )}）。今ある名前：${courses.map((c) => c.title).join(", ")}`
+        );
+      }
+
+      const contents = await sbGet(
+        env,
+        `${T_CONTENTS}?select=id,course_id,title,order_index,body_markdown&order=order_index`
+      );
+
+      const 棚ごと: Record<
+        string,
+        {
+          件数: number;
+          題名の文字数の合計: number;
+          棚の指紋: number;
+          マインドマップを持つ行: number;
+          動画を持つ行: number;
+        }
+      > = {};
+      const 一覧: Array<Record<string, unknown>> = [];
+
+      for (const c of target) {
+        const rows = contents
+          .filter((ct) => ct.course_id === c.id)
+          .sort(
+            (a, b) =>
+              (a.order_index ?? 0) - (b.order_index ?? 0) ||
+              String(a.id).localeCompare(String(b.id))
+          );
+
+        let 文字数合計 = 0;
+        let mmあり = 0;
+        let 動画あり = 0;
+
+        for (const r of rows) {
+          const title = typeof r.title === "string" ? r.title : "";
+          const mm = mindmapUrlFromBody(r.body_markdown);
+          const vid = videoIdFromBody(r.body_markdown);
+          文字数合計 += titleLength(title);
+          if (mm) mmあり += 1;
+          if (vid) 動画あり += 1;
+
+          一覧.push({
+            棚: c.title,
+            並び順: r.order_index ?? null,
+            動画の番号: vid,
+            マインドマップの住所: mm,
+            題名: title,
+            題名の文字数: titleLength(title),
+            題名の指紋: fnv1a(title),
+          });
+        }
+
+        棚ごと[c.title] = {
+          件数: rows.length,
+          題名の文字数の合計: 文字数合計,
+          棚の指紋: fnv1a(rows.map((r) => (typeof r.title === "string" ? r.title : "")).join("\n")),
+          マインドマップを持つ行: mmあり,
+          動画を持つ行: 動画あり,
+        };
+      }
+
+      const result: Record<string, unknown> = {
+        見た棚: target.map((c) => c.title),
+        見た行の合計: 一覧.length,
+        題名の文字数の合計: Object.values(棚ごと).reduce(
+          (m, v) => m + v.題名の文字数の合計,
+          0
+        ),
+        棚ごと: 棚ごと,
+        指紋の作り方:
+          "題名の文字数は文字（コードポイント）の数。指紋は題名の UTF-8 の並びに対する FNV-1a（32 ビット・10 進）。棚の指紋は、その棚の題名を並び順に改行でつないだ 1 本の文字列に対して同じ計算をしたもの",
+      };
+      if (include_list !== false) {
+        result["一覧"] = 一覧;
       }
 
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
