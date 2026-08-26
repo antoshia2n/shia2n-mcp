@@ -339,6 +339,17 @@
  *            1 本に潰れて 2025 年が 73 から 72 になる（統括の判定 12）。
  *          変えたのは src/tools-manabu-seminar.ts と src/version.ts と src/index.ts のみ。
  *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
+ *
+ * v0.62.0（2026-08-26 開発部）：お金を守るくんの口 5 本を新設した。
+ *          okane__shortage（口座ごとの不足額と入れる期限）／okane__list_plans／
+ *          okane__upsert_plan（対で登録された予定は片方を動かすともう片方も動く）／
+ *          okane__put_balance（過ぎた予定を済にしてから実残高を入れ、予測との差を出す）／
+ *          okane__morning_line（毎朝の報告に足す 1 行。条件に当たらない日は null）。
+ *          表は Supabase の mo_accounts / mo_plans / mo_balances。
+ *          画面は作らない（毎日開く器を増やすと、開かない日が来てその日に漏れるため）。
+ *          口座番号・カード番号・ログイン情報を持つ列は 1 つも無い。
+ *          変えたのは src/tools-money.ts（新規）と src/version.ts と src/index.ts のみ。
+ *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -378,6 +389,7 @@ import { runBackupSlot } from "./cron-backup.js";
 import { registerRestoreTools } from "./tools-restore.js";
 import { registerTsumiageTools } from "./tools-tsumiage.js";
 import { registerEvolabTools } from "./tools-evolab.js";
+import { registerMoneyTools } from "./tools-money.js";
 
 export interface Env {
   // Core
@@ -502,6 +514,7 @@ function createMcpServer(env: Env): McpServer {
   registerRestoreTools(server, env);
   registerTsumiageTools(server, env);
   registerEvolabTools(server, env);
+  registerMoneyTools(server, env);
   return server;
 }
 
