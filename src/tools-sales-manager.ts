@@ -227,15 +227,6 @@ function nextAbs(): number {
 // 集計ヘルパー（useRevenue.js より移植）
 // ─────────────────────────────────────────────
 
-const FALLBACK_BUSINESSES: Business[] = [
-  { id: -1, name: "しあらぼ"  },
-  { id: -2, name: "X"         },
-  { id: -3, name: "note"      },
-  { id: -4, name: "CW案件"    },
-  { id: -5, name: "教材販売"  },
-  { id: -6, name: "その他"    },
-];
-
 function contractAmountForMonth(contracts: Contract[], abs: number): number {
   return contracts.filter(c => c.status === "active").reduce((a, c) => {
     const s = c.start_month_idx ?? 0;
@@ -321,7 +312,10 @@ export async function getRevenueSummary(env: Env) {
   const cur     = currAbs();
   const absList = yearAbsList();
 
-  const bizList = businesses?.length ? businesses : FALLBACK_BUSINESSES;
+  // 2026-08-27：予備の区分一覧（FALLBACK_BUSINESSES）を落とした。
+  //   同じものを売上管理の表とこのコードの 2 か所で持つと、区分を足したときにずれる。
+  //   区分の表が空のときは空のまま返す。予備を出すと、直さないといけない状態が隠れる。
+  const bizList = businesses ?? [];
 
   const bizNames = new Set(bizList.map(b => b.name));
 
