@@ -52,24 +52,6 @@ async function callAppInternalApi<TResult = unknown>(
   return (await res.json()) as TResult;
 }
 /**
- * High-Shinくん本体の内部APIを叩く（後方互換シグネチャを維持）。
- */
-export async function callInternalApi<TResult = unknown>(
-  env: Env,
-  path: string,
-  body: Record<string, unknown>
-): Promise<TResult> {
-  return callAppInternalApi<TResult>(
-    {
-      apiBase: env.HIGH_SHIN_API_BASE,
-      secret:  env.HIGH_SHIN_INTERNAL_SECRET,
-      userId:  env.MCP_DEFAULT_USER_ID,
-    },
-    path,
-    body
-  );
-}
-/**
  * Zeus（ナレッジハブ）本体の内部APIを叩く。
  * ※ Zeus v2 移行後は callZeusExternalV1Compat に置き換え済み。
  *    このエクスポートは他コードが参照していないが、念のため残す。
@@ -157,7 +139,7 @@ export async function callFormKunInternalApi<TResult = unknown>(
 }
 /**
  * 任意のアプリの /api/internal/{path} を GET で叩く汎用関数。
- * 読み取り系で GET エンドポイントを使うアプリ（High-Shin Phase 3 等）向け。
+ * 読み取り系で GET エンドポイントを使うアプリ向け。
  * パラメータは user_id を含むクエリストリングとして URL に付加する。
  */
 async function callAppInternalApiGet<TResult = unknown>(
@@ -191,25 +173,6 @@ async function callAppInternalApiGet<TResult = unknown>(
     throw new Error(`upstream_error: ${res.status} ${res.statusText} — ${text.slice(0, 500)}`);
   }
   return (await res.json()) as TResult;
-}
-
-/**
- * High-Shinくん本体の内部APIを GET で叩く（Phase 3 読み取り系）。
- */
-export async function callHighShinInternalApiGet<TResult = unknown>(
-  env: Env,
-  path: string,
-  params: Record<string, unknown>
-): Promise<TResult> {
-  return callAppInternalApiGet<TResult>(
-    {
-      apiBase: env.HIGH_SHIN_API_BASE,
-      secret:  env.HIGH_SHIN_INTERNAL_SECRET,
-      userId:  env.MCP_DEFAULT_USER_ID,
-    },
-    path,
-    params
-  );
 }
 
 /**

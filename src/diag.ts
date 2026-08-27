@@ -84,8 +84,6 @@ const ENV_KEYS: (keyof Env)[] = [
   "MCP_SERVER_SECRET",
   "MCP_DEFAULT_USER_ID",
   "OAUTH_KV",
-  "HIGH_SHIN_API_BASE",
-  "HIGH_SHIN_INTERNAL_SECRET",
   "ZEUS_API_BASE",
   "ZEUS_INTERNAL_SECRET",
   "ZEUS_EXTERNAL_SECRET",
@@ -122,7 +120,6 @@ const ENV_KEYS: (keyof Env)[] = [
 //   アプリが生きていても「開かない」と出てしまう。accessGated を立てた行だけ
 //   合言葉を載せて叩く。
 const SERVICES: { name: string; envKey: keyof Env; path?: string; accessGated?: true }[] = [
-  { name: "high_shin",     envKey: "HIGH_SHIN_API_BASE"     },
   { name: "zeus",          envKey: "ZEUS_API_BASE"          },
   { name: "form_kun",      envKey: "FORM_KUN_API_BASE"      },
   { name: "pay_kun",       envKey: "PAY_KUN_API_BASE"       },

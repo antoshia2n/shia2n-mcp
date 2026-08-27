@@ -371,8 +371,6 @@ import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
-import { registerHighShinTools } from "./tools.js";
-import { registerHighShinPhase3Tools } from "./tools-high-shin-phase3.js";
 import { registerZeusTools } from "./tools-zeus.js";
 import { registerZeusV2Tools } from "./tools-zeus-v2.js";
 import { registerFormKunTools } from "./tools-form-kun.js";
@@ -415,9 +413,6 @@ export interface Env {
   OAUTH_KV: KVNamespace;
   // データの控えの置き場（R2）。wrangler.jsonc の r2_buckets で結び付ける
   BACKUP_BUCKET: R2Bucket;
-  // High-Shinくん
-  HIGH_SHIN_API_BASE: string;
-  HIGH_SHIN_INTERNAL_SECRET: string;
   // Zeus
   ZEUS_API_BASE: string;
   ZEUS_INTERNAL_SECRET: string;
@@ -510,8 +505,6 @@ function isBackupLastChance(utcHour: number, utcMinute: number): boolean {
 
 function createMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "shia2n-mcp", version: APP_VERSION });
-  registerHighShinTools(server, env);
-  registerHighShinPhase3Tools(server, env);
   registerZeusTools(server, env);
   registerZeusV2Tools(server, env);
   registerFormKunTools(server, env);

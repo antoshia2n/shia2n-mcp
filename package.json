@@ -2,7 +2,7 @@
   "name": "shia2n-mcp",
   "version": "0.1.0",
   "private": true,
-  "description": "shia2n ecosystem unified MCP gateway (High-Shinくん and future apps)",
+  "description": "shia2n ecosystem unified MCP gateway",
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",

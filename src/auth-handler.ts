@@ -120,7 +120,7 @@ function buildConsentHtml(
     <h1>shia2n-mcp へのアクセスを許可しますか？</h1>
     <div class="client">クライアント: ${esc(clientId)}</div>
     <div class="info">
-      このクライアントは shia2n エコシステムの MCP ツール（High-Shin・Zeus・Pay-kun 等）への
+      このクライアントは shia2n エコシステムの MCP ツール（Zeus・Pay-kun 等）への
       アクセスを要求しています。<br><br>
       あなた（Naoki）のアカウントとして操作が実行されます。
     </div>

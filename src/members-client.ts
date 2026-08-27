@@ -2,7 +2,7 @@
  * 会員管理くん内部 API HTTP クライアント v1.1.0
  *
  * shia2n-mcp から会員管理くんの内部 API に Bearer 認証で POST する。
- * Supabase 直接アクセスはせず、必ずこの HTTP 経由（High-Shin パターン踏襲）。
+ * Supabase 直接アクセスはせず、必ずこの HTTP 経由。
  *
  * v1.0.0：postSyncUtageBatch（Phase 3 ③）
  * v1.1.0 (2026-07-05)：Phase 4 スコープ A の members__* 関数 3 本を追加
