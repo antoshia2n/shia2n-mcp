@@ -384,6 +384,19 @@
  *          ・両方の返りに「所属の表の行数」を足した。0 なら読めていないと分かる
  *          変えたのは src/tools-manabu-seminar.ts と src/version.ts と src/index.ts のみ。
  *          設定の追加は無い。
+ *
+ * v0.67.0（2026-08-28 開発部）：mn__put_seminar が所属の表にも書くようにした。
+ *          穴：学ぶくんの画面は 2026-08-27 から mn_content_courses を見る形になったが、
+ *          この道具は mn_contents.course_id にしか書いていなかった。よって、この道具で
+ *          入れたセミナーだけが生徒の画面に出ない状態だった（今ある 337 件は
+ *          移行のときに全部写してあるので実害は出ていない。次に入れる分から出る）。
+ *          直した中身：sbLinkContentToCourse() を新設し、行を足したときも書き換えた
+ *          ときも、同じ組み合わせを所属の表へ 1 行入れる。既に同じ組があれば何もしない
+ *          （PostgREST の resolution=ignore-duplicates）。
+ *          これで、学ぶくんへ書く道は 3 つとも所属の表を書く形にそろった
+ *          （管理画面の新規作成・管理画面のコース付け替え・この道具）。
+ *          変えたのは src/tools-manabu-seminar.ts と src/version.ts と src/index.ts のみ。
+ *          設定の追加は無い。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

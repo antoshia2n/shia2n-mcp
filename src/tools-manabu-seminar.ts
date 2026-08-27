@@ -153,6 +153,35 @@ async function sbInsert(env: Env, table: string, row: Record<string, unknown>): 
   return rows[0];
 }
 
+/**
+ * 所属の表へ 1 組（コンテンツとコース）を入れる。既に同じ組があれば何もしない。
+ *
+ * なぜ要るか：
+ *   2026-08-27 に所属を mn_content_courses へ移し、学ぶくんの画面はそちらを見る形にした。
+ *   この道具は mn_contents.course_id にしか書いていなかったので、ここから入れた行だけが
+ *   生徒の画面に出ないという穴が残っていた（2026-08-28 に見つけた）。
+ */
+async function sbLinkContentToCourse(
+  env: Env,
+  contentId: string,
+  courseId: string,
+  orderIndex: number | null
+): Promise<void> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${T_CONTENT_COURSES}`, {
+    method: "POST",
+    headers: {
+      ...sbHeaders(env),
+      Prefer: "resolution=ignore-duplicates,return=minimal",
+    },
+    body: JSON.stringify({ content_id: contentId, course_id: courseId, order_index: orderIndex }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `所属を入れられませんでした（${T_CONTENT_COURSES} / ${res.status} / ${await res.text()}）`
+    );
+  }
+}
+
 async function sbUpdateById(
   env: Env,
   table: string,
@@ -835,9 +864,11 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
             ...payload,
             updated_at: new Date().toISOString(),
           });
+          await sbLinkContentToCourse(env, hit.id, course.id, b.orderIndex);
           書き換えた.push(`${b.row.date} ${b.row.title}`);
         } else {
-          await sbInsert(env, T_CONTENTS, payload);
+          const 入れた行 = await sbInsert(env, T_CONTENTS, payload);
+          await sbLinkContentToCourse(env, 入れた行.id, course.id, b.orderIndex);
           足した.push(`${b.row.date} ${b.row.title}`);
         }
       }
