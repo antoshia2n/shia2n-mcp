@@ -366,6 +366,24 @@
  *            ことが登録漏れの検出器になっているため）。画面の predictedAt も同じ
  *          変えたのは src/tools-money.ts と src/version.ts と src/index.ts のみ。
  *          設定の追加は無い。
+ *
+ * v0.66.0（2026-08-28 開発部）：学ぶくんの件数を、所属の表から引くように直した。
+ *          症状：管理画面では 334 件が新しい 11 コースへ振り分けられているのに、
+ *          mn__learner_view が返す新設 11 コースの件数が全部 0 だった。
+ *          原因：2026-08-27 に所属を mn_content_courses へ移したが、この置き場の
+ *          道具は mn_contents.course_id しか見ていなかった（mn_content_courses と
+ *          いう文字列がこの置き場に 1 つも無かった）。学ぶくん本体は同じ日に
+ *          直っており、直っていなかったのは測る側だけ。
+ *          直した中身：
+ *          ・courseMembership() を新設。mn_content_courses と mn_contents.course_id の
+ *            両方を足して、同じ組み合わせは 1 回だけ数える（あとから入った行は
+ *            course_id しか持たないため、片方だけでは数が合わない）
+ *          ・sbGetAll() を新設。1000 行ずつ最後まで取る。所属の表は 1 件につき
+ *            複数行になるので、1 回きりの取得だと既定の上限で黙って切れる
+ *          ・mn__peek と mn__learner_view の件数をこの地図から出す形にした
+ *          ・両方の返りに「所属の表の行数」を足した。0 なら読めていないと分かる
+ *          変えたのは src/tools-manabu-seminar.ts と src/version.ts と src/index.ts のみ。
+ *          設定の追加は無い。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

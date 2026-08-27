@@ -64,6 +64,7 @@ const T_CONTENTS = "mn_contents";
 const T_CURRICULUMS = "mn_curriculums";
 const T_CURRICULUM_PROGRAMS = "mn_curriculum_programs";
 const T_MEMBER_CURRICULUMS = "mn_member_curriculums";
+const T_CONTENT_COURSES = "mn_content_courses";
 
 /** 1 回の呼び出しで入れられる上限 */
 const MAX_ROWS = 50;
@@ -90,6 +91,53 @@ async function sbGet(env: Env, path: string): Promise<any[]> {
     throw new Error(`取得できませんでした（${path} / ${res.status} / ${await res.text()}）`);
   }
   return (await res.json()) as any[];
+}
+
+/**
+ * 1000 行ずつ最後まで取る。
+ * sbGet は 1 回きりの取得なので、PostgREST の既定の上限（1000 行）で黙って切れる。
+ * 所属の表は 1 件のコンテンツにつき複数行になるため、切れると件数が過少に出る。
+ */
+async function sbGetAll(env: Env, path: string): Promise<any[]> {
+  const pageSize = 1000;
+  const out: any[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
+      headers: { ...sbHeaders(env), Range: `${from}-${from + pageSize - 1}`, "Range-Unit": "items" },
+    });
+    if (!res.ok) {
+      throw new Error(`取得できませんでした（${path} / ${res.status} / ${await res.text()}）`);
+    }
+    const rows = (await res.json()) as any[];
+    out.push(...rows);
+    if (rows.length < pageSize) return out;
+  }
+}
+
+/**
+ * コースにどのコンテンツが入っているかの地図を作る。
+ *
+ * なぜ 2 か所を足すか：
+ *   2026-08-27 に、1 件のコンテンツを複数のコースへ置ける形にして、所属を
+ *   mn_content_courses へ移した。ただし mn_contents.course_id は残してあり、
+ *   そのあとに入った行は course_id しか持たない。どちらか片方だけを見ると
+ *   数が合わない。両方を足して、同じ組み合わせは 1 回だけ数える。
+ */
+async function courseMembership(
+  env: Env,
+  contents: Array<{ id: string; course_id?: string | null }>
+): Promise<{ map: Map<string, Set<string>>; linkRows: number }> {
+  const links = await sbGetAll(env, `${T_CONTENT_COURSES}?select=content_id,course_id`);
+  const map = new Map<string, Set<string>>();
+  const add = (courseId: unknown, contentId: unknown) => {
+    if (!courseId || !contentId) return;
+    const key = String(courseId);
+    if (!map.has(key)) map.set(key, new Set<string>());
+    map.get(key)!.add(String(contentId));
+  };
+  for (const l of links) add(l.course_id, l.content_id);
+  for (const c of contents) add(c.course_id, c.id);
+  return { map, linkRows: links.length };
 }
 
 async function sbInsert(env: Env, table: string, row: Record<string, unknown>): Promise<any> {
@@ -307,16 +355,23 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
         env,
         `${T_CURRICULUM_PROGRAMS}?select=curriculum_id,program_id,order_index`
       );
-      const contents = await sbGet(
+      const contents = await sbGetAll(
         env,
-        `${T_CONTENTS}?select=id,course_id,title,order_index&order=order_index`
+        `${T_CONTENTS}?select=id,course_id,title,active,order_index&order=order_index`
       );
       result["コンテンツの件数"] = contents.length;
+      const 生きている = new Set(
+        contents.filter((c) => c.active !== false).map((c) => String(c.id))
+      );
+      const { map: 所属, linkRows } = await courseMembership(env, contents);
       const byCourse: Record<string, number> = {};
-      for (const c of contents) {
-        byCourse[c.course_id] = (byCourse[c.course_id] ?? 0) + 1;
+      for (const [courseId, ids] of 所属) {
+        let n = 0;
+        for (const id of ids) if (生きている.has(id)) n += 1;
+        byCourse[courseId] = n;
       }
       result["棚ごとの件数"] = byCourse;
+      result["所属の表の行数"] = linkRows;
 
       // 学ぶ人（ログインと結びついている会員だけ）。名前も連絡先も返さない
       const members = await sbGet(env, `shr_members?select=id,user_id`);
@@ -998,7 +1053,7 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
   // ─────────────────────────────────────────────
   server.tool(
     "mn__learner_view",
-    "指定した学ぶ人の画面に何が出るかを返す。画面と同じ道すじ（結ばれているカリキュラム → プログラム → 公開中のコース → 公開中のコンテンツ）をたどるので、画面を開かずに出る・出ないを判定できる。書き込みは一切しない。",
+    "指定した学ぶ人の画面に何が出るかを返す。画面と同じ道すじ（結ばれているカリキュラム → プログラム → 公開中のコース → 公開中のコンテンツ）をたどるので、画面を開かずに出る・出ないを判定できる。コースの中身は所属の表 mn_content_courses と mn_contents.course_id の両方から引き、同じ組み合わせは 1 回だけ数える。書き込みは一切しない。",
     {
       member_id: z.string().describe("学ぶ人の番号（mn__peek で取れる）"),
       course_title: z
@@ -1032,16 +1087,29 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
         env,
         `${T_COURSES}?select=id,program_id,title,active,order_index&order=order_index`
       );
-      const contents = await sbGet(
+      const contents = await sbGetAll(
         env,
         `${T_CONTENTS}?select=id,course_id,title,active,order_index&order=order_index`
       );
+      const { map: 所属, linkRows } = await courseMembership(env, contents);
+      const 生きている = new Map(
+        contents.filter((ct) => ct.active !== false).map((ct) => [String(ct.id), ct])
+      );
+      const 棚の中身 = (courseId: string) =>
+        [...(所属.get(String(courseId)) ?? [])]
+          .map((id) => 生きている.get(id))
+          .filter((ct): ct is any => Boolean(ct))
+          .sort(
+            (a, b) =>
+              (a.order_index ?? 0) - (b.order_index ?? 0) ||
+              String(a.id).localeCompare(String(b.id))
+          );
 
       const 見えるコース = courses
         .filter((c) => programIds.includes(c.program_id) && c.active !== false)
         .map((c) => ({
           コース: c.title,
-          件数: contents.filter((ct) => ct.course_id === c.id && ct.active !== false).length,
+          件数: 棚の中身(c.id).length,
         }));
 
       const result: Record<string, unknown> = {
@@ -1061,12 +1129,13 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
         if (!target) {
           result[`${course_title} の中身`] = "この人には見えない";
         } else {
-          const list = contents
-            .filter((ct) => ct.course_id === target.id && ct.active !== false)
-            .map((ct) => ct.title);
+          const list = 棚の中身(target.id).map((ct) => ct.title);
           result[`${course_title} の中身`] = { 件数: list.length, 先頭の3本: list.slice(0, 3) };
         }
       }
+
+      // 所属の表を読めているかを、この返りの中で確かめられるようにしておく
+      result["所属の表の行数"] = linkRows;
 
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
