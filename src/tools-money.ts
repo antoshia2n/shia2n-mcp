@@ -19,6 +19,15 @@ import type { Env } from "./index.js";
  *   ・残高を入れる口は、過ぎた予定を「済」にしてから入れる。この順でないと、
  *     同じ残高から先の不足額が 2 通りに割れる（依頼書の手計算で実際に割れた）
  *   ・対で登録された予定（pair_key が同じ行）は、片方を動かすともう片方も動く
+ *
+ * 2026-08-27 直し：日付を過ぎた未入金を積み上げから外した。
+ *   画面（okane-mamoru-kun の src/lib/calc.js の counted / unpaidIncome）は
+ *   2026-08-27 に外しており、この口だけが古いまま残っていた。同じ数字を
+ *   2 か所が別々に出す状態だったので、画面と同じ判定にそろえる。
+ *   ・積み上げに入れないもの 2 つ：日付が決まっていない動き／日付を過ぎたのに
+ *     済になっていない入金（＝未入金。まだ入っていないため）
+ *   ・外した未入金は捨てず、別枠で「不足の原因」として返す。入る前提で積むと、
+ *     足りているように見えて落ちる
  */
 
 type Row = Record<string, unknown>;
@@ -120,13 +129,25 @@ type DayPoint = {
 };
 
 /**
+ * その動きを積み上げに入れてよいか（画面の calc.js の counted と同じ判定）。
+ * 入れないもの 2 つ：日付が決まっていない／日付を過ぎた未入金。
+ */
+function counted(p: Row, today: string): boolean {
+  if (!p.plan_date) return false;
+  if (str(p.direction) === "in" && str(p.plan_date) < today) return false;
+  return true;
+}
+
+/**
  * 口座ごとに、起点の残高から未の予定を日付順に積み上げる。
- * 日付が決まっていない予定（plan_date が空）は積まない。
+ * 日付が決まっていない予定（plan_date が空）と、日付を過ぎた未入金は積まない。
+ * 積まなかった未入金は unpaid で返す（不足の原因として並べるため）。
  */
 async function buildForecast(
   env: Env,
-  untilDate: string
-): Promise<{ accounts: Account[]; points: DayPoint[]; undated: Row[] }> {
+  untilDate: string,
+  today: string = todayJst()
+): Promise<{ accounts: Account[]; points: DayPoint[]; undated: Row[]; unpaid: Row[] }> {
   const accounts = await loadAccounts(env);
   const plans = await sbGet(
     env,
@@ -134,11 +155,14 @@ async function buildForecast(
   );
 
   const undated = plans.filter((p) => !p.plan_date);
+  const unpaid = plans.filter(
+    (p) => str(p.direction) === "in" && !!p.plan_date && str(p.plan_date) < today
+  );
   const points: DayPoint[] = [];
 
   for (const a of accounts) {
     const mine = plans
-      .filter((p) => num(p.account_id) === a.id && !!p.plan_date)
+      .filter((p) => num(p.account_id) === a.id && counted(p, today))
       .filter((p) => str(p.plan_date) >= a.base_balance_date && str(p.plan_date) <= untilDate)
       .sort((x, y) => (str(x.plan_date) < str(y.plan_date) ? -1 : 1));
 
@@ -174,7 +198,18 @@ async function buildForecast(
   }
 
   points.sort((x, y) => (x.口座 === y.口座 ? (x.日付 < y.日付 ? -1 : 1) : x.口座 < y.口座 ? -1 : 1));
-  return { accounts, points, undated };
+  return { accounts, points, undated, unpaid };
+}
+
+/** 未入金の行を、返す形にそろえる */
+function shapeUnpaid(rows: Row[], nameById: Map<number, string>) {
+  return rows.map((p) => ({
+    口座: nameById.get(num(p.account_id)) ?? "",
+    名前: str(p.name),
+    入るはずだった日: str(p.plan_date),
+    金額: num(p.amount),
+    確定見込み: str(p.certainty),
+  }));
 }
 
 export function registerMoneyTools(server: McpServer, env: Env): void {
@@ -182,7 +217,7 @@ export function registerMoneyTools(server: McpServer, env: Env): void {
   // ─── 1. okane__shortage ──────────────────────────────────────────
   server.tool(
     "okane__shortage",
-    "口座ごとの不足額を日付順に返す。起点は各口座の基準残高とその日付で、そこから状態が「未」の予定だけを積み上げる。不足額は「最低残高 − 予定残高」で、マイナスにはならない。入れる期限は引き落とし日の 1 日前（同じ日では間に合わないため）。日付が決まっていない予定は積み上げに入れず、別枠（日付未定）で返す。戻り値: { ok, 起点, 一覧, 最初に不足が出るところ, 日付未定 }。",
+    "口座ごとの不足額を日付順に返す。起点は各口座の基準残高とその日付で、そこから状態が「未」の動きだけを積み上げる。不足額は「最低残高 − 予定残高」で、マイナスにはならない。入れる期限は引き落とし日の 1 日前（同じ日では間に合わないため）。積み上げに入れないものが 2 つあり、どちらも別枠で返す。1 つは日付が決まっていない動き（日付未定）。もう 1 つは日付を過ぎたのに済になっていない入金（未入金）で、こちらは不足の原因として返す。戻り値: { ok, 起点, 一覧, 最初に不足が出るところ, 不足の原因, 日付未定 }。",
     {
       days: z.number().int().min(1).max(400).optional().describe("今日から何日先まで見るか（省略時 90）"),
       account: z.string().optional().describe("口座の呼び名でしぼる（例: みずほ法人）。省略時は全部"),
@@ -190,8 +225,10 @@ export function registerMoneyTools(server: McpServer, env: Env): void {
     },
     async ({ days, account, only_shortage }) => {
       try {
-        const until = addDays(todayJst(), days ?? 90);
-        const { accounts, points, undated } = await buildForecast(env, until);
+        const today = todayJst();
+        const until = addDays(today, days ?? 90);
+        const { accounts, points, undated, unpaid } = await buildForecast(env, until, today);
+        const nameById = new Map(accounts.map((a) => [a.id, a.name]));
 
         let rows = points;
         if (account) rows = rows.filter((p) => p.口座 === account);
@@ -199,9 +236,13 @@ export function registerMoneyTools(server: McpServer, env: Env): void {
 
         const first = points.filter((p) => p.不足額 > 0).sort((x, y) => (x.日付 < y.日付 ? -1 : 1))[0] ?? null;
 
+        const unpaidRows = account
+          ? unpaid.filter((p) => (nameById.get(num(p.account_id)) ?? "") === account)
+          : unpaid;
+
         return asMcpTextResult({
           ok: true,
-          今日: todayJst(),
+          今日: today,
           見る範囲の終わり: until,
           起点: accounts.map((a) => ({
             口座: a.name,
@@ -212,7 +253,16 @@ export function registerMoneyTools(server: McpServer, env: Env): void {
           })),
           一覧: rows,
           最初に不足が出るところ: first,
+          不足の原因: {
+            未入金: {
+              件数: unpaidRows.length,
+              合計: unpaidRows.reduce((s, p) => s + num(p.amount), 0),
+              一覧: shapeUnpaid(unpaidRows, nameById),
+              備考: "入るはずだった日を過ぎても済になっていないため、不足額の計算に入れていない",
+            },
+          },
           日付未定: undated.map((p) => ({
+            口座: nameById.get(num(p.account_id)) ?? "",
             名前: str(p.name),
             出入り: str(p.direction) === "out" ? "出" : "入",
             金額: num(p.amount),
@@ -480,7 +530,7 @@ export function registerMoneyTools(server: McpServer, env: Env): void {
   // ─── 5. okane__morning_line ─────────────────────────────────────
   server.tool(
     "okane__morning_line",
-    "毎朝の報告に足す 1 行を返す。出す条件は 2 つだけで、7 日以内に不足が出る口座があるか、直近に入れた実残高が予測とずれているか。どちらも無ければ line は null で返るので、その日は何も書かない。新しい画面を毎日開く形にしないための口。戻り値: { ok, line, 理由 }。",
+    "毎朝の報告に足す 1 行を返す。出す条件は 2 つだけで、7 日以内に不足が出る口座があるか、直近に入れた実残高が予測とずれているか。どちらも無ければ line は null で返るので、その日は何も書かない。不足が出ていて、その口座に日付を過ぎた未入金があるときは、原因として件数と合計を line の後ろに付ける。未入金は不足額の計算には入っていない（まだ入っていないため）。新しい画面を毎日開く形にしないための口。戻り値: { ok, line, 理由, 不足が出る日, 不足の原因 }。",
     {
       within_days: z.number().int().min(1).max(60).optional().describe("何日以内の不足を見るか（省略時 7）"),
     },
@@ -489,7 +539,8 @@ export function registerMoneyTools(server: McpServer, env: Env): void {
         const span = within_days ?? 7;
         const today = todayJst();
         const limitDate = addDays(today, span);
-        const { points } = await buildForecast(env, addDays(today, 90));
+        const { accounts, points, unpaid } = await buildForecast(env, addDays(today, 90), today);
+        const nameById = new Map(accounts.map((a) => [a.id, a.name]));
 
         const soon = points
           .filter((p) => p.不足額 > 0 && p.日付 <= limitDate)
@@ -504,12 +555,23 @@ export function registerMoneyTools(server: McpServer, env: Env): void {
         const 理由: string[] = [];
         const parts: string[] = [];
 
+        // 不足が出ている口座の未入金だけを原因として並べる
+        const 不足の口座 = new Set(soon.map((p) => p.口座));
+        const cause = unpaid.filter((p) => 不足の口座.has(nameById.get(num(p.account_id)) ?? ""));
+
         if (soon.length > 0) {
           const first = soon[0];
+          const 原因 =
+            cause.length > 0
+              ? `。不足の原因：未入金 ${cause.length} 件・${cause
+                  .reduce((s, p) => s + num(p.amount), 0)
+                  .toLocaleString("ja-JP")}円`
+              : "";
           parts.push(
-            `${first.口座}が${first.日付}に${first.不足額.toLocaleString("ja-JP")}円足りません（入れる期限は${first.入れる期限}）`
+            `${first.口座}が${first.日付}に${first.不足額.toLocaleString("ja-JP")}円足りません（入れる期限は${first.入れる期限}）${原因}`
           );
           理由.push(`${span} 日以内に不足が出る日が ${soon.length} 件`);
+          if (cause.length > 0) 理由.push(`不足が出る口座に未入金が ${cause.length} 件`);
         }
         if (drifted.length > 0) {
           const d = drifted[0];
@@ -525,6 +587,14 @@ export function registerMoneyTools(server: McpServer, env: Env): void {
           line: parts.length > 0 ? `お金：${parts.join("。")}。` : null,
           理由,
           不足が出る日: soon,
+          不足の原因: {
+            未入金: {
+              件数: cause.length,
+              合計: cause.reduce((s, p) => s + num(p.amount), 0),
+              一覧: shapeUnpaid(cause, nameById),
+              備考: "入るはずだった日を過ぎても済になっていないため、不足額の計算に入れていない",
+            },
+          },
         });
       } catch (e) {
         return asMcpTextResult({ ok: false, message: String(e) });

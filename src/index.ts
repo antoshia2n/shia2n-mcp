@@ -350,6 +350,22 @@
  *          口座番号・カード番号・ログイン情報を持つ列は 1 つも無い。
  *          変えたのは src/tools-money.ts（新規）と src/version.ts と src/index.ts のみ。
  *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
+ *
+ * v0.63.0（2026-08-27 開発部）：お金を守るくんの口から、日付を過ぎた未入金を
+ *          積み上げから外した。画面（okane-mamoru-kun の src/lib/calc.js）は
+ *          2026-08-27 に外しており、この口だけが古いまま残っていた。
+ *          同じ数字を 2 か所が別々に出す状態だったので、判定をそろえた。
+ *          ・積み上げに入れないもの 2 つ：日付が決まっていない動き／日付を
+ *            過ぎたのに済になっていない入金
+ *          ・外した未入金は捨てず、別枠「不足の原因」として返す
+ *            （okane__shortage と okane__morning_line の両方）
+ *          ・okane__morning_line は、不足が出ている口座に未入金があるときだけ
+ *            1 行の後ろに「不足の原因：未入金 ◯ 件・◯ 円」を付ける
+ *          ・okane__put_balance は変えていない。実残高を入れるときは、入金が
+ *            未のまま過ぎた分も予測に含めたうえで差を出す形が正しい（差が出る
+ *            ことが登録漏れの検出器になっているため）。画面の predictedAt も同じ
+ *          変えたのは src/tools-money.ts と src/version.ts と src/index.ts のみ。
+ *          設定の追加は無い。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
