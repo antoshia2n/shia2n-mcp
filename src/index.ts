@@ -430,6 +430,7 @@ import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleZeusSync } from "./cron-zeus-sync.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
+import { handleShiaraboMtgSync } from "./cron-shiarabo-mtg.js";
 import { runBackupSlot } from "./cron-backup.js";
 import { registerRestoreTools } from "./tools-restore.js";
 import { registerTsumiageTools } from "./tools-tsumiage.js";
@@ -511,6 +512,10 @@ export interface Env {
   UTAGE_API_KEY: string;              // UTAGE 管理画面で発行した REST API キー
   UTAGE_API_BASE: string;             // https://api.utage-system.com/v1（wrangler vars で設定）
   // v0.29.0 追加（会員管理くん Phase 4 スコープ A members__* 3 本）
+  // 2026-08-28 追加（面談の予定をしあらぼ管理へ反映する処理）
+  // 面談の予定が入っているカレンダーの住所。省略時は google-calendar.ts の既定値。
+  // 秘密の値ではないが、カレンダーを変えるときにここだけで済むように設定にしてある。
+  MTG_CALENDAR_ID?: string;
   MEMBERS_INTERNAL_TOKEN: string;     // 会員管理くん Cloudflare Pages 側の MEMBERS_INTERNAL_TOKEN と同値
                                       // MEMBERS_INTERNAL_SECRET とは別 Secret（スコープ分離：漏洩時の被害範囲最小化）
 }
@@ -771,6 +776,20 @@ export default {
         tasks.push(
           runAndRecord(env, "haaku_fill", async () => {
             return await handleHaakuFill(env);
+          })
+        );
+      }
+
+      // 2026-08-28：面談の予定を読んで、しあらぼ管理の最終面談日へ入れる
+      // （UTC 22:30 = JST 07:30 のみ発火）
+      // 依頼書：https://www.notion.so/3ca9c6c1c43981fd9575e6e9fdb4059b
+      // 時刻の理由：データの控え（JST 04:00〜06:45）が終わったあとで、朝の報告より前。
+      // ネタ9本メール（UTC 22:00）とも分（30 分）が違うので同じ発火に乗らない。
+      // cron 枠は増やさず、既存の 0,30 の枠に相乗りする。
+      if (utcMinute === 30 && utcHour === 22) {
+        tasks.push(
+          runAndRecord(env, "shiarabo_mtg", async () => {
+            return await handleShiaraboMtgSync(env);
           })
         );
       }

@@ -251,4 +251,65 @@ export function registerShiaraboTools(server: McpServer, env: Env): void {
       });
     }
   );
+
+  // ─── 4. shiarabo__morning_line ────────────────────────────────────────────
+  server.tool(
+    "shiarabo__morning_line",
+    "毎朝の報告に足す 1 行を返す。出す条件は 2 つが重なったときだけで、強化指定が立っていて、かつ最終面談日から 2 か月以上空いていること。当たる人が 0 名なら line は null で返るので、その日は何も書かない。最終面談日が空の人も出す（面談していない人を見つけるのがこの口の目的のため）。新しい画面を毎日開く形にしないための口。戻り値: { ok, line, 対象, 見た人数, 基準の日 }。",
+    {
+      months: z
+        .number()
+        .int()
+        .min(1)
+        .max(12)
+        .optional()
+        .describe("何か月空いたら出すか（省略時 2）"),
+    },
+    async (args) => {
+      const months = args.months ?? 2;
+
+      // 日本時間の今日
+      const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const [y, m, d] = today.split("-").map((v) => Number(v));
+      const border = new Date(Date.UTC(y, m - 1 - months, d)).toISOString().slice(0, 10);
+
+      const rows = await sbGet(
+        env,
+        "/shr_students?select=*&archived=eq.false&priority_flag=eq.true&order=sort_order.asc"
+      );
+
+      const hit = rows.filter((r) => {
+        const last = String(r.last_mtg ?? "").trim();
+        if (!last) return true;      // 面談日が入っていない人も出す
+        return last < border;
+      });
+
+      const 対象 = hit.map((r) => {
+        const last = String(r.last_mtg ?? "").trim();
+        const days = last
+          ? Math.floor((Date.parse(today) - Date.parse(last)) / 86400000)
+          : null;
+        return { 名前: String(r.name ?? ""), 最終面談日: last || null, 空いた日数: days };
+      });
+
+      const line =
+        対象.length === 0
+          ? null
+          : 対象
+              .map((t) =>
+                t.最終面談日
+                  ? `${t.名前}（最終面談 ${t.最終面談日.slice(5).replace("-", "/")}・${t.空いた日数} 日）`
+                  : `${t.名前}（最終面談日が空）`
+              )
+              .join("・") + "に声を掛ける時期です";
+
+      return asMcpTextResult({
+        ok: true,
+        line,
+        対象,
+        見た人数: rows.length,
+        基準の日: border,
+      });
+    }
+  );
 }

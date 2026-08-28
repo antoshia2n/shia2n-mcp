@@ -44,6 +44,9 @@ export const KNOWN_JOBS = [
   // 2026-08-16 追加：数字の 1 画面（把握くん）の上位の目標を毎晩 1 回入れる処理。
   // 依頼書：https://www.notion.so/3be9c6c1c439818992dccf7adb533c5a
   "haaku_fill",
+  // 2026-08-28 追加：面談の予定を毎日読んで、しあらぼ管理の最終面談日へ反映する処理。
+  // 依頼書：https://www.notion.so/3ca9c6c1c43981fd9575e6e9fdb4059b
+  "shiarabo_mtg",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];
