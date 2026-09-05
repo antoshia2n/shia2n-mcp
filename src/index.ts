@@ -397,6 +397,28 @@
  *          （管理画面の新規作成・管理画面のコース付け替え・この道具）。
  *          変えたのは src/tools-manabu-seminar.ts と src/version.ts と src/index.ts のみ。
  *          設定の追加は無い。
+ *
+ * v0.69.0（2026-09-05 開発部）：会員の門番を 1 口ここに載せた（src/gate.ts を新設）。
+ *          背景：会員の仕組みを作り直す段で、2026-09-05 に新しい表 4 本を作った
+ *          （member / member_entitlement / member_subscription / auth_attempt）。
+ *          設計の正本：https://www.notion.so/3d19c6c1c43981579dc0ded0a37f53ab の【新】の節。
+ *          足した口は 3 つ。
+ *            POST /gate/resolve   本人の券だけを受け取り、人と権利の一覧を返す
+ *            GET  /gate/attempts  入ろうとした記録を日ごと・符号ごとに数えて返す（合言葉が要る）
+ *            GET  /gate/diag      立っているかだけを返す（認証不要・秘密の値は返さない）
+ *          旧との違いで大事なところ 2 つ。
+ *            ① 住所や本文に付いてきた番号・メールを一切見ない。使うのは券を検証して
+ *               取り出した値だけ（なりすませないようにするため）。
+ *            ② 「見つからない」と「引けなかった」を別の符号にする（not_found と
+ *               lookup_failed）。旧はここを混ぜたため、壊れているのか居ないのかが
+ *               分からず 2 日かかった。
+ *          券の検証は Google の公開鍵で署名を確かめる形で、この置き場の中だけで完結する
+ *          （新しい設定・新しい秘密の値は 1 つも要らない）。
+ *          置き場をここにしたのは、Supabase の鍵をすでに持っていて、公開なので
+ *          開発部が全文を読めるため。将来 自前の入れ物へ移すときは、この 1 ファイルと
+ *          この分岐 3 つを移すだけで済む。
+ *          変えたのは src/gate.ts（新設）と src/index.ts と src/version.ts のみ。
+ *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -425,6 +447,7 @@ import { handleScheduled } from "./cron-neta-mail.js";
 import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
+import { handleGateResolve, handleGateAttempts, handleGateDiag } from "./gate.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleZeusSync } from "./cron-zeus-sync.js";
@@ -653,6 +676,24 @@ export default {
         return handleTaskmasterDeleteProject(request, env);
       }
       return Response.json({ error: "Not Found" }, { status: 404 });
+    }
+
+    // v0.69.0：会員の門番（新しい会員の仕組みの 1 口）
+    // 設計の正本：https://www.notion.so/3d19c6c1c43981579dc0ded0a37f53ab の【新】の節
+    // ・/gate/resolve は本人の券そのものが認証。住所や本文の番号・メールは一切見ない
+    // ・/gate/attempts は運用の数字なので合言葉が要る
+    // ・/gate/diag は立っているかだけを返す（秘密の値は返さない）
+    if (url.pathname === "/gate/resolve" && request.method === "POST") {
+      return handleGateResolve(request, env);
+    }
+    if (url.pathname === "/gate/attempts" && request.method === "GET") {
+      if (!isAuthorized(request, env)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      return handleGateAttempts(request, env);
+    }
+    if (url.pathname === "/gate/diag" && request.method === "GET") {
+      return handleGateDiag(env);
     }
 
     // v0.27.0：UTAGE 診断エンドポイント（認証不要・秘密情報は返さない）
