@@ -1,5 +1,13 @@
 /**
- * 会員の門番 v1.0.0
+ * 会員の門番 v1.1.0
+ *
+ * 【2026-09-05 変更】旧の番号（legacy_shr_id）も返すようにした。
+ *   学ぶくんの 4 つの表（mn_member_curriculums / mn_favorites / mn_view_logs /
+ *   mn_purchases）は、人の番号として shr_members.id を持っている。門番が返す
+ *   member.id とは別の値なので、これを返さないと「入れるが中身が空」になる。
+ *   mn_ の表の番号を付け替えるのは 10 月の段（台帳を 1 本にする）。そのときに
+ *   この列ごと落とす。
+ *
  *
  * 新しい会員の仕組みの「1 口」。アプリは自分で判定せず、この口が返した
  * 権利の一覧に自分の名前が入っているかだけを見る。
@@ -280,7 +288,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
   try {
     rows = await sbGet(
       env,
-      `/member?select=id,name,auth_uid,email&auth_uid=eq.${encodeURIComponent(user.uid)}&limit=2`,
+      `/member?select=id,name,auth_uid,email,legacy_shr_id&auth_uid=eq.${encodeURIComponent(user.uid)}&limit=2`,
     );
   } catch (e) {
     const logged = await logAttempt(env, {
@@ -319,7 +327,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
     try {
       byEmail = await sbGet(
         env,
-        `/member?select=id,name,auth_uid,email&email=eq.${encodeURIComponent(verifiedEmail)}&limit=2`,
+        `/member?select=id,name,auth_uid,email,legacy_shr_id&email=eq.${encodeURIComponent(verifiedEmail)}&limit=2`,
       );
     } catch (e) {
       const logged = await logAttempt(env, {
@@ -390,7 +398,13 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
     {
       ok: true,
       role: "member",
-      member: { id: memberId, name: member.name ?? null },
+      member: {
+        id: memberId,
+        name: member.name ?? null,
+        // 旧の番号。学ぶくんはこれを人の番号として使う（上の説明を見る）。
+        // まだ埋まっていない人は null で返る。呼ぶ側はそれを見て断ること。
+        legacy_id: member.legacy_shr_id ?? null,
+      },
       entitlements: keys,
       matched_by: matchedBy,
       logged,
@@ -443,7 +457,7 @@ export async function handleGateAttempts(request: Request, env: Env): Promise<Re
 // ───────── GET /gate/diag（立っているかだけ・値は返さない） ─────────
 
 export async function handleGateDiag(env: Env): Promise<Response> {
-  const out: Record<string, unknown> = { ok: true, version: "gate v1.0.0" };
+  const out: Record<string, unknown> = { ok: true, version: "gate v1.1.0" };
 
   out.supabase_configured = Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
   out.firebase_project_id = FIREBASE_PROJECT_ID;
