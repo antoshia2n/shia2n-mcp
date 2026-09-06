@@ -442,6 +442,25 @@
  *          同じ回に出す）。個人のメールと呼び名は 5 つとも返さない。
  *          変えたのは src/tools-gate.ts（新設）と src/index.ts と src/version.ts のみ。
  *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
+ * v0.71.0（2026-09-06 開発部）：統括が人を待たずに答えられる読むだけの道具を 3 本足した
+ *          （src/tools-inspect.ts を新設）。依頼書：
+ *          https://www.notion.so/3d39c6c1c4398165a471d2ffc69174d7
+ *            shr__billing     決済の実績 1 件ずつ（shr_billing_logs）＝可視化表の区間 2
+ *            shr__contracts   しあらぼの契約の台帳と次の課金日の分布（shr_members）＝区間 4・12
+ *            logs__records    記録の 3 本（entitlement_logs / audit_logs / sync_run_logs）
+ *                             ＝区間 3・14・15・18
+ *          区間 2 について：依頼書には「Pay-kun は商品の一覧しか引けない」とだけあったが、
+ *          決済の受け取り口（shr-webhook・指紋 72a16ce83ca8）の 116〜125 行目が
+ *          決済 1 件ごとに shr_billing_logs へ金額まで書いていた。実物はすでにあり、
+ *          読む口が無かっただけ。
+ *          3 本の決まり：列名を決め打ちせず select=* で取り、返ってきた列の名前を
+ *          columns_seen に入れて返す（これが「読む列」の正本になる）。名前に mail を
+ *          含む列と通知の全文（payload / raw）は値を落とし、落としたことを
+ *          columns_omitted に理由つきで出す。総数は Content-Range から取り、
+ *          返した行数を総数として書かない。並べ替えの列も候補を順に試す。
+ *          書く列は 3 本とも 0 個。
+ *          変えたのは src/tools-inspect.ts（新設）と src/index.ts と src/version.ts のみ。
+ *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -483,6 +502,7 @@ import { registerTsumiageTools } from "./tools-tsumiage.js";
 import { registerEvolabTools } from "./tools-evolab.js";
 import { registerMoneyTools } from "./tools-money.js";
 import { registerGateTools } from "./tools-gate.js";
+import { registerInspectTools } from "./tools-inspect.js";
 
 export interface Env {
   // Core
@@ -608,6 +628,7 @@ function createMcpServer(env: Env): McpServer {
   registerEvolabTools(server, env);
   registerMoneyTools(server, env);
   registerGateTools(server, env);
+  registerInspectTools(server, env);
   return server;
 }
 
