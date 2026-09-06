@@ -36,6 +36,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Env } from "./index.js";
+import { getFirestoreToken } from "./taskmaster.js";
 
 type Row = Record<string, unknown>;
 
@@ -50,7 +51,7 @@ const LOG_TABLES = ["entitlement_logs", "audit_logs", "sync_run_logs"] as const;
 type LogTable = (typeof LOG_TABLES)[number];
 
 /** 新しい順に並べたいときに試す列。上から順に試す */
-const ORDER_CANDIDATES = ["created_at", "occurred_at", "updated_at", "id"];
+const ORDER_CANDIDATES = ["created_at", "occurred_at", "started_at", "updated_at", "id"];
 
 function sbHeaders(env: Env): Record<string, string> {
   return {
@@ -171,10 +172,45 @@ function countBy(rows: Row[], column: string): Record<string, number> | null {
   return out;
 }
 
+/** テスト用の行の見分け方。業務マニュアルの「数えるときの決まり」と同じ */
+const TEST_EMAIL_SUFFIX = "@example.com";
+
+/** Firestore のプロジェクト。gate.ts / taskmaster.ts と同じ値 */
+const FIREBASE_PROJECT_ID = "gen-lang-client-0371348401";
+
+/**
+ * Firestore が返す値を、素の JavaScript の値へ直す。
+ * 欄の名前は一切決め打ちしない（来たものをそのまま入れ物へ移すだけ）。
+ */
+function fromFirestoreValue(v: Record<string, unknown>): unknown {
+  if (v === null || v === undefined) return null;
+  if ("nullValue" in v) return null;
+  if ("stringValue" in v) return v.stringValue;
+  if ("booleanValue" in v) return v.booleanValue;
+  if ("integerValue" in v) return Number(v.integerValue);
+  if ("doubleValue" in v) return v.doubleValue;
+  if ("timestampValue" in v) return v.timestampValue;
+  if ("arrayValue" in v) {
+    const inner = (v.arrayValue as { values?: Record<string, unknown>[] })?.values ?? [];
+    return inner.map(fromFirestoreValue);
+  }
+  if ("mapValue" in v) {
+    const fields = (v.mapValue as { fields?: Record<string, Record<string, unknown>> })?.fields ?? {};
+    const out: Record<string, unknown> = {};
+    for (const [k, inner] of Object.entries(fields)) out[k] = fromFirestoreValue(inner);
+    return out;
+  }
+  return v;
+}
+
 function textResult(value: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
   };
+}
+
+function isTestEmail(email: unknown): boolean {
+  return typeof email === "string" && email.toLowerCase().endsWith(TEST_EMAIL_SUFFIX);
 }
 
 function errorResult(where: string, detail: unknown) {
@@ -357,6 +393,207 @@ export function registerInspectTools(server: McpServer, env: Env): void {
         });
       } catch (e) {
         return errorResult("logs__records", e);
+      }
+    },
+  );
+
+  // ============================================================
+  // portal__state（区間 8 ポータルに入る）
+  // ============================================================
+  server.tool(
+    "portal__state",
+    "ポータルの状態を引く。誰がログインできる状態か（新しい人の表で本人の番号が入っているか）と、どの札が出るかを決めている材料（Supabase の 2 つの対応表と、Firestore の apps）をまとめて返す。表の名前も欄の名前も決め打ちせず、返ってきたものをそのまま出す。Firestore は先にデータベースの一覧を引いてから読むので、どこを読んだかも一緒に返る。読むだけで、書く列は 0。",
+    {
+      include_test: z
+        .boolean()
+        .optional()
+        .describe("テスト用の行も数に入れる（省略時 false）"),
+    },
+    async ({ include_test }) => {
+      const out: Record<string, unknown> = {
+        ok: true,
+        writes: "無し（この道具は読むだけ）",
+      };
+
+      // 1. 誰がログインできる状態か（新しい人の表）
+      try {
+        const r = await sbSelect(env, "/member?select=id,email,auth_uid&limit=2000");
+        if (!r.ok) {
+          out.login = { ok: false, error: "lookup_failed", status: r.status, detail: r.body.slice(0, 200) };
+        } else {
+          const all = r.rows;
+          const counted = include_test ? all : all.filter((row) => !isTestEmail(row["email"]));
+          const bound = counted.filter((row) => {
+            const v = row["auth_uid"];
+            return typeof v === "string" && v.length > 0;
+          });
+          out.login = {
+            ok: true,
+            table: "member",
+            counted_members: counted.length,
+            excluded_test: all.length - counted.length,
+            can_log_in: bound.length,
+            never_logged_in: counted.length - bound.length,
+            note: "本人の番号が空の人は、まだ一度も入っていない。入れないとは限らない（初回に入った時点で埋まる）",
+          };
+        }
+      } catch (e) {
+        out.login = { ok: false, error: "lookup_failed", detail: String(e) };
+      }
+
+      // 2. 札を決める対応表（Supabase 側）
+      const matrices: Record<string, unknown> = {};
+      for (const t of ["entitlement_app_matrix", "plan_entitlement_matrix"]) {
+        try {
+          const r = await sbSelect(env, `/${t}?select=*&limit=500`);
+          if (!r.ok) {
+            matrices[t] = { ok: false, error: "lookup_failed", status: r.status, detail: r.body.slice(0, 200) };
+            continue;
+          }
+          const { rows, columns_seen, columns_omitted } = redact(r.rows);
+          matrices[t] = {
+            ok: true,
+            total_rows_in_table: r.total,
+            returned: rows.length,
+            columns_seen,
+            columns_omitted,
+            rows,
+          };
+        } catch (e) {
+          matrices[t] = { ok: false, error: "lookup_failed", detail: String(e) };
+        }
+      }
+      out.supabase_matrices = matrices;
+
+      // 3. 札そのもの（Firestore の apps）。データベースの名前を決め打ちしない
+      try {
+        const token = await getFirestoreToken(env);
+        const auth = { Authorization: `Bearer ${token}` };
+        const dbRes = await fetch(
+          `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases`,
+          { headers: auth },
+        );
+        const dbBody = await dbRes.text();
+        if (!dbRes.ok) {
+          out.firestore = {
+            ok: false,
+            error: "lookup_failed",
+            where: "databases",
+            status: dbRes.status,
+            detail: dbBody.slice(0, 300),
+          };
+        } else {
+          const parsed = JSON.parse(dbBody) as { databases?: { name?: string }[] };
+          const names = (parsed.databases ?? [])
+            .map((d) => (d.name ?? "").split("/databases/")[1])
+            .filter((n) => n && n.length > 0);
+          const perDb: Record<string, unknown> = {};
+          for (const dbId of names) {
+            const docRes = await fetch(
+              `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}` +
+                `/databases/${encodeURIComponent(dbId)}/documents/apps?pageSize=100`,
+              { headers: auth },
+            );
+            const docBody = await docRes.text();
+            if (!docRes.ok) {
+              perDb[dbId] = { ok: false, status: docRes.status, detail: docBody.slice(0, 200) };
+              continue;
+            }
+            const docs = (JSON.parse(docBody) as {
+              documents?: { name?: string; fields?: Record<string, Record<string, unknown>> }[];
+            }).documents ?? [];
+            perDb[dbId] = {
+              ok: true,
+              count: docs.length,
+              apps: docs.map((d) => {
+                const fields: Record<string, unknown> = {};
+                for (const [k, v] of Object.entries(d.fields ?? {})) {
+                  fields[k] = fromFirestoreValue(v);
+                }
+                return { doc_id: (d.name ?? "").split("/documents/apps/")[1] ?? null, fields };
+              }),
+            };
+          }
+          out.firestore = {
+            ok: true,
+            project: FIREBASE_PROJECT_ID,
+            databases_found: names,
+            apps_by_database: perDb,
+            note:
+              names.length === 0
+                ? "データベースが 1 つも返らなかった。読む許可が足りていない疑いがある"
+                : "apps が 0 件のデータベースは、そこに札を置いていないというだけ",
+          };
+        }
+      } catch (e) {
+        out.firestore = { ok: false, error: "lookup_failed", detail: String(e) };
+      }
+
+      return textResult(out);
+    },
+  );
+
+  // ============================================================
+  // db__grants（区間 16 権利の入口の守り）
+  // ============================================================
+  server.tool(
+    "db__grants",
+    "処理を実行してよい許可の一覧を引く（どの立場が、どの処理を呼べるか）。表を読む道からは届かないので、データベース側に置いた読み出し専用の処理 list_routine_grants を呼ぶ。外から呼べる処理があるかを人に聞かずに確かめるための口。まだ処理が置かれていないときは、その旨を返す。読むだけで、書く列は 0。",
+    {
+      grantee: z
+        .string()
+        .optional()
+        .describe("立場で絞る（例：anon / authenticated / service_role）。省略すると全部"),
+    },
+    async ({ grantee }) => {
+      try {
+        const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/list_routine_grants`, {
+          method: "POST",
+          headers: sbHeaders(env),
+          body: JSON.stringify({}),
+        });
+        const body = await res.text();
+        if (res.status === 404) {
+          return textResult({
+            ok: false,
+            error: "not_installed",
+            note:
+              "読み出し用の処理 list_routine_grants がまだ置かれていない。置く文は依頼書に載せてある。0 件ではなく未設置",
+            status: res.status,
+          });
+        }
+        if (!res.ok) {
+          return errorResult("db__grants", `HTTP ${res.status}: ${body.slice(0, 300)}`);
+        }
+        let rows: Row[] = [];
+        try {
+          const parsed = JSON.parse(body);
+          if (Array.isArray(parsed)) rows = parsed as Row[];
+        } catch {
+          return errorResult("db__grants", `本文が読めない形だった: ${body.slice(0, 200)}`);
+        }
+        const filtered = grantee
+          ? rows.filter((r) => String(r["grantee"]) === grantee)
+          : rows;
+        const columns_seen: string[] = [];
+        for (const row of rows) {
+          for (const k of Object.keys(row)) if (!columns_seen.includes(k)) columns_seen.push(k);
+        }
+        return textResult({
+          ok: true,
+          source: "list_routine_grants",
+          writes: "無し（この道具は読むだけ）",
+          total: rows.length,
+          returned: filtered.length,
+          columns_seen,
+          count_by_grantee: countBy(rows, "grantee"),
+          count_by_privilege_type: countBy(rows, "privilege_type"),
+          rows: filtered,
+          note:
+            "外から呼べるかどうかは、立場が anon の行があるかで見る。PUBLIC の行は「誰でも」の意味",
+        });
+      } catch (e) {
+        return errorResult("db__grants", e);
       }
     },
   );

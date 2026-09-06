@@ -461,6 +461,22 @@
  *          書く列は 3 本とも 0 個。
  *          変えたのは src/tools-inspect.ts（新設）と src/index.ts と src/version.ts のみ。
  *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
+ * v0.72.0（2026-09-06 開発部）：読むだけの道具を 2 本足し、1 本の不具合を直した
+ *          （src/tools-inspect.ts に追記）。同じ依頼書の 2 回目。
+ *            portal__state  誰がログインできる状態か（member の auth_uid）＋札を決める材料
+ *                           （Supabase の entitlement_app_matrix / plan_entitlement_matrix と
+ *                            Firestore の apps）＝可視化表の区間 8
+ *            db__grants     処理を実行してよい許可の一覧＝区間 16
+ *          区間 8 について：ポータルの置き場は非公開で読めないため、画面のコードからではなく
+ *          表と Firestore を直に読む形にした。Firestore はデータベースの名前を決め打ちせず、
+ *          先に一覧を引いてから読む。鍵は taskmaster.ts の getFirestoreToken を借りる
+ *          （新しい設定は 0 個）。
+ *          区間 16 について：実行の許可の一覧は PostgREST からは届かないので、
+ *          データベース側に読み出し専用の list_routine_grants を 1 本置き、それを呼ぶ。
+ *          置く文は依頼書に載せた。未設置のときは not_installed を返し、0 件と区別する。
+ *          直した不具合：並べ替えの候補に started_at を足した。sync_run_logs だけ
+ *          日時の列の名前が違い、番号順になって直近の行が取れていなかった。
+ *          書く列は 5 本とも 0 個。設定と合言葉の追加は 0 個。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
