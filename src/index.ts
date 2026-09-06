@@ -419,6 +419,29 @@
  *          この分岐 3 つを移すだけで済む。
  *          変えたのは src/gate.ts（新設）と src/index.ts と src/version.ts のみ。
  *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
+ *
+ * v0.70.0（2026-09-08 開発部）：門番を統括の道具に包み、権利を手で足す・外す手を付けた
+ *          （src/tools-gate.ts を新設）。
+ *          包んだ理由：統括が使う口は /gate/attempts と /gate/diag の 2 つで、
+ *          どちらも合言葉つきの住所を直接叩く形だった。道具にすれば MCP の入口の
+ *          検証がそのまま効くので、新しい合言葉を 1 つも配らずに済む。
+ *          /gate/resolve は包まない（本人の券そのものが認証のため。道具にすると
+ *          「券なしで人を引く口」になる）。
+ *          権利の読み書きを足した理由：2026-09-07 の判断記録で「解約した人の権利は
+ *          手で剥奪する」と決めたのに、新しい member_entitlement へ書く手が
+ *          1 つも無いことが 2026-09-08 に実測で分かった（この置き場の全文を
+ *          対照つきで数えて、触っているのは src/gate.ts の読み取り 1 か所だけ）。
+ *          足した道具は 5 つ。
+ *            gate__diag                立っているかと表 3 本の行数
+ *            gate__attempts            入ろうとした記録を日ごと・符号ごとに数える
+ *            gate__entitlements        権利の集計と 1 人分（テスト用の行は既定で外す）
+ *            gate__entitlement_grant   手当てを 1 行足す（source=manual・reason 必須）
+ *            gate__entitlement_revoke  1 行外す（既定は手当ての行だけ）
+ *          書く道具は既定が下見（preview: true）。書いたあとは必ずその人の権利の
+ *          一覧を取り直して返す（「落ちた人が 0」だけで終えず、本当に書き換わったかも
+ *          同じ回に出す）。個人のメールと呼び名は 5 つとも返さない。
+ *          変えたのは src/tools-gate.ts（新設）と src/index.ts と src/version.ts のみ。
+ *          設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -459,6 +482,7 @@ import { registerRestoreTools } from "./tools-restore.js";
 import { registerTsumiageTools } from "./tools-tsumiage.js";
 import { registerEvolabTools } from "./tools-evolab.js";
 import { registerMoneyTools } from "./tools-money.js";
+import { registerGateTools } from "./tools-gate.js";
 
 export interface Env {
   // Core
@@ -583,6 +607,7 @@ function createMcpServer(env: Env): McpServer {
   registerTsumiageTools(server, env);
   registerEvolabTools(server, env);
   registerMoneyTools(server, env);
+  registerGateTools(server, env);
   return server;
 }
 
