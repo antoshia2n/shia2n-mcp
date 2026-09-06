@@ -597,4 +597,122 @@ export function registerInspectTools(server: McpServer, env: Env): void {
       }
     },
   );
+
+  // ============================================================
+  // portal__users（2026-09-06 新設）
+  // 役（role）がどこに入っているかを、Naoki の画面なしで引く。
+  // Firestore の users を読むだけ。書く列は 0。
+  // 呼び名・あだ名・note の名前は返さない（個人が分かる値は伏せる決まり）。
+  // ============================================================
+  server.tool(
+    "portal__users",
+    "ポータルの利用者（Firestore の users）を引く。役（role）が実物でどう入っているかを見るための口。データベースの名前は決め打ちせず、先に一覧を引いてから読む。個人が分かる値（呼び名・あだ名・note の名前・メール）は返さない。読むだけで、書く列は 0。0 件と引けなかったは別の戻り値になる。",
+    {
+      include_fields: z
+        .boolean()
+        .optional()
+        .describe("true で 1 人ずつの欄も返す（省略時 false。既定は集計だけ）"),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(300)
+        .optional()
+        .describe("1 つのデータベースあたりの読む上限（省略時 300）"),
+    },
+    async ({ include_fields, limit }) => {
+      const cap = limit ?? 300;
+      const HIDE = ["nickname", "noteID", "note_id", "email", "displayName", "photoURL"];
+      try {
+        const token = await getFirestoreToken(env);
+        const auth = { Authorization: `Bearer ${token}` };
+
+        const dbRes = await fetch(
+          `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases`,
+          { headers: auth },
+        );
+        const dbBody = await dbRes.text();
+        if (!dbRes.ok) {
+          return textResult({
+            ok: false,
+            error: "lookup_failed",
+            where: "databases",
+            status: dbRes.status,
+            detail: dbBody.slice(0, 300),
+            note: "0 件と失敗は別物。これは「引けなかった」",
+          });
+        }
+        const names = ((JSON.parse(dbBody) as { databases?: { name?: string }[] }).databases ?? [])
+          .map((d) => (d.name ?? "").split("/databases/")[1])
+          .filter((n) => n && n.length > 0);
+
+        const perDb: Record<string, unknown> = {};
+        for (const dbId of names) {
+          const docRes = await fetch(
+            `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}` +
+              `/databases/${encodeURIComponent(dbId)}/documents/users?pageSize=${cap}`,
+            { headers: auth },
+          );
+          const docBody = await docRes.text();
+          if (!docRes.ok) {
+            perDb[dbId] = { ok: false, status: docRes.status, detail: docBody.slice(0, 200) };
+            continue;
+          }
+          const docs = (JSON.parse(docBody) as {
+            documents?: { name?: string; fields?: Record<string, Record<string, unknown>> }[];
+          }).documents ?? [];
+
+          const seen: string[] = [];
+          const byRole: Record<string, number> = {};
+          const byPaymentStatus: Record<string, number> = {};
+          const rows: Record<string, unknown>[] = [];
+
+          for (const d of docs) {
+            const fields: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(d.fields ?? {})) {
+              if (!seen.includes(k)) seen.push(k);
+              if (HIDE.includes(k)) continue;
+              fields[k] = fromFirestoreValue(v);
+            }
+            const role = fields["role"];
+            const roleKey = role === null || role === undefined || role === "" ? "（空）" : String(role);
+            byRole[roleKey] = (byRole[roleKey] ?? 0) + 1;
+
+            const ps = fields["paymentStatus"];
+            const psKey = ps === null || ps === undefined || ps === "" ? "（空）" : String(ps);
+            byPaymentStatus[psKey] = (byPaymentStatus[psKey] ?? 0) + 1;
+
+            rows.push({ doc_id: (d.name ?? "").split("/documents/users/")[1] ?? null, fields });
+          }
+
+          perDb[dbId] = {
+            ok: true,
+            count: docs.length,
+            reached_limit: docs.length >= cap,
+            columns_seen: seen,
+            columns_omitted: seen
+              .filter((k) => HIDE.includes(k))
+              .map((k) => ({ column: k, reason: "個人が分かる値は返さない決まり" })),
+            count_by_role: byRole,
+            count_by_payment_status: byPaymentStatus,
+            users: include_fields === true ? rows : undefined,
+          };
+        }
+
+        return textResult({
+          ok: true,
+          writes: "無し（この道具は読むだけ）",
+          project: FIREBASE_PROJECT_ID,
+          databases_found: names,
+          users_by_database: perDb,
+          note:
+            names.length === 0
+              ? "データベースが 1 つも返らなかった。読む許可が足りていない疑いがある"
+              : "users が 0 件のデータベースは、そこに利用者を置いていないというだけ。役が空の人は、まだ役が付いていない",
+        });
+      } catch (e) {
+        return errorResult("portal__users", e);
+      }
+    },
+  );
 }
