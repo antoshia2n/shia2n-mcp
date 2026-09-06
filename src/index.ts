@@ -494,6 +494,7 @@ import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
 import { registerManabuSeminarTools } from "./tools-manabu-seminar.js";
+import { registerManabuEnrollmentTools } from "./tools-manabu-enrollment.js";
 import { registerShiaraboTools } from "./tools-shiarabo.js";
 import { registerMembersTools } from "./tools-members.js";
 import { registerMunikisTools } from "./tools-munikis.js";
@@ -636,6 +637,7 @@ function createMcpServer(env: Env): McpServer {
   registerKnowledgeTagTools(server, env);
   registerManabuTools(server, env);
   registerManabuSeminarTools(server, env);
+  registerManabuEnrollmentTools(server, env);
   registerShiaraboTools(server, env);
   registerMembersTools(server, env);
   registerMunikisTools(server, env);
