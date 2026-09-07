@@ -457,7 +457,7 @@ export async function handleGateAttempts(request: Request, env: Env): Promise<Re
 // ───────── GET /gate/diag（立っているかだけ・値は返さない） ─────────
 
 export async function handleGateDiag(env: Env): Promise<Response> {
-  const out: Record<string, unknown> = { ok: true, version: "gate v1.1.0" };
+  const out: Record<string, unknown> = { ok: true, version: "gate v1.2.0" };
 
   out.supabase_configured = Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
   out.firebase_project_id = FIREBASE_PROJECT_ID;
