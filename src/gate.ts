@@ -288,7 +288,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
   try {
     rows = await sbGet(
       env,
-      `/member?select=id,name,auth_uid,email,legacy_shr_id&auth_uid=eq.${encodeURIComponent(user.uid)}&limit=2`,
+      `/member?select=id,name,auth_uid,email,legacy_shr_id,role&auth_uid=eq.${encodeURIComponent(user.uid)}&limit=2`,
     );
   } catch (e) {
     const logged = await logAttempt(env, {
@@ -327,7 +327,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
     try {
       byEmail = await sbGet(
         env,
-        `/member?select=id,name,auth_uid,email,legacy_shr_id&email=eq.${encodeURIComponent(verifiedEmail)}&limit=2`,
+        `/member?select=id,name,auth_uid,email,legacy_shr_id,role&email=eq.${encodeURIComponent(verifiedEmail)}&limit=2`,
       );
     } catch (e) {
       const logged = await logAttempt(env, {
@@ -397,7 +397,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
   return Response.json(
     {
       ok: true,
-      role: "member",
+      role: member.role ?? "member",
       member: {
         id: memberId,
         name: member.name ?? null,
