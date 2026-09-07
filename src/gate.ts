@@ -288,7 +288,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
   try {
     rows = await sbGet(
       env,
-      `/member?select=id,name,auth_uid,email,legacy_shr_id&auth_uid=eq.${encodeURIComponent(user.uid)}&limit=2`,
+      `/member?select=id,name,auth_uid,email,legacy_shr_id,role&auth_uid=eq.${encodeURIComponent(user.uid)}&limit=2`,
     );
   } catch (e) {
     const logged = await logAttempt(env, {
@@ -327,7 +327,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
     try {
       byEmail = await sbGet(
         env,
-        `/member?select=id,name,auth_uid,email,legacy_shr_id&email=eq.${encodeURIComponent(verifiedEmail)}&limit=2`,
+        `/member?select=id,name,auth_uid,email,legacy_shr_id,role&email=eq.${encodeURIComponent(verifiedEmail)}&limit=2`,
       );
     } catch (e) {
       const logged = await logAttempt(env, {
@@ -397,7 +397,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
   return Response.json(
     {
       ok: true,
-      role: "member",
+      role: member.role ?? "member",
       member: {
         id: memberId,
         name: member.name ?? null,
@@ -457,7 +457,7 @@ export async function handleGateAttempts(request: Request, env: Env): Promise<Re
 // ───────── GET /gate/diag（立っているかだけ・値は返さない） ─────────
 
 export async function handleGateDiag(env: Env): Promise<Response> {
-  const out: Record<string, unknown> = { ok: true, version: "gate v1.1.0" };
+  const out: Record<string, unknown> = { ok: true, version: "gate v1.2.0" };
 
   out.supabase_configured = Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
   out.firebase_project_id = FIREBASE_PROJECT_ID;
