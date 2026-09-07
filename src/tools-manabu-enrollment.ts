@@ -54,6 +54,26 @@ export function registerManabuEnrollmentTools(server: McpServer, env: Env): void
         return out({ ok: false, error: "MEMBER_LOOKUP_FAILED", message: String(e?.message ?? e) });
       }
       if (members.length === 0) {
+        let legacyMatches: any[];
+        try {
+          legacyMatches = await getRows(
+            env,
+            `member?legacy_shr_id=eq.${encodeURIComponent(member_id)}&select=id,legacy_shr_id&limit=1`
+          );
+        } catch (e: any) {
+          return out({ ok: false, error: "MEMBER_LOOKUP_FAILED", message: String(e?.message ?? e) });
+        }
+
+        if (legacyMatches.length > 0) {
+          return out({
+            ok: false,
+            error: "MEMBER_NOT_FOUND",
+            provided_id: member_id,
+            provided_id_type: "legacy_shr_id",
+            member_id: String(legacyMatches[0].id),
+          });
+        }
+
         return out({ ok: false, error: "MEMBER_NOT_FOUND", member_id });
       }
       const shrId = members[0]?.legacy_shr_id ?? null;
