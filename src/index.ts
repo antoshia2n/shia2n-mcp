@@ -477,6 +477,7 @@
  *          直した不具合：並べ替えの候補に started_at を足した。sync_run_logs だけ
  *          日時の列の名前が違い、番号順になって直近の行が取れていなかった。
  *          書く列は 5 本とも 0 個。設定と合言葉の追加は 0 個。
+ * v0.77.0：portal__auth_users 追加（Firebase の利用者を認証の側から引く・読むだけ）。通行証を scope 付きで作る google-token.ts を新設。設定の追加は 0 個。依頼書：3d29c6c1c439812a8c7fe8eda81f4167
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
