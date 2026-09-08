@@ -37,6 +37,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Env } from "./index.js";
 import { getFirestoreToken } from "./taskmaster.js";
+import { getGoogleTokenForScope } from "./google-token.js";
 
 type Row = Record<string, unknown>;
 
@@ -715,4 +716,203 @@ export function registerInspectTools(server: McpServer, env: Env): void {
       }
     },
   );
+
+// ============================================================
+// portal__auth_users（2026-09-09 新設）
+// Firebase の利用者（認証の側）を、Naoki の画面なしで引く。
+// メールで 1 人を引く（accounts:lookup）か、直近に入った人の一覧を出す（accounts:batchGet）。
+// どちらも読むだけ。書く列は 0。
+// 一覧のメールは先頭 2 文字と @ より後ろだけ残す（個人が分かる値は伏せる決まり）。
+// 通行証は google-token.ts（scope は identitytoolkit）。鍵は Firestore と同じ 2 つで、新しい設定は 0。
+// ============================================================
+server.tool(
+  "portal__auth_users",
+  "Firebase の利用者（認証の側）を引く。email を渡すとその 1 人（uid・作られた日時・最後に入った日時・入口の種類・無効化・Firestore の users の role と paymentStatus）。email を省くと直近 recent_days 日に入った人の一覧（既定 30 日・メールは一部を伏せる）。読むだけで、書く列は 0。0 件と引けなかったは別の戻り値になる。403 が返ったら鍵に firebaseauth.users.get の役が無い。",
+  {
+    email: z
+      .string()
+      .optional()
+      .describe("この 1 人を引く。省略時は一覧"),
+    recent_days: z
+      .number()
+      .int()
+      .min(1)
+      .max(3650)
+      .optional()
+      .describe("一覧のとき、この日数以内に入った人だけ返す（省略時 30）"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(1000)
+      .optional()
+      .describe("一覧のとき、読む上限（省略時 1000）"),
+  },
+  async ({ email, recent_days, limit }) => {
+    const IDTK_SCOPE = "https://www.googleapis.com/auth/identitytoolkit";
+    const BASE = `https://identitytoolkit.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}`;
+
+    type AuthUser = {
+      localId?: string;
+      email?: string;
+      createdAt?: string;
+      lastLoginAt?: string;
+      disabled?: boolean;
+      providerUserInfo?: { providerId?: string }[];
+    };
+
+    const msToIso = (ms?: string) =>
+      ms && /^\d+$/.test(ms) ? new Date(Number(ms)).toISOString() : null;
+
+    const maskEmail = (e?: string) => {
+      if (!e || !e.includes("@")) return null;
+      const [local, domain] = e.split("@");
+      return `${local.slice(0, 2)}***@${domain}`;
+    };
+
+    const shape = (u: AuthUser, hide: boolean) => ({
+      uid: u.localId ?? null,
+      email: hide ? maskEmail(u.email) : (u.email ?? null),
+      created_at: msToIso(u.createdAt),
+      last_login_at: msToIso(u.lastLoginAt),
+      providers: (u.providerUserInfo ?? []).map((p) => p.providerId ?? null),
+      disabled: u.disabled === true,
+    });
+
+    const failed = (where: string, status: number, body: string) =>
+      textResult({
+        ok: false,
+        error: "lookup_failed",
+        where,
+        status,
+        detail: body.slice(0, 300),
+        hint:
+          status === 403
+            ? "鍵（FIREBASE_SA_EMAIL のサービスアカウント）に firebaseauth.users.get の役が無い疑い。Naoki の画面 1 枚で役を足す"
+            : undefined,
+        note: "0 件と失敗は別物。これは「引けなかった」",
+      });
+
+    try {
+      const token = await getGoogleTokenForScope(env, IDTK_SCOPE);
+      const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+      // ── メールで 1 人 ──
+      if (email && email.trim().length > 0) {
+        const target = email.trim().toLowerCase();
+        const res = await fetch(`${BASE}/accounts:lookup`, {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ email: [target] }),
+        });
+        const body = await res.text();
+        if (!res.ok) return failed("accounts:lookup", res.status, body);
+        const users = ((JSON.parse(body) as { users?: AuthUser[] }).users ?? []);
+        if (users.length === 0) {
+          return textResult({
+            ok: true,
+            writes: "無し（この道具は読むだけ）",
+            project: FIREBASE_PROJECT_ID,
+            email: target,
+            found: false,
+            note: "Firebase の認証の側に、このメールの利用者は居ない。一度も Google で入っていないということ",
+          });
+        }
+
+        // Firestore の users/{uid} から role と paymentStatus を引く（データベースは決め打ちせず一覧から）
+        const fsToken = await getFirestoreToken(env);
+        const fsAuth = { Authorization: `Bearer ${fsToken}` };
+        const dbRes = await fetch(
+          `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases`,
+          { headers: fsAuth },
+        );
+        const dbNames = dbRes.ok
+          ? (((JSON.parse(await dbRes.text()) as { databases?: { name?: string }[] }).databases ?? [])
+              .map((d) => (d.name ?? "").split("/databases/")[1])
+              .filter((n) => n && n.length > 0))
+          : [];
+
+        const rows = [];
+        for (const u of users) {
+          const profile: Record<string, unknown> = {};
+          for (const dbId of dbNames) {
+            const docRes = await fetch(
+              `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}` +
+                `/databases/${encodeURIComponent(dbId)}/documents/users/${encodeURIComponent(u.localId ?? "")}`,
+              { headers: fsAuth },
+            );
+            if (docRes.status === 404) { profile[dbId] = { exists: false }; continue; }
+            if (!docRes.ok) { profile[dbId] = { ok: false, status: docRes.status }; continue; }
+            const fields = (JSON.parse(await docRes.text()) as {
+              fields?: Record<string, Record<string, unknown>>;
+            }).fields ?? {};
+            profile[dbId] = {
+              exists: true,
+              role: fields["role"] ? fromFirestoreValue(fields["role"]) : null,
+              paymentStatus: fields["paymentStatus"] ? fromFirestoreValue(fields["paymentStatus"]) : null,
+            };
+          }
+          rows.push({ ...shape(u, false), firestore_users: profile });
+        }
+
+        return textResult({
+          ok: true,
+          writes: "無し（この道具は読むだけ）",
+          project: FIREBASE_PROJECT_ID,
+          email: target,
+          found: true,
+          count: rows.length,
+          users: rows,
+          databases_checked: dbNames,
+          note: "firestore_users の exists が false のデータベースは、その人がまだ登録口を通っていないということ",
+        });
+      }
+
+      // ── 直近に入った人の一覧 ──
+      const days = recent_days ?? 30;
+      const cap = limit ?? 1000;
+      const since = Date.now() - days * 24 * 60 * 60 * 1000;
+      const all: AuthUser[] = [];
+      let pageToken: string | undefined;
+      let pages = 0;
+      do {
+        const url =
+          `${BASE}/accounts:batchGet?maxResults=${Math.min(500, cap - all.length)}` +
+          (pageToken ? `&nextPageToken=${encodeURIComponent(pageToken)}` : "");
+        const res = await fetch(url, { headers: auth });
+        const body = await res.text();
+        if (!res.ok) return failed("accounts:batchGet", res.status, body);
+        const json = JSON.parse(body) as { users?: AuthUser[]; nextPageToken?: string };
+        all.push(...(json.users ?? []));
+        pageToken = json.nextPageToken;
+        pages += 1;
+      } while (pageToken && all.length < cap && pages < 20);
+
+      const recent = all
+        .filter((u) => {
+          const t = u.lastLoginAt && /^\d+$/.test(u.lastLoginAt) ? Number(u.lastLoginAt) : 0;
+          return t >= since;
+        })
+        .sort((a, b) => Number(b.lastLoginAt ?? 0) - Number(a.lastLoginAt ?? 0))
+        .map((u) => shape(u, true));
+
+      return textResult({
+        ok: true,
+        writes: "無し（この道具は読むだけ）",
+        project: FIREBASE_PROJECT_ID,
+        total_users: all.length,
+        reached_limit: all.length >= cap,
+        recent_days: days,
+        recent_count: recent.length,
+        recent_users: recent,
+        note:
+          all.length === 0
+            ? "利用者が 1 人も返らなかった。読む許可が足りていない疑いがある（0 件と失敗は別物）"
+            : "recent_count は、この日数以内に Google で入った人の数。会員かどうかは見ていない",
+      });
+    } catch (e) {
+      return errorResult("portal__auth_users", e);
+    }
+  },
+);
 }
