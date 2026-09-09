@@ -662,247 +662,11 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
         .describe("持ち主。省略すると今あるプログラムから読み取る（1 種類でなければ止まる）"),
       dry_run: z.boolean().optional().describe("true で書かずに中身だけ返す"),
     },
-    async ({
-      year,
-      course_title,
-      course_order_index,
-      course_description,
-      match_by,
-      date_label,
-      rows,
-      program_title,
-      user_id,
-      dry_run,
-    }) => {
-      const programTitle = program_title ?? "しあらぼセミナーアーカイブ";
-      const matchBy = match_by ?? "date";
-      const dateLabel = date_label ?? "開催日";
-
-      // 棚の指定は year か course_title のどちらか一方。両方でも両方無しでも止める
-      if ((year && course_title) || (!year && !course_title)) {
-        throw new Error(
-          "棚の指定は year か course_title のどちらか一方にしてください（両方または両方無しは受け付けません）"
-        );
-      }
-      const courseTitle = course_title ?? `${year}年`;
-
-      // 先に全部組み立てる。日付の形が悪い行があれば、1 行も書かずにここで止まる
-      const built = rows.map((r) => {
-        const row = r as SeminarRow;
-        const dk = dateKey(row.date);
-        return {
-          row,
-          dateKey: dk,
-          orderIndex: typeof row.order_index === "number" ? row.order_index : dk,
-          videoId: youtubeId(row.video_url),
-          description: buildDescription(row),
-          body: buildBody(row, dateLabel),
-        };
-      });
-
-      // 鍵が重なっていると、あとの行が前の行を消してしまう。書く前に止める
-      if (matchBy === "date") {
-        const keys = built.map((b) => b.dateKey);
-        const dup = keys.filter((k, i) => keys.indexOf(k) !== i);
-        if (dup.length > 0) {
-          throw new Error(
-            `同じ日付の行が渡されています（${Array.from(new Set(dup)).join(
-              ", "
-            )}）。鍵が date のときは 1 回の呼び出しで日付が重ならないようにしてください`
-          );
-        }
-      } else {
-        const noVideo = built.filter((b) => !b.videoId).map((b) => b.row.title);
-        if (noVideo.length > 0) {
-          throw new Error(
-            `鍵が video_url なのに動画の住所が読めない行があります（${noVideo.join(
-              " / "
-            )}）。全部の行に YouTube の住所を入れてください`
-          );
-        }
-        const vids = built.map((b) => b.videoId as string);
-        const dup = vids.filter((v, i) => vids.indexOf(v) !== i);
-        if (dup.length > 0) {
-          throw new Error(
-            `同じ動画を指す行が渡されています（${Array.from(new Set(dup)).join(
-              ", "
-            )}）。1 回の呼び出しで動画が重ならないようにしてください`
-          );
-        }
-      }
-
-      if (dry_run) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  試しに組み立てただけ: true,
-                  プログラム: programTitle,
-                  コース: courseTitle,
-                  鍵: matchBy,
-                  日付の呼び名: dateLabel,
-                  本数: built.length,
-                  中身: built.map((b) => ({
-                    題名: b.row.title,
-                    説明: b.description,
-                    並び順: b.orderIndex,
-                    動画の番号: b.videoId,
-                    本文: b.body,
-                  })),
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      // 持ち主を決める
-      const programs = await sbGet(
-        env,
-        `${T_PROGRAMS}?select=id,user_id,title,order_index&order=order_index`
-      );
-      let owner = user_id;
-      if (!owner) {
-        const owners = Array.from(new Set(programs.map((p) => p.user_id).filter(Boolean)));
-        if (owners.length !== 1) {
-          throw new Error(
-            `持ち主を決められませんでした（今あるプログラムの持ち主が ${owners.length} 種類）。user_id を指定してください`
-          );
-        }
-        owner = owners[0] as string;
-      }
-
-      // プログラムを探す。無ければ作る
-      let program = programs.find((p) => p.title === programTitle && p.user_id === owner);
-      let programCreated = false;
-      if (!program) {
-        const maxOrder = programs.reduce(
-          (m, p) => (typeof p.order_index === "number" && p.order_index > m ? p.order_index : m),
-          -1
-        );
-        program = await sbInsert(env, T_PROGRAMS, {
-          user_id: owner,
-          title: programTitle,
-          description: "しあらぼのセミナーアーカイブ。年ごとの棚に分けてある",
-          order_index: maxOrder + 1,
-        });
-        programCreated = true;
-      }
-
-      // 棚（コース）を探す。無ければ作る
-      const courses = await sbGet(
-        env,
-        `${T_COURSES}?select=id,user_id,program_id,title,order_index&program_id=eq.${encodeURIComponent(
-          program.id
-        )}`
-      );
-      let course = courses.find((c) => c.title === courseTitle);
-      let courseCreated = false;
-      if (!course) {
-        const maxCourseOrder = courses.reduce(
-          (m, c) => (typeof c.order_index === "number" && c.order_index > m ? c.order_index : m),
-          -1
-        );
-        const order =
-          typeof course_order_index === "number"
-            ? course_order_index
-            : year
-            ? Number(year)
-            : maxCourseOrder + 1;
-        course = await sbInsert(env, T_COURSES, {
-          user_id: owner,
-          program_id: program.id,
-          title: courseTitle,
-          description: course_description ?? (year ? `${year} 年のセミナー` : courseTitle),
-          order_index: order,
-        });
-        courseCreated = true;
-      }
-
-      // 棚の中の今の行を一度だけ取る。鍵が video_url のときは本文も取る
-      const select =
-        matchBy === "video_url"
-          ? "id,title,order_index,body_markdown"
-          : "id,title,order_index";
-      const existing = await sbGet(
-        env,
-        `${T_CONTENTS}?select=${select}&course_id=eq.${encodeURIComponent(course.id)}`
-      );
-      const existingVideo: Record<string, any> = {};
-      if (matchBy === "video_url") {
-        for (const e of existing) {
-          const v = videoIdFromBody(e.body_markdown);
-          if (v && !existingVideo[v]) existingVideo[v] = e;
-        }
-      }
-
-      const 足した: string[] = [];
-      const 書き換えた: string[] = [];
-
-      for (const b of built) {
-        const hit =
-          matchBy === "video_url"
-            ? existingVideo[b.videoId as string]
-            : existing.find((c) => c.order_index === b.dateKey);
-        const payload = {
-          user_id: owner,
-          course_id: course.id,
-          title: b.row.title,
-          description: b.description,
-          content_type: "rich",
-          body_markdown: b.body,
-          linkset_data: null,
-          order_index: b.orderIndex,
-          active: true,
-        };
-        if (hit) {
-          await sbUpdateById(env, T_CONTENTS, hit.id, {
-            ...payload,
-            updated_at: new Date().toISOString(),
-          });
-          await sbLinkContentToCourse(env, hit.id, course.id, b.orderIndex);
-          書き換えた.push(`${b.row.date} ${b.row.title}`);
-        } else {
-          const 入れた行 = await sbInsert(env, T_CONTENTS, payload);
-          await sbLinkContentToCourse(env, 入れた行.id, course.id, b.orderIndex);
-          足した.push(`${b.row.date} ${b.row.title}`);
-        }
-      }
-
-      // 書いたあとに取り直して数える
-      const after = await sbGet(
-        env,
-        `${T_CONTENTS}?select=id&course_id=eq.${encodeURIComponent(course.id)}`
-      );
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                プログラム: { id: program.id, title: programTitle, 新しく作った: programCreated },
-                コース: { id: course.id, title: courseTitle, 新しく作った: courseCreated },
-                鍵: matchBy,
-                渡された本数: built.length,
-                足した本数: 足した.length,
-                書き換えた本数: 書き換えた.length,
-                この棚の今の件数: after.length,
-                足した: 足した,
-                書き換えた: 書き換えた,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
-    }
-  );
+  async (args) => {
+    const 結果 = await putSeminar(env, args as PutSeminarArgs);
+    return { content: [{ type: "text", text: JSON.stringify(結果, null, 2) }] };
+  }
+);
 
   // ─────────────────────────────────────────────
   // カリキュラムを作り、プログラムと学ぶ人を結ぶ
@@ -1287,4 +1051,251 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
+}
+
+/** mn__put_seminar の中身。道具からも HTTP の口からも同じものを呼ぶ（2026-09-09 切り出し） */
+export interface PutSeminarArgs {
+  year?: string;
+  course_title?: string;
+  course_order_index?: number;
+  course_description?: string;
+  match_by?: "date" | "video_url";
+  date_label?: string;
+  rows: SeminarRow[];
+  program_title?: string;
+  user_id?: string;
+  dry_run?: boolean;
+}
+
+export async function putSeminar(
+  env: Env,
+  {
+    year,
+    course_title,
+    course_order_index,
+    course_description,
+    match_by,
+    date_label,
+    rows,
+    program_title,
+    user_id,
+    dry_run,
+  }: PutSeminarArgs,
+): Promise<Record<string, unknown>> {
+      const programTitle = program_title ?? "しあらぼセミナーアーカイブ";
+      const matchBy = match_by ?? "date";
+      const dateLabel = date_label ?? "開催日";
+
+      // 棚の指定は year か course_title のどちらか一方。両方でも両方無しでも止める
+      if ((year && course_title) || (!year && !course_title)) {
+        throw new Error(
+          "棚の指定は year か course_title のどちらか一方にしてください（両方または両方無しは受け付けません）"
+        );
+      }
+      const courseTitle = course_title ?? `${year}年`;
+
+      // 先に全部組み立てる。日付の形が悪い行があれば、1 行も書かずにここで止まる
+      const built = rows.map((r) => {
+        const row = r as SeminarRow;
+        const dk = dateKey(row.date);
+        return {
+          row,
+          dateKey: dk,
+          orderIndex: typeof row.order_index === "number" ? row.order_index : dk,
+          videoId: youtubeId(row.video_url),
+          description: buildDescription(row),
+          body: buildBody(row, dateLabel),
+        };
+      });
+
+      // 鍵が重なっていると、あとの行が前の行を消してしまう。書く前に止める
+      if (matchBy === "date") {
+        const keys = built.map((b) => b.dateKey);
+        const dup = keys.filter((k, i) => keys.indexOf(k) !== i);
+        if (dup.length > 0) {
+          throw new Error(
+            `同じ日付の行が渡されています（${Array.from(new Set(dup)).join(
+              ", "
+            )}）。鍵が date のときは 1 回の呼び出しで日付が重ならないようにしてください`
+          );
+        }
+      } else {
+        const noVideo = built.filter((b) => !b.videoId).map((b) => b.row.title);
+        if (noVideo.length > 0) {
+          throw new Error(
+            `鍵が video_url なのに動画の住所が読めない行があります（${noVideo.join(
+              " / "
+            )}）。全部の行に YouTube の住所を入れてください`
+          );
+        }
+        const vids = built.map((b) => b.videoId as string);
+        const dup = vids.filter((v, i) => vids.indexOf(v) !== i);
+        if (dup.length > 0) {
+          throw new Error(
+            `同じ動画を指す行が渡されています（${Array.from(new Set(dup)).join(
+              ", "
+            )}）。1 回の呼び出しで動画が重ならないようにしてください`
+          );
+        }
+      }
+
+      if (dry_run) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  試しに組み立てただけ: true,
+                  プログラム: programTitle,
+                  コース: courseTitle,
+                  鍵: matchBy,
+                  日付の呼び名: dateLabel,
+                  本数: built.length,
+                  中身: built.map((b) => ({
+                    題名: b.row.title,
+                    説明: b.description,
+                    並び順: b.orderIndex,
+                    動画の番号: b.videoId,
+                    本文: b.body,
+                  })),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      // 持ち主を決める
+      const programs = await sbGet(
+        env,
+        `${T_PROGRAMS}?select=id,user_id,title,order_index&order=order_index`
+      );
+      let owner = user_id;
+      if (!owner) {
+        const owners = Array.from(new Set(programs.map((p) => p.user_id).filter(Boolean)));
+        if (owners.length !== 1) {
+          throw new Error(
+            `持ち主を決められませんでした（今あるプログラムの持ち主が ${owners.length} 種類）。user_id を指定してください`
+          );
+        }
+        owner = owners[0] as string;
+      }
+
+      // プログラムを探す。無ければ作る
+      let program = programs.find((p) => p.title === programTitle && p.user_id === owner);
+      let programCreated = false;
+      if (!program) {
+        const maxOrder = programs.reduce(
+          (m, p) => (typeof p.order_index === "number" && p.order_index > m ? p.order_index : m),
+          -1
+        );
+        program = await sbInsert(env, T_PROGRAMS, {
+          user_id: owner,
+          title: programTitle,
+          description: "しあらぼのセミナーアーカイブ。年ごとの棚に分けてある",
+          order_index: maxOrder + 1,
+        });
+        programCreated = true;
+      }
+
+      // 棚（コース）を探す。無ければ作る
+      const courses = await sbGet(
+        env,
+        `${T_COURSES}?select=id,user_id,program_id,title,order_index&program_id=eq.${encodeURIComponent(
+          program.id
+        )}`
+      );
+      let course = courses.find((c) => c.title === courseTitle);
+      let courseCreated = false;
+      if (!course) {
+        const maxCourseOrder = courses.reduce(
+          (m, c) => (typeof c.order_index === "number" && c.order_index > m ? c.order_index : m),
+          -1
+        );
+        const order =
+          typeof course_order_index === "number"
+            ? course_order_index
+            : year
+            ? Number(year)
+            : maxCourseOrder + 1;
+        course = await sbInsert(env, T_COURSES, {
+          user_id: owner,
+          program_id: program.id,
+          title: courseTitle,
+          description: course_description ?? (year ? `${year} 年のセミナー` : courseTitle),
+          order_index: order,
+        });
+        courseCreated = true;
+      }
+
+      // 棚の中の今の行を一度だけ取る。鍵が video_url のときは本文も取る
+      const select =
+        matchBy === "video_url"
+          ? "id,title,order_index,body_markdown"
+          : "id,title,order_index";
+      const existing = await sbGet(
+        env,
+        `${T_CONTENTS}?select=${select}&course_id=eq.${encodeURIComponent(course.id)}`
+      );
+      const existingVideo: Record<string, any> = {};
+      if (matchBy === "video_url") {
+        for (const e of existing) {
+          const v = videoIdFromBody(e.body_markdown);
+          if (v && !existingVideo[v]) existingVideo[v] = e;
+        }
+      }
+
+      const 足した: string[] = [];
+      const 書き換えた: string[] = [];
+
+      for (const b of built) {
+        const hit =
+          matchBy === "video_url"
+            ? existingVideo[b.videoId as string]
+            : existing.find((c) => c.order_index === b.dateKey);
+        const payload = {
+          user_id: owner,
+          course_id: course.id,
+          title: b.row.title,
+          description: b.description,
+          content_type: "rich",
+          body_markdown: b.body,
+          linkset_data: null,
+          order_index: b.orderIndex,
+          active: true,
+        };
+        if (hit) {
+          await sbUpdateById(env, T_CONTENTS, hit.id, {
+            ...payload,
+            updated_at: new Date().toISOString(),
+          });
+          await sbLinkContentToCourse(env, hit.id, course.id, b.orderIndex);
+          書き換えた.push(`${b.row.date} ${b.row.title}`);
+        } else {
+          const 入れた行 = await sbInsert(env, T_CONTENTS, payload);
+          await sbLinkContentToCourse(env, 入れた行.id, course.id, b.orderIndex);
+          足した.push(`${b.row.date} ${b.row.title}`);
+        }
+      }
+
+      // 書いたあとに取り直して数える
+      const after = await sbGet(
+        env,
+        `${T_CONTENTS}?select=id&course_id=eq.${encodeURIComponent(course.id)}`
+      );
+
+      return {
+                プログラム: { id: program.id, title: programTitle, 新しく作った: programCreated },
+                コース: { id: course.id, title: courseTitle, 新しく作った: courseCreated },
+                鍵: matchBy,
+                渡された本数: built.length,
+                足した本数: 足した.length,
+                書き換えた本数: 書き換えた.length,
+                この棚の今の件数: after.length,
+                足した: 足した,
+                書き換えた: 書き換えた,
+      };
 }
