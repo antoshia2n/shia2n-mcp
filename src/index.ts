@@ -478,6 +478,7 @@
  *          日時の列の名前が違い、番号順になって直近の行が取れていなかった。
  *          書く列は 5 本とも 0 個。設定と合言葉の追加は 0 個。
  * v0.77.0：portal__auth_users 追加（Firebase の利用者を認証の側から引く・読むだけ）。通行証を scope 付きで作る google-token.ts を新設。設定の追加は 0 個。依頼書：3d29c6c1c439812a8c7fe8eda81f4167
+ * v0.78.0：/manabu/put-seminar 追加（合言葉つき・受け付けの処理から呼ぶ）。mn__put_seminar の中身を putSeminar として切り出し、道具と口の両方が同じ関数を呼ぶ形にした。設定の追加は 0 個。依頼書：3d39c6c1c4398187bd14f5a629e02b05
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -494,7 +495,7 @@ import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
-import { registerManabuSeminarTools } from "./tools-manabu-seminar.js";
+import { registerManabuSeminarTools, putSeminar, type PutSeminarArgs } from "./tools-manabu-seminar.js";
 import { registerManabuEnrollmentTools } from "./tools-manabu-enrollment.js";
 import { registerShiaraboTools } from "./tools-shiarabo.js";
 import { registerMembersTools } from "./tools-members.js";
@@ -748,6 +749,31 @@ export default {
     // ・/gate/resolve は本人の券そのものが認証。住所や本文の番号・メールは一切見ない
     // ・/gate/attempts は運用の数字なので合言葉が要る
     // ・/gate/diag は立っているかだけを返す（秘密の値は返さない）
+    // v0.78.0：学ぶくんへセミナーを入れる口（受け付けの処理から呼ぶ・合言葉が要る）
+    // 中身は道具 mn__put_seminar と同じ関数を呼んでいる。学ぶくんの表へ書く道は 1 本のまま。
+    if (url.pathname === "/manabu/put-seminar" && request.method === "POST") {
+      if (!isAuthorized(request, env)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      let args: PutSeminarArgs;
+      try {
+        args = (await request.json()) as PutSeminarArgs;
+      } catch (e) {
+        return Response.json({ error: "本文が読めません", detail: String(e) }, { status: 400 });
+      }
+      if (!args || !Array.isArray(args.rows) || args.rows.length === 0) {
+        return Response.json({ error: "rows が空です" }, { status: 400 });
+      }
+      try {
+        return Response.json({ ok: true, result: await putSeminar(env, args) });
+      } catch (e) {
+        return Response.json(
+          { ok: false, error: "入れられませんでした", detail: e instanceof Error ? e.message : String(e) },
+          { status: 500 },
+        );
+      }
+    }
+
     if (url.pathname === "/gate/resolve" && request.method === "POST") {
       return handleGateResolve(request, env);
     }
