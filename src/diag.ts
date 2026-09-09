@@ -108,6 +108,8 @@ const ENV_KEYS: (keyof Env)[] = [
   // 値そのものは出さず、有無だけを返す。
   "CF_ACCESS_CLIENT_ID",
   "CF_ACCESS_CLIENT_SECRET",
+  // 2026-09-09：/manabu/put-seminar 専用の合言葉。無いとその口は全部 401 になる。
+  "MANABU_PUT_SEMINAR_SECRET",
 ];
 
 // path を書いた行だけ、入口ではなくその道を叩く。
