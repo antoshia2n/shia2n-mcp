@@ -76,7 +76,7 @@ export function registerContentSheetTools(server: McpServer, env: Env): void {
       tabs.forEach((tab, tabIndex) => {
         (got.valueRanges?.[tabIndex]?.values ?? []).forEach((row, rowIndex) => {
           if (!isChecked(row[COL_REQUEST])) return;
-          if ((row[COL_DONE] ?? "").trim() !== "") return;
+          if (isChecked(row[COL_DONE])) return;
           targets.push({
             tab,
             row_no: rowIndex + 2,
