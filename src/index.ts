@@ -492,6 +492,7 @@ import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerContentOsTools } from "./tools-content-os.js";
+import { registerContentSheetTools } from "./tools-content-sheet.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
@@ -552,6 +553,7 @@ export interface Env {
   CONTENT_OS_INTERNAL_SECRET: string;
   // TaskMaster / haAku（Firestore）
   FIREBASE_SA_EMAIL: string;
+  CONTENT_SHEET_ID?: string;
   FIREBASE_SA_PRIVATE_KEY: string;
   NAOKI_UID: string;
   // 進化ラボ（公式サイト）。記事を入れる口を叩くため。
@@ -638,6 +640,7 @@ function createMcpServer(env: Env): McpServer {
   registerTaskmasterTools(server, env);
   registerSalesManagerTools(server, env);
   registerContentOsTools(server, env);
+  registerContentSheetTools(server, env);
   registerInboxReviewTools(server, env);
   registerHaakuTools(server, env);
   registerKnowledgeTagTools(server, env);
