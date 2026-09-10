@@ -43,6 +43,8 @@ export interface CalendarEvent {
   summary: string;
   /** 予定の説明。空のことがある */
   description: string;
+  /** Google が返した開始日時、または終日予定の開始日 */
+  startAt: string;
   /** 開始日（日本時間・YYYY-MM-DD） */
   startDate: string;
 }
@@ -245,6 +247,7 @@ export async function listEvents(
         id: item.id,
         summary: (item.summary ?? "").trim(),
         description: item.description ?? "",
+        startAt: item.start?.dateTime ?? item.start?.date ?? "",
         startDate,
       });
     }

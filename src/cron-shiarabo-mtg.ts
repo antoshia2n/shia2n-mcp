@@ -185,11 +185,18 @@ export async function handleShiaraboMtgSync(
   const now = new Date();
 
   // 実行の頭で、サービスアカウントから見えるカレンダーを 1 回だけ読む。
-  const calendarList = await listCalendars(env);
-  const listedIds = new Set(calendarList.map((calendar) => calendar.id));
-  const targetIds = new Set(calendarIds);
-  const missingCalendarIds = calendarIds.filter((id) => !listedIds.has(id));
-  const unselectedCalendarCount = calendarList.filter((calendar) => !targetIds.has(calendar.id)).length;
+  let missingCalendarIds: string[] = [];
+  let unselectedCalendarCount = 0;
+  let calendarListFailure: string | null = null;
+  try {
+    const calendarList = await listCalendars(env);
+    const listedIds = new Set(calendarList.map((calendar) => calendar.id));
+    const targetIds = new Set(calendarIds);
+    missingCalendarIds = calendarIds.filter((id) => !listedIds.has(id));
+    unselectedCalendarCount = calendarList.filter((calendar) => !targetIds.has(calendar.id)).length;
+  } catch (e) {
+    calendarListFailure = returnedStatus(e);
+  }
 
   // 1. 生徒を読む（在籍だけ。生徒一覧の口と同じ絞り方）
   const students = await sbGet(env, "/shr_students?select=*&archived=eq.false");
@@ -293,13 +300,21 @@ export async function handleShiaraboMtgSync(
   await sbUpsert(env, "/shr_unmatched_events?on_conflict=event_id", unmatched);
 
   // 6. 個別相談を日ごとに数え、その日の値がまだ無いときだけ把握くんへ入れる
+  const consultEvents = events.filter((ev) => ev.summary.includes(CONSULT_EVENT_TITLE));
+  const uniqueConsultEvents = new Map<string, CalendarEvent>();
+  for (const ev of consultEvents) {
+    const key = JSON.stringify([ev.summary, ev.startAt]);
+    if (!uniqueConsultEvents.has(key)) uniqueConsultEvents.set(key, ev);
+  }
+
   const consultCounts = new Map<string, number>();
-  for (const ev of events) {
-    if (!ev.summary.includes(CONSULT_EVENT_TITLE)) continue;
+  for (const ev of uniqueConsultEvents.values()) {
     consultCounts.set(ev.startDate, (consultCounts.get(ev.startDate) ?? 0) + 1);
   }
 
-  let consultDetail = "個別相談の予定 0 件";
+  const consultCountDetail =
+    `個別相談の予定 ${consultEvents.length} 件・重なりを外して ${uniqueConsultEvents.size} 件`;
+  let consultDetail = consultCountDetail;
   if (consultCounts.size > 0) {
     try {
       const results = await applyKpiDailyValues(
@@ -307,15 +322,14 @@ export async function handleShiaraboMtgSync(
         [...consultCounts].map(([date, value]) => ({ date, id: CONSULT_KPI_ID, value }))
       );
       if (results.some((result) => result.status === "missing_id")) {
-        consultDetail = `個別相談の手前の数字はその id が無い（${CONSULT_KPI_ID}）`;
+        consultDetail = `${consultCountDetail}・手前の数字はその id が無い（${CONSULT_KPI_ID}）`;
       } else {
         const written = results.filter((result) => result.status === "written").length;
         const keptKpi = results.filter((result) => result.status === "kept").length;
-        const total = [...consultCounts.values()].reduce((sum, value) => sum + value, 0);
-        consultDetail = `個別相談の予定 ${total} 件・日ごとの値を入れた ${written} 日・すでに数字があるので入れなかった ${keptKpi} 日`;
+        consultDetail = `${consultCountDetail}・日ごとの値を入れた ${written} 日・すでに数字があるので入れなかった ${keptKpi} 日`;
       }
     } catch (e) {
-      consultDetail = `個別相談の手前の数字を書けませんでした：${e instanceof Error ? e.message : String(e)}`;
+      consultDetail = `${consultCountDetail}・手前の数字を書けませんでした：${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -323,7 +337,9 @@ export async function handleShiaraboMtgSync(
     `予定 ${events.length} 件を見て、当たった生徒 ${newest.size} 名。` +
     `最終面談日を入れた ${updated} 名・台帳の方が新しいので入れなかった ${kept} 名。` +
     `拾わなかった予定 ${unmatched.length} 件を残しました（カレンダー ${calendarEventCounts.join(" / ")}・${toJstDate(timeMin)} 〜 ${toJstDate(now)}）。` +
-    `一覧に無い対象 ${missingCalendarIds.length} 本${missingCalendarIds.length > 0 ? `：${missingCalendarIds.join("・")}` : ""}・一覧にある対象外 ${unselectedCalendarCount} 本。` +
+    (calendarListFailure
+      ? `カレンダーの一覧が読めませんでした（${calendarListFailure}）。`
+      : `一覧に無い対象 ${missingCalendarIds.length} 本${missingCalendarIds.length > 0 ? `：${missingCalendarIds.join("・")}` : ""}・一覧にある対象外 ${unselectedCalendarCount} 本。`) +
     `${consultDetail}` +
     (calendarFailures.length > 0 ? `。読めなかったカレンダー ${calendarFailures.length} 本：${calendarFailures.join(" / ")}` : "") +
     (failed.length > 0 ? `。書けなかった生徒 ${failed.length} 名：${failed.join(" / ")}` : "");
