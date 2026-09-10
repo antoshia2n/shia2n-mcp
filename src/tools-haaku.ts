@@ -1207,8 +1207,85 @@ export async function applyKgiCurrents(
     .map((g) => ({ id: g.id, title: g.title, current: g.current ?? null }));
 }
 
-// 手前の数字の実績を日ごとに書き込む口（applyKpiDailyValues）と、
-// 名前から id を引く口（listKpiDefs）は 2026-08-17 に落とした。
-// 同じ日の午前に足したもので、呼んでいたのは毎晩 3:30 のインプ（日次）だけ。
-// その処理を外したため呼び元が 0 になった。
-// 日ごとの実績を書く道は haAku__update_daily_report に残っている。
+// ─── 手前の数字の実績を日ごとに書く（毎日の自動処理から使う） ──────────────
+
+export type KpiDailyValueResult = {
+  date: string;
+  id: string;
+  status: "written" | "kept" | "missing_id";
+};
+
+/**
+ * 指定日の KPI 実績がまだ無いときだけ書く。
+ * 日報 4 欄と、指定されていない KPI の値はそのまま残す。
+ */
+export async function applyKpiDailyValues(
+  env: Env,
+  patches: { date: string; id: string; value: number }[]
+): Promise<KpiDailyValueResult[]> {
+  if (patches.length === 0) return [];
+
+  const uid = env.NAOKI_UID;
+  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+    throw new Error(
+      "Firebase env not configured (NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY)"
+    );
+  }
+
+  for (const patch of patches) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(patch.date)) {
+      throw new Error(`日付が YYYY-MM-DD ではありません（${patch.date}）。書き込みは行っていません`);
+    }
+    if (!Number.isFinite(patch.value)) {
+      throw new Error(`KPI「${patch.id}」の値が数値ではありません。書き込みは行っていません`);
+    }
+  }
+
+  const token = await getFirestoreToken(env);
+  const kpis = await loadArrayDocStrict<KpiDef>(token, uid, "os_kpis");
+  const knownIds = new Set(kpis.map((k) => k.id));
+  const missingIds = new Set(patches.filter((p) => !knownIds.has(p.id)).map((p) => p.id));
+  if (missingIds.size > 0) {
+    return patches.map((p) => ({
+      date: p.date,
+      id: p.id,
+      status: missingIds.has(p.id) ? "missing_id" : "kept",
+    }));
+  }
+
+  const results: KpiDailyValueResult[] = [];
+  const byYear = new Map<string, typeof patches>();
+  for (const patch of patches) {
+    const year = patch.date.slice(0, 4);
+    const values = byYear.get(year) ?? [];
+    values.push(patch);
+    byYear.set(year, values);
+  }
+
+  for (const [year, yearPatches] of byYear) {
+    const dailyByDate = await loadDailyYearStrict(token, uid, year);
+    let changed = false;
+
+    for (const patch of yearPatches) {
+      const prev = dailyByDate[patch.date] ?? {};
+      if (typeof prev.kpiValues?.[patch.id] === "number") {
+        results.push({ date: patch.date, id: patch.id, status: "kept" });
+        continue;
+      }
+
+      dailyByDate[patch.date] = {
+        ...prev,
+        kpiValues: { ...(prev.kpiValues ?? {}), [patch.id]: patch.value },
+      };
+      changed = true;
+      results.push({ date: patch.date, id: patch.id, status: "written" });
+    }
+
+    if (changed) {
+      const dailyPath = `users/${uid}/app_data/os_daily_${year}`;
+      await fsPatch(token, dailyPath, { value: toFVal(dailyByDate) }, ["value"]);
+    }
+  }
+
+  return results;
+}

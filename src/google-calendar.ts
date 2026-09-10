@@ -41,8 +41,17 @@ export interface CalendarEvent {
   id: string;
   /** 予定の名前。空のことがある */
   summary: string;
+  /** 予定の説明。空のことがある */
+  description: string;
+  /** Google が返した開始日時、または終日予定の開始日 */
+  startAt: string;
   /** 開始日（日本時間・YYYY-MM-DD） */
   startDate: string;
+}
+
+export interface CalendarListEntry {
+  id: string;
+  summary: string;
 }
 
 // ─── 通行証 ──────────────────────────────────────────────────────────────────
@@ -135,6 +144,42 @@ export function jstDayShift(base: Date, days: number): Date {
 
 // ─── 予定を読む ──────────────────────────────────────────────────────────────
 
+/** サービスアカウントから見えるカレンダーを全部返す */
+export async function listCalendars(env: Env): Promise<CalendarListEntry[]> {
+  const token = await getCalendarToken(env);
+  const out: CalendarListEntry[] = [];
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < 10; page++) {
+    const url =
+      "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250" +
+      (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "");
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      throw new Error(
+        `カレンダーの一覧が読めません（${res.status}）：${await res.text()}`
+      );
+    }
+
+    const json = (await res.json()) as {
+      items?: Array<{ id?: string; summary?: string }>;
+      nextPageToken?: string;
+    };
+    for (const item of json.items ?? []) {
+      if (!item.id) continue;
+      out.push({ id: item.id, summary: (item.summary ?? "").trim() });
+    }
+
+    pageToken = json.nextPageToken;
+    if (!pageToken) break;
+  }
+
+  return out;
+}
+
 /**
  * 指定した期間の予定を全部返す。
  * 繰り返しの予定は 1 回ずつに展開する（singleEvents）。
@@ -180,6 +225,7 @@ export async function listEvents(
         id?: string;
         status?: string;
         summary?: string;
+        description?: string;
         start?: { dateTime?: string; date?: string };
       }>;
       nextPageToken?: string;
@@ -200,6 +246,8 @@ export async function listEvents(
       out.push({
         id: item.id,
         summary: (item.summary ?? "").trim(),
+        description: item.description ?? "",
+        startAt: item.start?.dateTime ?? item.start?.date ?? "",
         startDate,
       });
     }

@@ -46,14 +46,18 @@
 import type { Env } from "./index.js";
 import {
   listEvents,
+  listCalendars,
   toJstDate,
   jstDayShift,
   DEFAULT_MTG_CALENDAR_ID,
   type CalendarEvent,
 } from "./google-calendar.js";
+import { applyKpiDailyValues } from "./tools-haaku.js";
 
 /** 何日ぶんさかのぼって見るか。取りこぼした日があっても翌日に拾い直せる幅 */
 const LOOKBACK_DAYS = 14;
+const CONSULT_KPI_ID = "id_1776468660128_ric67";
+const CONSULT_EVENT_TITLE = "個別戦略言語化サポート";
 
 type Row = Record<string, unknown>;
 
@@ -117,6 +121,7 @@ export function nameParts(name: string): string[] {
 export interface StudentLike {
   id: number;
   name: string;
+  contact: string;
 }
 
 export type MatchResult =
@@ -150,13 +155,48 @@ export function matchStudent(summary: string, students: StudentLike[]): MatchRes
   return { kind: "miss", reason: "台帳の名前に当たらない" };
 }
 
+/** 説明のうち「メールアドレス」を含む行だけから、最初のメール形式を拾う */
+function extractContactEmail(description: string): string | null {
+  const line = (description ?? "")
+    .split(/\r?\n/)
+    .find((part) => part.includes("メールアドレス"));
+  if (!line) return null;
+  return line.match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+/i)?.[0] ?? null;
+}
+
+function returnedStatus(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.match(/（(\d{3})/)?.[1] ?? "番号不明";
+}
+
 // ─── 本体 ────────────────────────────────────────────────────────────────────
 
 export async function handleShiaraboMtgSync(
   env: Env
 ): Promise<{ count: number; detail: string }> {
-  const calendarId = env.MTG_CALENDAR_ID || DEFAULT_MTG_CALENDAR_ID;
+  const multiCalendarIds = (env as Env & { MTG_CALENDAR_IDS?: string }).MTG_CALENDAR_IDS;
+  const configuredCalendarIds = (multiCalendarIds ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  const calendarIds = configuredCalendarIds.length > 0
+    ? [...new Set(configuredCalendarIds)]
+    : [env.MTG_CALENDAR_ID || DEFAULT_MTG_CALENDAR_ID];
   const now = new Date();
+
+  // 実行の頭で、サービスアカウントから見えるカレンダーを 1 回だけ読む。
+  let missingCalendarIds: string[] = [];
+  let unselectedCalendarCount = 0;
+  let calendarListFailure: string | null = null;
+  try {
+    const calendarList = await listCalendars(env);
+    const listedIds = new Set(calendarList.map((calendar) => calendar.id));
+    const targetIds = new Set(calendarIds);
+    missingCalendarIds = calendarIds.filter((id) => !listedIds.has(id));
+    unselectedCalendarCount = calendarList.filter((calendar) => !targetIds.has(calendar.id)).length;
+  } catch (e) {
+    calendarListFailure = returnedStatus(e);
+  }
 
   // 1. 生徒を読む（在籍だけ。生徒一覧の口と同じ絞り方）
   const students = await sbGet(env, "/shr_students?select=*&archived=eq.false");
@@ -167,7 +207,7 @@ export async function handleShiaraboMtgSync(
   // 使う欄が実物にあるかを先に見る。無い欄を静かに undefined で扱うと、
   // 突き合わせが全件空振りしても 0 件成功に見えてしまう。
   const first = students[0];
-  const required = ["id", "name", "last_mtg"];
+  const required = ["id", "name", "last_mtg", "contact"];
   const missing = required.filter((k) => !(k in first));
   if (missing.length > 0) {
     throw new Error(
@@ -178,6 +218,7 @@ export async function handleShiaraboMtgSync(
   const list: StudentLike[] = students.map((r) => ({
     id: Number(r.id),
     name: String(r.name ?? ""),
+    contact: String(r.contact ?? ""),
   }));
   const lastMtgById = new Map<number, string>(
     students.map((r) => [Number(r.id), String(r.last_mtg ?? "")])
@@ -186,7 +227,23 @@ export async function handleShiaraboMtgSync(
   // 2. 予定を読む
   const timeMin = jstDayShift(now, -LOOKBACK_DAYS);
   const timeMax = jstDayShift(now, 1);
-  const events: CalendarEvent[] = await listEvents(env, calendarId, timeMin, timeMax);
+  const events: CalendarEvent[] = [];
+  const calendarEventCounts: string[] = [];
+  const calendarFailures: string[] = [];
+  for (const calendarId of calendarIds) {
+    try {
+      const found = await listEvents(env, calendarId, timeMin, timeMax);
+      events.push(...found);
+      calendarEventCounts.push(`${calendarId} ${found.length} 件`);
+    } catch (e) {
+      calendarFailures.push(`${calendarId}：${returnedStatus(e)}`);
+    }
+  }
+  if (calendarEventCounts.length === 0) {
+    throw new Error(
+      `対象のカレンダーを 1 本も読めませんでした。書かずに止めます（${calendarFailures.join(" / ")}）`
+    );
+  }
 
   // 3. 突き合わせる
   const newest = new Map<number, string>(); // 生徒 id → その期間で一番新しい面談日
@@ -194,7 +251,15 @@ export async function handleShiaraboMtgSync(
   const recordedAt = new Date().toISOString();
 
   for (const ev of events) {
-    const m = matchStudent(ev.summary, list);
+    const email = extractContactEmail(ev.description);
+    const emailCandidates = email
+      ? list.filter((student) => student.contact.toLowerCase().includes(email.toLowerCase()))
+      : [];
+    const m: MatchResult = emailCandidates.length === 1
+      ? { kind: "hit", student: emailCandidates[0] }
+      : emailCandidates.length > 1
+        ? { kind: "miss", reason: `メールの候補が ${emailCandidates.length} 人` }
+        : matchStudent(ev.summary, list);
     if (m.kind === "hit") {
       const prev = newest.get(m.student.id);
       if (!prev || ev.startDate > prev) newest.set(m.student.id, ev.startDate);
@@ -234,10 +299,49 @@ export async function handleShiaraboMtgSync(
   // 5. 拾わなかった予定を残す
   await sbUpsert(env, "/shr_unmatched_events?on_conflict=event_id", unmatched);
 
+  // 6. 個別相談を日ごとに数え、その日の値がまだ無いときだけ把握くんへ入れる
+  const consultEvents = events.filter((ev) => ev.summary.includes(CONSULT_EVENT_TITLE));
+  const uniqueConsultEvents = new Map<string, CalendarEvent>();
+  for (const ev of consultEvents) {
+    const key = JSON.stringify([ev.summary, ev.startAt]);
+    if (!uniqueConsultEvents.has(key)) uniqueConsultEvents.set(key, ev);
+  }
+
+  const consultCounts = new Map<string, number>();
+  for (const ev of uniqueConsultEvents.values()) {
+    consultCounts.set(ev.startDate, (consultCounts.get(ev.startDate) ?? 0) + 1);
+  }
+
+  const consultCountDetail =
+    `個別相談の予定 ${consultEvents.length} 件・重なりを外して ${uniqueConsultEvents.size} 件`;
+  let consultDetail = consultCountDetail;
+  if (consultCounts.size > 0) {
+    try {
+      const results = await applyKpiDailyValues(
+        env,
+        [...consultCounts].map(([date, value]) => ({ date, id: CONSULT_KPI_ID, value }))
+      );
+      if (results.some((result) => result.status === "missing_id")) {
+        consultDetail = `${consultCountDetail}・手前の数字はその id が無い（${CONSULT_KPI_ID}）`;
+      } else {
+        const written = results.filter((result) => result.status === "written").length;
+        const keptKpi = results.filter((result) => result.status === "kept").length;
+        consultDetail = `${consultCountDetail}・日ごとの値を入れた ${written} 日・すでに数字があるので入れなかった ${keptKpi} 日`;
+      }
+    } catch (e) {
+      consultDetail = `${consultCountDetail}・手前の数字を書けませんでした：${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
   const detail =
     `予定 ${events.length} 件を見て、当たった生徒 ${newest.size} 名。` +
     `最終面談日を入れた ${updated} 名・台帳の方が新しいので入れなかった ${kept} 名。` +
-    `拾わなかった予定 ${unmatched.length} 件を残しました（カレンダー ${calendarId}・${toJstDate(timeMin)} 〜 ${toJstDate(now)}）` +
+    `拾わなかった予定 ${unmatched.length} 件を残しました（カレンダー ${calendarEventCounts.join(" / ")}・${toJstDate(timeMin)} 〜 ${toJstDate(now)}）。` +
+    (calendarListFailure
+      ? `カレンダーの一覧が読めませんでした（${calendarListFailure}）。`
+      : `一覧に無い対象 ${missingCalendarIds.length} 本${missingCalendarIds.length > 0 ? `：${missingCalendarIds.join("・")}` : ""}・一覧にある対象外 ${unselectedCalendarCount} 本。`) +
+    `${consultDetail}` +
+    (calendarFailures.length > 0 ? `。読めなかったカレンダー ${calendarFailures.length} 本：${calendarFailures.join(" / ")}` : "") +
     (failed.length > 0 ? `。書けなかった生徒 ${failed.length} 名：${failed.join(" / ")}` : "");
 
   return { count: updated, detail };
