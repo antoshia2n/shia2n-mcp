@@ -92,8 +92,6 @@ const ENV_KEYS: (keyof Env)[] = [
   // この 2 つが未設定だと毎晩の Zeus 取り込みが動かない。
   "ZEUS_WORKER_URL",
   "ZEUS_WORKER_SECRET",
-  "FORM_KUN_API_BASE",
-  "FORM_KUN_INTERNAL_SECRET",
   "PAY_KUN_API_BASE",
   "PAY_KUN_INTERNAL_SECRET",
   "FIREBASE_SA_EMAIL",
@@ -123,7 +121,6 @@ const ENV_KEYS: (keyof Env)[] = [
 //   合言葉を載せて叩く。
 const SERVICES: { name: string; envKey: keyof Env; path?: string; accessGated?: true }[] = [
   { name: "zeus",          envKey: "ZEUS_API_BASE"          },
-  { name: "form_kun",      envKey: "FORM_KUN_API_BASE"      },
   { name: "pay_kun",       envKey: "PAY_KUN_API_BASE"       },
   { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true },
 ];

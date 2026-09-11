@@ -120,24 +120,6 @@ export function asMcpTextResult(payload: unknown) {
   };
 }
 /**
- * Form-kun 本体の内部APIを叩く。
- */
-export async function callFormKunInternalApi<TResult = unknown>(
-  env: Env,
-  path: string,
-  body: Record<string, unknown>
-): Promise<TResult> {
-  return callAppInternalApi<TResult>(
-    {
-      apiBase: env.FORM_KUN_API_BASE,
-      secret:  env.FORM_KUN_INTERNAL_SECRET,
-      userId:  env.MCP_DEFAULT_USER_ID,
-    },
-    path,
-    body
-  );
-}
-/**
  * 任意のアプリの /api/internal/{path} を GET で叩く汎用関数。
  * 読み取り系で GET エンドポイントを使うアプリ向け。
  * パラメータは user_id を含むクエリストリングとして URL に付加する。
