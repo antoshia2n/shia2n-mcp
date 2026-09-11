@@ -27,6 +27,11 @@
  *   4 つは strictGet：GET で叩き、転送を追わず、2xx だけを ok にする。
  *   HEAD に答えるかをリポジトリの外から確かめられないこと、関門（Access）のログイン画面へ
  *   転送されたときに、転送先の 200 を ok と読まないためである。待つのは 5 秒まで。
+ * - v0.82.0：strictGet の 4 つは「200 で返ること」に加えて「返事が JSON であること」も見る（2026-09-12 開発部）。
+ *   v0.81.0 を本番で叩いたところ、AssetOS がまだ点検の入口を持っていないのに 200 で返った。
+ *   置き場（Cloudflare Pages）は知らない道を求められると画面の土台（HTML）を 200 で返すため、
+ *   状況番号だけでは「口がある」と「口が無い」を見分けられない。
+ *   何が返ったかを切り分けられるよう、content_type も結果に載せる（中身そのものは読まずに捨てる）。
  */
 import type { Env } from "./index.js";
 import { readAllRuns } from "./cron-log.js";
@@ -60,7 +65,13 @@ async function pingService(
   path?: string,
   headers?: Record<string, string>,
   strictGet?: boolean
-): Promise<{ ok: boolean; latency_ms: number; http_status?: number; error?: string }> {
+): Promise<{
+  ok: boolean;
+  latency_ms: number;
+  http_status?: number;
+  error?: string;
+  content_type?: string;
+}> {
   const start = Date.now();
   let root = base;
   while (root.endsWith("/")) root = root.slice(0, -1);
@@ -76,13 +87,21 @@ async function pingService(
     });
     clearTimeout(id);
     if (strictGet) {
-      // v0.81.0：中身は読まずに捨てる。判定は 2xx かどうかだけ（3xx は関門へ跳ね返されたと読む）
+      // v0.81.0：中身は読まずに捨てる。判定は 2xx かどうか（3xx は関門へ跳ね返されたと読む）
+      // v0.82.0：あわせて、返事が JSON かどうかも見る（HTML が返るのは口が無い印）
       try {
         await resp.body?.cancel();
       } catch {
         // 読み捨てに失敗しても判定には効かない
       }
-      return { ok: resp.status >= 200 && resp.status < 300, latency_ms: Date.now() - start, http_status: resp.status };
+      const contentType = resp.headers.get("content-type") ?? "";
+      const isJson = contentType.toLowerCase().includes("json");
+      return {
+        ok: resp.status >= 200 && resp.status < 300 && isJson,
+        latency_ms: Date.now() - start,
+        http_status: resp.status,
+        content_type: contentType === "" ? "（無し）" : contentType,
+      };
     }
     // path を指定した場合は「その口が実在すること」まで見たいので 4xx も失敗にする。
     // path なし（入口を叩く従来どおりの4件）は挙動を変えない。
