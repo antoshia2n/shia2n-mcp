@@ -188,6 +188,30 @@ export function registerSalesManagerTools(server: McpServer, env: Env): void {
       });
     }
   );
+
+  // ─── 期間と区分を指定して、月ごとの区分別の数字を返す（2026-09-11 追加）──────
+  //
+  // 依頼：https://www.notion.so/3ce9c6c1c43981f6b6d0d7d46c5434c3
+  //
+  // 役員報酬と社会保険を、どの売上で賄えているかを Claude が数字で見るための口。
+  // 読むだけで、売上管理には何も書かない。数え方は get_revenue_summary と同じ
+  // （確定＝入金済みの支払い＋単発の売上、見込み＝画面と同じ契約の数え方）。
+  server.tool(
+    "sales_manager__get_monthly_by_business",
+    "期間（開始月〜終了月）と事業の区分を指定して、月ごと・区分ごとの確定額・見込額・件数を返す。読むだけ。数え方は sales_manager__get_revenue_summary と同じ（確定＝入金済みの支払い（実額優先）＋単発の売上、見込み＝過去の月は確定と同じ・当月は確定＋まだ入金の無い有効な契約・先の月は有効な契約の額）。件数は確定に数えた支払いと単発の売上の行の数。区分を省くと登録済みの全区分。登録に無い区分の名前を渡すと、登録済みの一覧を添えて断る。どの区分にも当たらない行は unassigned に分けて返す（数字の抜けに気づくため）。期間は 2026-01 以降で最大 24 か月。戻り値: { from, to, businesses: [区分名], months: [{ year_month, by_business: { 区分名: {confirmed, projected, count} }, unassigned: {confirmed, count}, total: {confirmed, projected, count} }], period_total: { 区分名: {confirmed, projected, count} } }",
+    {
+      from_month: z.string().describe("開始の年月。YYYY-MM の形（例: 2026-06）。必須"),
+      to_month: z.string().describe("終了の年月。YYYY-MM の形（例: 2026-08）。開始と同じか後。必須"),
+      businesses: z
+        .array(z.string())
+        .optional()
+        .describe("事業の区分の名前の並び（例: [\"しあらぼ継続\"]）。省くと登録済みの全区分"),
+    },
+    async (args) => {
+      const data = await getMonthlyByBusiness(env, args.from_month, args.to_month, args.businesses);
+      return asMcpTextResult(data);
+    }
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -451,5 +475,135 @@ export async function getRevenueSummary(env: Env) {
       projected: nextMonthProj,
       confirmed: nextMonthConf,
     },
+  };
+}
+
+// ─────────────────────────────────────────────
+// 期間・区分別の月ごとの数字（2026-09-11 追加）
+// ─────────────────────────────────────────────
+
+function yearMonthToAbs(ym: string, label: string): number {
+  const m = /^(\d{4})-(\d{2})$/.exec(ym);
+  if (!m) {
+    throw new Error(`${label} は YYYY-MM の形で渡してください（受け取った値: ${ym}）`);
+  }
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) {
+    throw new Error(`${label} の月は 01〜12 で渡してください（受け取った値: ${ym}）`);
+  }
+  if (year < BASE_YEAR) {
+    throw new Error(`${label} は ${BASE_YEAR}-01 以降で渡してください（売上管理の月の番号は ${BASE_YEAR}-01 が 0 のため）`);
+  }
+  return (year - BASE_YEAR) * 12 + (month - 1);
+}
+
+function absToYearMonth(abs: number): string {
+  const year = BASE_YEAR + Math.floor(abs / 12);
+  const month = (abs % 12) + 1;
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+type Cell = { confirmed: number; projected: number; count: number };
+
+export async function getMonthlyByBusiness(
+  env: Env,
+  fromMonth: string,
+  toMonth: string,
+  businesses?: string[]
+) {
+  const fromAbs = yearMonthToAbs(fromMonth, "from_month");
+  const toAbs = yearMonthToAbs(toMonth, "to_month");
+  if (toAbs < fromAbs) {
+    throw new Error(`to_month（${toMonth}）が from_month（${fromMonth}）より前です`);
+  }
+  if (toAbs - fromAbs + 1 > 24) {
+    throw new Error(`期間は最大 24 か月です（受け取った期間: ${toAbs - fromAbs + 1} か月）`);
+  }
+
+  const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager.shia2n.jp";
+  const { payments, contracts, singles, businesses: bizRows } = await fetchSMData(
+    base,
+    env.SALES_MANAGER_INTERNAL_SECRET,
+    cfAccessHeaders(env)
+  );
+
+  const known = (bizRows ?? []).map((b) => b.name);
+  const knownSet = new Set(known);
+  const targets = businesses && businesses.length > 0 ? businesses : known;
+  const unknown = targets.filter((b) => !knownSet.has(b));
+  if (unknown.length > 0) {
+    throw new Error(
+      `登録に無い区分の名前があります: ${unknown.join(" / ")}　登録されている区分: ${known.join(" / ")}`
+    );
+  }
+
+  const cur = currAbs();
+
+  // 区分 1 つ・月 1 つぶんの確定と件数
+  const confirmedOf = (abs: number, match: (biz: string | undefined) => boolean) => {
+    const paid = payments.filter((p) => p.paid && p.month_idx === abs && match(p.business));
+    const sgl = singles.filter((s) => s.month_idx === abs && match(s.business));
+    return {
+      amount:
+        paid.reduce((a, p) => a + (p.actual_amount ?? p.amount), 0) +
+        sgl.reduce((a, s) => a + s.amount, 0),
+      count: paid.length + sgl.length,
+    };
+  };
+
+  // 区分 1 つ・月 1 つぶんの見込み（get_revenue_summary と同じ数え方を区分で絞ったもの）
+  const projectedOf = (abs: number, biz: string, confirmed: number): number => {
+    const own = contracts.filter((c) => c.status === "active" && c.business === biz);
+    if (abs < cur) return confirmed;
+    if (abs > cur) return contractAmountForMonth(own, abs);
+    const unpaid = own.reduce((a, c) => {
+      const s = c.start_month_idx ?? 0;
+      if (c.type === "variable" && s <= cur) return a + c.amount;
+      if (c.type === "recurring" && s <= cur)
+        return payments.some((p) => p.contract_id === c.id && p.month_idx === cur && p.paid) ? a : a + c.amount;
+      if (c.type === "installment") {
+        const e = s + (c.total_count ?? 0) - 1;
+        if (s <= cur && cur <= e)
+          return payments.some((p) => p.contract_id === c.id && p.month_idx === cur && p.paid) ? a : a + c.amount;
+      }
+      return a;
+    }, 0);
+    return confirmed + unpaid;
+  };
+
+  const periodTotal: Record<string, Cell> = {};
+  for (const biz of targets) periodTotal[biz] = { confirmed: 0, projected: 0, count: 0 };
+
+  const months = [];
+  for (let abs = fromAbs; abs <= toAbs; abs++) {
+    const byBusiness: Record<string, Cell> = {};
+    const total: Cell = { confirmed: 0, projected: 0, count: 0 };
+    for (const biz of targets) {
+      const c = confirmedOf(abs, (b) => b === biz);
+      const cell: Cell = { confirmed: c.amount, projected: projectedOf(abs, biz, c.amount), count: c.count };
+      byBusiness[biz] = cell;
+      total.confirmed += cell.confirmed;
+      total.projected += cell.projected;
+      total.count += cell.count;
+      periodTotal[biz].confirmed += cell.confirmed;
+      periodTotal[biz].projected += cell.projected;
+      periodTotal[biz].count += cell.count;
+    }
+    const un = confirmedOf(abs, (b) => !b || !knownSet.has(b));
+    months.push({
+      year_month: absToYearMonth(abs),
+      by_business: byBusiness,
+      unassigned: { confirmed: un.amount, count: un.count },
+      total,
+    });
+  }
+
+  return {
+    from: absToYearMonth(fromAbs),
+    to: absToYearMonth(toAbs),
+    businesses: targets,
+    months,
+    period_total: periodTotal,
   };
 }
