@@ -46,7 +46,6 @@
 import type { Env } from "./index.js";
 import {
   listEvents,
-  listCalendars,
   toJstDate,
   jstDayShift,
   DEFAULT_MTG_CALENDAR_ID,
@@ -184,19 +183,9 @@ export async function handleShiaraboMtgSync(
     : [env.MTG_CALENDAR_ID || DEFAULT_MTG_CALENDAR_ID];
   const now = new Date();
 
-  // 実行の頭で、サービスアカウントから見えるカレンダーを 1 回だけ読む。
-  let missingCalendarIds: string[] = [];
-  let unselectedCalendarCount = 0;
-  let calendarListFailure: string | null = null;
-  try {
-    const calendarList = await listCalendars(env);
-    const listedIds = new Set(calendarList.map((calendar) => calendar.id));
-    const targetIds = new Set(calendarIds);
-    missingCalendarIds = calendarIds.filter((id) => !listedIds.has(id));
-    unselectedCalendarCount = calendarList.filter((calendar) => !targetIds.has(calendar.id)).length;
-  } catch (e) {
-    calendarListFailure = returnedStatus(e);
-  }
+  // 2026-09-11：サービスアカウントの一覧（calendarList）は、共有されたカレンダーを載せない。
+  // 2 本とも読めているのに毎回「一覧に無い」と出ていたため、一覧との突き合わせは外した。
+  // 読めなかった本は、下の calendarFailures がそのまま detail に出す。
 
   // 1. 生徒を読む（在籍だけ。生徒一覧の口と同じ絞り方）
   const students = await sbGet(env, "/shr_students?select=*&archived=eq.false");
@@ -337,9 +326,6 @@ export async function handleShiaraboMtgSync(
     `予定 ${events.length} 件を見て、当たった生徒 ${newest.size} 名。` +
     `最終面談日を入れた ${updated} 名・台帳の方が新しいので入れなかった ${kept} 名。` +
     `拾わなかった予定 ${unmatched.length} 件を残しました（カレンダー ${calendarEventCounts.join(" / ")}・${toJstDate(timeMin)} 〜 ${toJstDate(now)}）。` +
-    (calendarListFailure
-      ? `カレンダーの一覧が読めませんでした（${calendarListFailure}）。`
-      : `一覧に無い対象 ${missingCalendarIds.length} 本${missingCalendarIds.length > 0 ? `：${missingCalendarIds.join("・")}` : ""}・一覧にある対象外 ${unselectedCalendarCount} 本。`) +
     `${consultDetail}` +
     (calendarFailures.length > 0 ? `。読めなかったカレンダー ${calendarFailures.length} 本：${calendarFailures.join(" / ")}` : "") +
     (failed.length > 0 ? `。書けなかった生徒 ${failed.length} 名：${failed.join(" / ")}` : "");
