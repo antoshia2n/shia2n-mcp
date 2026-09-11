@@ -22,6 +22,11 @@
  *   sales_manager だけ入口が画面のページで、HEAD でも画面を丸ごと作るため 2 秒に
  *   間に合わず timeout になっていた。軽い口 /api/diag へ向ける。
  *   path を指定した対象は 4xx も失敗として扱う（口が消えたことを取りこぼさないため）。
+ * - v0.81.0：記録くん・appdev-kun・consult-manager・AssetOS の 4 つを足した（調べる手段が無い 6 件を 0 にする・2026-09-12 開発部）。
+ *   住所は公開の住所なので設定値にせず、この表に直接書く（新しい設定値 0）。
+ *   4 つは strictGet：GET で叩き、転送を追わず、2xx だけを ok にする。
+ *   HEAD に答えるかをリポジトリの外から確かめられないこと、関門（Access）のログイン画面へ
+ *   転送されたときに、転送先の 200 を ok と読まないためである。待つのは 5 秒まで。
  */
 import type { Env } from "./index.js";
 import { readAllRuns } from "./cron-log.js";
@@ -53,19 +58,32 @@ async function checkRateLimit(request: Request, env: Env): Promise<boolean> {
 async function pingService(
   base: string,
   path?: string,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  strictGet?: boolean
 ): Promise<{ ok: boolean; latency_ms: number; http_status?: number; error?: string }> {
   const start = Date.now();
-  const target = path ? base.replace(/\/+$/, "") + path : base;
+  let root = base;
+  while (root.endsWith("/")) root = root.slice(0, -1);
+  const target = path ? root + path : base;
   try {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 2000);
+    const id = setTimeout(() => controller.abort(), strictGet ? 5000 : 2000);
     const resp = await fetch(target, {
-      method: "HEAD",
+      method: strictGet ? "GET" : "HEAD",
       signal: controller.signal,
+      ...(strictGet ? { redirect: "manual" as const } : {}),
       ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
     });
     clearTimeout(id);
+    if (strictGet) {
+      // v0.81.0：中身は読まずに捨てる。判定は 2xx かどうかだけ（3xx は関門へ跳ね返されたと読む）
+      try {
+        await resp.body?.cancel();
+      } catch {
+        // 読み捨てに失敗しても判定には効かない
+      }
+      return { ok: resp.status >= 200 && resp.status < 300, latency_ms: Date.now() - start, http_status: resp.status };
+    }
     // path を指定した場合は「その口が実在すること」まで見たいので 4xx も失敗にする。
     // path なし（入口を叩く従来どおりの4件）は挙動を変えない。
     const limit = path ? 400 : 500;
@@ -119,10 +137,26 @@ const ENV_KEYS: (keyof Env)[] = [
 //   サービス用の合言葉を載せずに叩くとログイン画面へ跳ね返され、
 //   アプリが生きていても「開かない」と出てしまう。accessGated を立てた行だけ
 //   合言葉を載せて叩く。
-const SERVICES: { name: string; envKey: keyof Env; path?: string; accessGated?: true }[] = [
+//
+// 2026-09-12（v0.81.0）：住所を設定値ではなく表に直接書く行（base）と、strictGet の行を足した。
+//   kiroku と consult_manager は関門の内側なので accessGated を立てる（通行許可のポリシーは Access の側に要る）。
+//   asset_os は関門の有無を確かめていないが、合言葉を送っても害は無いので立てておく。
+//   appdev_kun は関門が無いので立てない。
+const SERVICES: {
+  name: string;
+  envKey?: keyof Env;
+  base?: string;
+  path?: string;
+  accessGated?: true;
+  strictGet?: true;
+}[] = [
   { name: "zeus",          envKey: "ZEUS_API_BASE"          },
   { name: "pay_kun",       envKey: "PAY_KUN_API_BASE"       },
   { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true },
+  { name: "kiroku",          base: "https://kiroku.shia2n.jp",          path: "/api/diag", accessGated: true, strictGet: true },
+  { name: "appdev_kun",      base: "https://appdev-kun.pages.dev",      path: "/api/diag",                    strictGet: true },
+  { name: "consult_manager", base: "https://consult-manager.shia2n.jp", path: "/api/diag", accessGated: true, strictGet: true },
+  { name: "asset_os",        base: "https://asset-os.shia2n.jp",        path: "/api/diag", accessGated: true, strictGet: true },
 ];
 
 export async function handleDiag(request: Request, env: Env): Promise<Response> {
@@ -143,15 +177,16 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
 
   // 各サービスへの疎通確認（並列）
   const connectivityEntries = await Promise.all(
-    SERVICES.map(async ({ name, envKey, path, accessGated }) => {
-      const base = env[envKey] as string | undefined;
+    SERVICES.map(async ({ name, envKey, base: fixedBase, path, accessGated, strictGet }) => {
+      const base = fixedBase ?? (envKey ? (env[envKey] as string | undefined) : undefined);
       if (!isPresent(base)) {
         return [name, { ok: false, reason: "env_missing" }] as const;
       }
       const result = await pingService(
         base!,
         path,
-        accessGated ? cfAccessHeaders(env) : undefined
+        accessGated ? cfAccessHeaders(env) : undefined,
+        strictGet === true
       );
       // どの道を叩いたかを結果に載せる（住所そのものは載せない）。
       return [name, path ? { ...result, path } : result] as const;
