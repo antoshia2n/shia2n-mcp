@@ -480,6 +480,7 @@
  * v0.77.0：portal__auth_users 追加（Firebase の利用者を認証の側から引く・読むだけ）。通行証を scope 付きで作る google-token.ts を新設。設定の追加は 0 個。依頼書：3d29c6c1c439812a8c7fe8eda81f4167
  * v0.78.0：/manabu/put-seminar 追加（合言葉つき・受け付けの処理から呼ぶ）。mn__put_seminar の中身を putSeminar として切り出し、道具と口の両方が同じ関数を呼ぶ形にした。設定の追加は 0 個。依頼書：3d39c6c1c4398187bd14f5a629e02b05
  * v0.79.0：/manabu/put-seminar の合言葉を口専用の MANABU_PUT_SEMINAR_SECRET にした（MCP_SERVER_SECRET では通らない）。受け付けの処理に MCP 全体の合言葉を渡さないため。設定の追加は 1 個。依頼書：3d39c6c1c4398187bd14f5a629e02b05
+ * v0.80.0：content_sheet__add_plan_row 追加（コンテンツ管理シートに予定の行を 1 本足す。書くのは A・C・D・E だけ・媒体は X記事・Xポスト・note記事 だけ）。設定の追加は 0 個。依頼書：3d39c6c1c4398187bd14f5a629e02b05
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
