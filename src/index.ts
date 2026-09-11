@@ -487,7 +487,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
 import { registerZeusTools } from "./tools-zeus.js";
 import { registerZeusV2Tools } from "./tools-zeus-v2.js";
-import { registerFormKunTools } from "./tools-form-kun.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
@@ -542,9 +541,6 @@ export interface Env {
   // 本 Worker の 0,30 cron（UTC 18:00 分岐）から HTTP で起動する。
   ZEUS_WORKER_URL: string;
   ZEUS_WORKER_SECRET: string;
-  // Form-kun
-  FORM_KUN_API_BASE: string;
-  FORM_KUN_INTERNAL_SECRET: string;
   // Pay-kun
   PAY_KUN_API_BASE: string;
   PAY_KUN_INTERNAL_SECRET: string;
@@ -635,7 +631,6 @@ function createMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "shia2n-mcp", version: APP_VERSION });
   registerZeusTools(server, env);
   registerZeusV2Tools(server, env);
-  registerFormKunTools(server, env);
   registerPayKunTools(server, env);
   registerTaskmasterTools(server, env);
   registerSalesManagerTools(server, env);
