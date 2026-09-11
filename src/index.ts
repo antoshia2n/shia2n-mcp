@@ -481,6 +481,7 @@
  * v0.78.0：/manabu/put-seminar 追加（合言葉つき・受け付けの処理から呼ぶ）。mn__put_seminar の中身を putSeminar として切り出し、道具と口の両方が同じ関数を呼ぶ形にした。設定の追加は 0 個。依頼書：3d39c6c1c4398187bd14f5a629e02b05
  * v0.79.0：/manabu/put-seminar の合言葉を口専用の MANABU_PUT_SEMINAR_SECRET にした（MCP_SERVER_SECRET では通らない）。受け付けの処理に MCP 全体の合言葉を渡さないため。設定の追加は 1 個。依頼書：3d39c6c1c4398187bd14f5a629e02b05
  * v0.80.0：content_sheet__add_plan_row 追加（コンテンツ管理シートに予定の行を 1 本足す。書くのは A・C・D・E だけ・媒体は X記事・Xポスト・note記事 だけ）。設定の追加は 0 個。依頼書：3d39c6c1c4398187bd14f5a629e02b05
+ * v0.81.0：/diag の connectivity に記録くん・appdev-kun・consult-manager・AssetOS の 4 つを足した（住所は diag.ts の表に直接・GET で叩き 2xx だけを ok）。設定の追加は 0 個。依頼書：3d89c6c1c43981a58b63db7dca43cbb4
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
