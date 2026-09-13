@@ -519,6 +519,7 @@ import { handleZeusSync } from "./cron-zeus-sync.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
 import { handleShiaraboMtgSync } from "./cron-shiarabo-mtg.js";
+import { handleConsultManagerIntake, handleConsultManagerIntakeHttp } from "./cron-consult-manager-intake.js";
 import { runBackupSlot } from "./cron-backup.js";
 import { registerRestoreTools } from "./tools-restore.js";
 import { registerTsumiageTools } from "./tools-tsumiage.js";
@@ -808,6 +809,14 @@ export default {
       return handleUtageBackfill(request, env);
     }
 
+    // 2026-09-13：UTAGE の個別相談予約者をコンサルマネージャーへ手動で取り込む口
+    if (url.pathname === "/consult-manager/intake" && request.method === "POST") {
+      if (!isAuthorized(request, env)) {
+        return Response.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      return handleConsultManagerIntakeHttp(env);
+    }
+
     return oauthProvider.fetch(request, env, ctx);
   },
 
@@ -918,6 +927,12 @@ export default {
             return await handleHaakuFill(env);
           })
         );
+      }
+
+      // 2026-09-13：UTAGE の個別相談予約者をコンサルマネージャーへ取り込む
+      // （UTC 23:00 = JST 08:00 のみ発火）。既存の 30 分ごとの枠に相乗りする。
+      if (utcMinute === 0 && utcHour === 23) {
+        tasks.push(handleConsultManagerIntake(env).then(() => undefined));
       }
 
       // 2026-08-28：面談の予定を読んで、しあらぼ管理の最終面談日へ入れる
