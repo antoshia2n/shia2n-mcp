@@ -932,11 +932,7 @@ export default {
       // 2026-09-13：UTAGE の個別相談予約者をコンサルマネージャーへ取り込む
       // （UTC 23:00 = JST 08:00 のみ発火）。既存の 30 分ごとの枠に相乗りする。
       if (utcMinute === 0 && utcHour === 23) {
-        tasks.push(
-          runAndRecord(env, "consult_manager_intake", async () => {
-            return await handleConsultManagerIntake(env);
-          })
-        );
+        tasks.push(handleConsultManagerIntake(env).then(() => undefined));
       }
 
       // 2026-08-28：面談の予定を読んで、しあらぼ管理の最終面談日へ入れる
