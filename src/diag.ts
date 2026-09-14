@@ -182,7 +182,7 @@ const SERVICES: {
   describeFailure?: true;
 }[] = [
   { name: "zeus",          envKey: "ZEUS_API_BASE"          },
-  { name: "pay_kun",       envKey: "PAY_KUN_API_BASE",                                  strictGet: true, exact200: true, describeFailure: true },
+  { name: "pay_kun",       envKey: "PAY_KUN_API_BASE",       path: "/api/diag",                    strictGet: true, exact200: true, describeFailure: true },
   { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true, strictGet: true, exact200: true, describeFailure: true },
   { name: "kiroku",          base: "https://kiroku.shia2n.jp",          path: "/api/diag", accessGated: true, strictGet: true },
   { name: "appdev_kun",      base: "https://appdev-kun.pages.dev",      path: "/api/diag",                    strictGet: true },
