@@ -64,7 +64,9 @@ async function pingService(
   base: string,
   path?: string,
   headers?: Record<string, string>,
-  strictGet?: boolean
+  strictGet?: boolean,
+  exact200?: boolean,
+  describeFailure?: boolean
 ): Promise<{
   ok: boolean;
   latency_ms: number;
@@ -96,11 +98,19 @@ async function pingService(
       }
       const contentType = resp.headers.get("content-type") ?? "";
       const isJson = contentType.toLowerCase().includes("json");
+      const statusOk = exact200
+        ? resp.status === 200
+        : resp.status >= 200 && resp.status < 300;
+      const ok = statusOk && isJson;
+      const shownContentType = contentType === "" ? "（無し）" : contentType;
       return {
-        ok: resp.status >= 200 && resp.status < 300 && isJson,
+        ok,
         latency_ms: Date.now() - start,
         http_status: resp.status,
-        content_type: contentType === "" ? "（無し）" : contentType,
+        ...(describeFailure && !ok
+          ? { error: `HTTP ${resp.status} / content-type: ${shownContentType}` }
+          : {}),
+        content_type: shownContentType,
       };
     }
     // path を指定した場合は「その口が実在すること」まで見たいので 4xx も失敗にする。
@@ -168,10 +178,12 @@ const SERVICES: {
   path?: string;
   accessGated?: true;
   strictGet?: true;
+  exact200?: true;
+  describeFailure?: true;
 }[] = [
   { name: "zeus",          envKey: "ZEUS_API_BASE"          },
-  { name: "pay_kun",       envKey: "PAY_KUN_API_BASE"       },
-  { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true },
+  { name: "pay_kun",       envKey: "PAY_KUN_API_BASE",                                  strictGet: true, exact200: true, describeFailure: true },
+  { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true, strictGet: true, exact200: true, describeFailure: true },
   { name: "kiroku",          base: "https://kiroku.shia2n.jp",          path: "/api/diag", accessGated: true, strictGet: true },
   { name: "appdev_kun",      base: "https://appdev-kun.pages.dev",      path: "/api/diag",                    strictGet: true },
   { name: "consult_manager", base: "https://consult-manager.shia2n.jp", path: "/api/diag", accessGated: true, strictGet: true },
@@ -196,7 +208,7 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
 
   // 各サービスへの疎通確認（並列）
   const connectivityEntries = await Promise.all(
-    SERVICES.map(async ({ name, envKey, base: fixedBase, path, accessGated, strictGet }) => {
+    SERVICES.map(async ({ name, envKey, base: fixedBase, path, accessGated, strictGet, exact200, describeFailure }) => {
       const base = fixedBase ?? (envKey ? (env[envKey] as string | undefined) : undefined);
       if (!isPresent(base)) {
         return [name, { ok: false, reason: "env_missing" }] as const;
@@ -205,10 +217,15 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
         base!,
         path,
         accessGated ? cfAccessHeaders(env) : undefined,
-        strictGet === true
+        strictGet === true,
+        exact200 === true,
+        describeFailure === true
       );
       // どの道を叩いたかを結果に載せる（住所そのものは載せない）。
-      return [name, path ? { ...result, path } : result] as const;
+      return [
+        name,
+        strictGet ? { ...result, path: path ?? "/" } : path ? { ...result, path } : result,
+      ] as const;
     })
   );
   const connectivity = Object.fromEntries(connectivityEntries);
