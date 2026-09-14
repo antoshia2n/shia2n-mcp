@@ -488,8 +488,6 @@ import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
-import { registerZeusTools } from "./tools-zeus.js";
-import { registerZeusV2Tools } from "./tools-zeus-v2.js";
 import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
@@ -515,7 +513,6 @@ import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleGateResolve, handleGateAttempts, handleGateDiag } from "./gate.js";
 import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 import { runAndRecord, recordSkipped } from "./cron-log.js";
-import { handleZeusSync } from "./cron-zeus-sync.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
 import { handleShiaraboMtgSync } from "./cron-shiarabo-mtg.js";
@@ -633,8 +630,6 @@ function isBackupLastChance(utcHour: number, utcMinute: number): boolean {
 
 function createMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "shia2n-mcp", version: APP_VERSION });
-  registerZeusTools(server, env);
-  registerZeusV2Tools(server, env);
   registerPayKunTools(server, env);
   registerTaskmasterTools(server, env);
   registerSalesManagerTools(server, env);
@@ -885,20 +880,6 @@ export default {
             })
           );
         }
-      }
-
-      // 2026-08-03：Zeus 同期の起動（UTC 18:00 = JST 03:00 のみ発火）
-      // Cron Triggers が Free プラン上限 5 本で埋まっており zeus-worker 側の
-      // cron を登録できないため、cron 枠を増やさずここから HTTP で起動する。
-      if (utcMinute === 0 && utcHour === 18) {
-        tasks.push(
-          runAndRecord(env, "zeus_sync", async () => {
-            // 2026-08-14：取り込み元 5 つを 1 つずつ起動する形に変えた。
-            // 何本起動できたかは handleZeusSync が返す。何件入ったかは
-            // zeus-worker が自分で書く zeus_import に 1 本ごとに残る。
-            return await handleZeusSync(env);
-          })
-        );
       }
 
       // 2026-08-09：Buffer の反応の数字を ContentOS の成績へ戻す
