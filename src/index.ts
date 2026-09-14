@@ -483,6 +483,7 @@
  * v0.80.0：content_sheet__add_plan_row 追加（コンテンツ管理シートに予定の行を 1 本足す。書くのは A・C・D・E だけ・媒体は X記事・Xポスト・note記事 だけ）。設定の追加は 0 個。依頼書：3d39c6c1c4398187bd14f5a629e02b05
  * v0.81.0：/diag の connectivity に記録くん・appdev-kun・consult-manager・AssetOS の 4 つを足した（住所は diag.ts の表に直接・GET で叩き 2xx だけを ok）。設定の追加は 0 個。依頼書：3d89c6c1c43981a58b63db7dca43cbb4
  * v0.82.0：/diag の 4 つの点検で、200 に加えて「返事が JSON であること」も見る（置き場が知らない道に画面の土台を 200 で返すため）。content_type も結果に載せる。設定の追加は 0 個。依頼書：3d89c6c1c43981a58b63db7dca43cbb4
+ * v0.83.0：content_os__update_post に buffer_post_id を足した（文字列・null 可・渡さなければ既存の値を保つ）。受け口側は content-os の update-post.js を同じ便で直している。設定の追加は 0 個。依頼書：3db9c6c1c4398142a6eaceb304d4487b
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

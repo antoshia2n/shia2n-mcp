@@ -411,6 +411,11 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         .array(z.string())
         .optional()
         .describe("ラベルの配列（渡すと全置換）。投稿後の成績を印として残すのにも使う"),
+      buffer_post_id: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("Buffer の投稿ID。Buffer の予約へ流したら入れる。null を渡すと空に戻る。空なら未送信、値があれば送信済みの目印"),
     },
     async (args) => {
       const payload: Record<string, unknown> = { id: args.id };
@@ -423,6 +428,7 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
       if (args.memo !== undefined) payload.memo = args.memo;
       if (args.score !== undefined) payload.score = args.score;
       if (args.labels !== undefined) payload.labels = args.labels;
+      if (args.buffer_post_id !== undefined) payload.buffer_post_id = args.buffer_post_id;
 
       const result = await callContentOsInternalApi(env, "update-post", payload);
       return asMcpTextResult(result);
