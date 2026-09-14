@@ -65,6 +65,7 @@ async function pingService(
   path?: string,
   headers?: Record<string, string>,
   strictGet?: boolean,
+  exact200?: boolean,
   describeFailure?: boolean
 ): Promise<{
   ok: boolean;
@@ -97,7 +98,10 @@ async function pingService(
       }
       const contentType = resp.headers.get("content-type") ?? "";
       const isJson = contentType.toLowerCase().includes("json");
-      const ok = resp.status === 200 && isJson;
+      const statusOk = exact200
+        ? resp.status === 200
+        : resp.status >= 200 && resp.status < 300;
+      const ok = statusOk && isJson;
       const shownContentType = contentType === "" ? "（無し）" : contentType;
       return {
         ok,
@@ -174,11 +178,12 @@ const SERVICES: {
   path?: string;
   accessGated?: true;
   strictGet?: true;
+  exact200?: true;
   describeFailure?: true;
 }[] = [
   { name: "zeus",          envKey: "ZEUS_API_BASE"          },
-  { name: "pay_kun",       envKey: "PAY_KUN_API_BASE",                                  strictGet: true, describeFailure: true },
-  { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true, strictGet: true, describeFailure: true },
+  { name: "pay_kun",       envKey: "PAY_KUN_API_BASE",                                  strictGet: true, exact200: true, describeFailure: true },
+  { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true, strictGet: true, exact200: true, describeFailure: true },
   { name: "kiroku",          base: "https://kiroku.shia2n.jp",          path: "/api/diag", accessGated: true, strictGet: true },
   { name: "appdev_kun",      base: "https://appdev-kun.pages.dev",      path: "/api/diag",                    strictGet: true },
   { name: "consult_manager", base: "https://consult-manager.shia2n.jp", path: "/api/diag", accessGated: true, strictGet: true },
@@ -203,7 +208,7 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
 
   // 各サービスへの疎通確認（並列）
   const connectivityEntries = await Promise.all(
-    SERVICES.map(async ({ name, envKey, base: fixedBase, path, accessGated, strictGet, describeFailure }) => {
+    SERVICES.map(async ({ name, envKey, base: fixedBase, path, accessGated, strictGet, exact200, describeFailure }) => {
       const base = fixedBase ?? (envKey ? (env[envKey] as string | undefined) : undefined);
       if (!isPresent(base)) {
         return [name, { ok: false, reason: "env_missing" }] as const;
@@ -213,6 +218,7 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
         path,
         accessGated ? cfAccessHeaders(env) : undefined,
         strictGet === true,
+        exact200 === true,
         describeFailure === true
       );
       // どの道を叩いたかを結果に載せる（住所そのものは載せない）。
