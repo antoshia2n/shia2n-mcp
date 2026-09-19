@@ -25,6 +25,7 @@ import { getFirestoreToken, fsGet, fsPatch, toFVal, fromVal, type FVal, type FSD
 // ─── 型定義 ───────────────────────────────────────────────────────────────────
 
 interface KpiDef {
+  aggregation?: "sum" | "latest";
   id: string;
   title: string;
   unit: string;
@@ -400,7 +401,7 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
   // ─── 1. haAku__get_kpi_progress ───────────────────────────────────────────
   server.tool(
     "haAku__get_kpi_progress",
-    "haAku の KPI 進捗を取得する。秘書室の朝レポートで当月の KPI 達成状況を確認するときに使う。各 KPI の月次目標・当月累計実績・達成率・当日実績を返す。戻り値: { ok, date, month, kpis: [{id, title, unit, period, monthlyTarget, monthly_actual, today_actual, pct, kgiId}], kgis: [{id, title, target, unit, current, parent_kgi_id, hidden}] }。parent_kgi_id が空なら 1 段目（最終目標）、他の目標の id が入っていれば 2 段目（事業の目標）。hidden が true ならホームと一覧から外している（数字は残っている）",
+    "haAku の KPI 進捗を取得する。秘書室の朝レポートで当月の KPI 達成状況を確認するときに使う。各 KPI の月次目標・当月累計実績・達成率・当日実績を返す。戻り値: { ok, date, month, kpis: [{id, title, unit, period, monthlyTarget, aggregation, monthly_actual, today_actual, pct, kgiId}], kgis: [{id, title, target, unit, current, parent_kgi_id, hidden}] }。parent_kgi_id が空なら 1 段目（最終目標）、他の目標の id が入っていれば 2 段目（事業の目標）。hidden が true ならホームと一覧から外している（数字は残っている）",
     {
       date: z
         .string()
@@ -431,11 +432,16 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
       // 当月累計・当日実績を計算
       const kpiResults = kpis.map((kpi) => {
         let monthlyActual = 0;
+        let latestDate = "";
         let todayActual = 0;
 
         for (const [date, rec] of Object.entries(dailyByDate)) {
           const val = rec.kpiValues?.[kpi.id] ?? 0;
-          if (date.startsWith(month)) monthlyActual += val;
+          if (date.startsWith(month) && typeof rec.kpiValues?.[kpi.id] === "number" && Number.isFinite(val)) {
+            if (kpi.aggregation === "latest") {
+              if (date > latestDate) { latestDate = date; monthlyActual = val; }
+            } else monthlyActual += val;
+          }
           if (date === targetDate) todayActual = val;
         }
 
@@ -448,6 +454,7 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           unit:           kpi.unit,
           period:         kpi.period,
           monthlyTarget:  mo,
+          aggregation:    kpi.aggregation === "latest" ? "latest" : "sum",
           monthly_actual: monthlyActual,
           today_actual:   todayActual,
           pct:            pct,
@@ -1289,3 +1296,4 @@ export async function applyKpiDailyValues(
 
   return results;
 }
+
