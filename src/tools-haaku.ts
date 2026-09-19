@@ -439,7 +439,7 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           const val = rec.kpiValues?.[kpi.id] ?? 0;
           if (date.startsWith(month) && typeof rec.kpiValues?.[kpi.id] === "number" && Number.isFinite(val)) {
             if (kpi.aggregation === "latest") {
-              if (date > latestDate) { latestDate = date; monthlyActual = val; }
+              if (val !== 0 && date > latestDate) { latestDate = date; monthlyActual = val; }
             } else monthlyActual += val;
           }
           if (date === targetDate) todayActual = val;
@@ -1296,4 +1296,5 @@ export async function applyKpiDailyValues(
 
   return results;
 }
+
 
