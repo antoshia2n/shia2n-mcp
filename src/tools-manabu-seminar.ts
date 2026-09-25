@@ -403,10 +403,14 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
       result["所属の表の行数"] = linkRows;
 
       // 学ぶ人（ログインと結びついている会員だけ）。名前も連絡先も返さない
-      const members = await sbGet(env, `shr_members?select=id,user_id`);
-      const loginable = members.filter((m) => m.user_id);
+      // 2026-09-28 付け替えのあと：人の番号は新しい member の id。旧の番号（legacy_shr_id）は並べて返すだけ
+      const members = await sbGet(env, `member?select=id,auth_uid,legacy_shr_id`);
+      const loginable = members.filter((m) => m.auth_uid);
       result["会員の数"] = { 全体: members.length, ログインと結びついている人: loginable.length };
       result["ログインと結びついている人の番号"] = loginable.map((m) => m.id);
+      result["旧の番号との対応"] = members
+        .filter((m) => m.legacy_shr_id)
+        .map((m) => ({ id: m.id, legacy_shr_id: m.legacy_shr_id }));
       result["会員とカリキュラムの結び"] = await sbGet(
         env,
         `${T_MEMBER_CURRICULUMS}?select=id,member_id,curriculum_id,active`

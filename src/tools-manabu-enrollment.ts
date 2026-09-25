@@ -31,7 +31,7 @@ async function getRows(env: Env, path: string): Promise<any[]> {
 export function registerManabuEnrollmentTools(server: McpServer, env: Env): void {
   server.tool(
     "mn__enrollment_set",
-    "学ぶくんの受講の結びを止める・戻す。会員の表の id を渡すと、その人の legacy_shr_id を引いて mn_member_curriculums の active を書き換える。既定は下見（preview: true）で、実際に変えるときだけ preview を false にする。呼ばれたことは audit_logs に 1 件残る（action は manabu_enrollment_set）。対象がいなかったとき（ok true の changed 0）と、引けなかったとき（ok false と符号）は別の戻り値になる。変えたあとは前と後の件数を両方返す。",
+    "学ぶくんの受講の結びを止める・戻す。会員の表の id を渡すと、その人の新しい番号と旧の番号（legacy_shr_id）の両方で mn_member_curriculums を探し、active を書き換える。既定は下見（preview: true）で、実際に変えるときだけ preview を false にする。呼ばれたことは audit_logs に 1 件残る（action は manabu_enrollment_set）。対象がいなかったとき（ok true の changed 0）と、引けなかったとき（ok false と符号）は別の戻り値になる。変えたあとは前と後の件数を両方返す。",
     {
       member_id: z.string().uuid().describe("会員の id（新しい member の表の id）"),
       active: z.boolean().describe("false で止める / true で戻す"),
@@ -76,19 +76,13 @@ export function registerManabuEnrollmentTools(server: McpServer, env: Env): void
 
         return out({ ok: false, error: "MEMBER_NOT_FOUND", member_id });
       }
+      // 2026-09-28 付け替えのあと：学ぶくんの結びは新しい member の id で持つ。
+      // 付け替えの前後どちらでも当たるように、新しい番号と旧の番号の両方で探す。
       const shrId = members[0]?.legacy_shr_id ?? null;
-      if (!shrId) {
-        return out({
-          ok: false,
-          error: "NO_LEGACY_SHR_ID",
-          member_id,
-          note: "この人には契約の台帳の番号が入っていないので、学ぶくんの結びに当てられない",
-        });
-      }
-
-      const q = `${T_ENROLLMENT}?member_id=eq.${encodeURIComponent(
-        shrId
-      )}&select=id,member_id,curriculum_id,active`;
+      const keys = [String(members[0].id), ...(shrId ? [String(shrId)] : [])]
+        .map((k) => `"${k}"`)
+        .join(",");
+      const q = `${T_ENROLLMENT}?member_id=in.(${encodeURIComponent(keys)})&select=id,member_id,curriculum_id,active`;
 
       let rows: any[];
       try {
