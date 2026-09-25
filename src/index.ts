@@ -484,6 +484,7 @@
  * v0.81.0：/diag の connectivity に記録くん・appdev-kun・consult-manager・AssetOS の 4 つを足した（住所は diag.ts の表に直接・GET で叩き 2xx だけを ok）。設定の追加は 0 個。依頼書：3d89c6c1c43981a58b63db7dca43cbb4
  * v0.82.0：/diag の 4 つの点検で、200 に加えて「返事が JSON であること」も見る（置き場が知らない道に画面の土台を 200 で返すため）。content_type も結果に載せる。設定の追加は 0 個。依頼書：3d89c6c1c43981a58b63db7dca43cbb4
  * v0.83.0：content_os__update_post に buffer_post_id を足した（文字列・null 可・渡さなければ既存の値を保つ）。受け口側は content-os の update-post.js を同じ便で直している。設定の追加は 0 個。依頼書：3db9c6c1c4398142a6eaceb304d4487b
+ * v0.84.0（2026-09-22 開発部）：rumin_script__put_row 追加（るーみんの YouTube 台本台帳。撮影番号で行を探し「台本を開く」「状態」「決めてほしいこと」の 3 列だけを書く。無ければ末尾に 1 行足す。人が入れた状態を上書きするのは「先生確認待ち」にするときだけ）。src/tools-rumin-script.ts を新設。設定の追加は 1 個（RUMIN_SCRIPT_SHEET_ID）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -494,6 +495,7 @@ import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerContentSheetTools } from "./tools-content-sheet.js";
+import { registerRuminScriptTools } from "./tools-rumin-script.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
@@ -552,6 +554,8 @@ export interface Env {
   // TaskMaster / haAku（Firestore）
   FIREBASE_SA_EMAIL: string;
   CONTENT_SHEET_ID?: string;
+  // 2026-09-22 追加：るーみんの YouTube 台本台帳の番号（シークレット。置き場が公開なので vars には書かない）
+  RUMIN_SCRIPT_SHEET_ID?: string;
   FIREBASE_SA_PRIVATE_KEY: string;
   NAOKI_UID: string;
   // 進化ラボ（公式サイト）。記事を入れる口を叩くため。
@@ -636,6 +640,7 @@ function createMcpServer(env: Env): McpServer {
   registerSalesManagerTools(server, env);
   registerContentOsTools(server, env);
   registerContentSheetTools(server, env);
+  registerRuminScriptTools(server, env);
   registerInboxReviewTools(server, env);
   registerHaakuTools(server, env);
   registerKnowledgeTagTools(server, env);

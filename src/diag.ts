@@ -155,6 +155,8 @@ const ENV_KEYS: (keyof Env)[] = [
   "CF_ACCESS_CLIENT_SECRET",
   // 2026-09-09：/manabu/put-seminar 専用の合言葉。無いとその口は全部 401 になる。
   "MANABU_PUT_SEMINAR_SECRET",
+  // 2026-09-22：るーみんの YouTube 台本台帳の番号。無いと rumin_script__put_row が止まる。値は出さず有無だけ返す。
+  "RUMIN_SCRIPT_SHEET_ID",
 ];
 
 // path を書いた行だけ、入口ではなくその道を叩く。
