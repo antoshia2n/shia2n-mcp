@@ -1,6 +1,7 @@
 /**
  * MCP tool 登録：gate__diag / gate__attempts / gate__entitlements /
- *                gate__entitlement_grant / gate__entitlement_revoke
+ *                gate__entitlement_grant / gate__entitlement_revoke /
+ *                gate__member_create
  *
  * 会員の門番（src/gate.ts）を、統括が道具として呼べる形に包んだもの。
  *
@@ -30,6 +31,21 @@
  *     （「落ちた人が 0」だけで終えず、「本当に書き換わった」も同じ回に出す）
  *   ・テスト用の行（メールが example.com）は既定で数から外す
  *     業務マニュアルの「数えるときの決まり」と同じ扱い
+ *
+ * 会員の行を 1 行作る道具を足した理由（2026-09-28 開発部）：
+ *   新しい `member` の行は、決済の受け取り口（shr-webhook）からしか
+ *   生まれない作りだった。そのため、しあらぼの生徒なのに会員の行が無い人が
+ *   4 名いた（2026-09-11 に実物で突き合わせ・2026-09-28 に旧の表で再確認）。
+ *   門番（src/gate.ts）は、確認済みのメールで行を引き、ログインの番号が空なら
+ *   その場で埋める。したがって「名前とメールだけの行」があれば、本人が
+ *   ログインした時点でつながる。行を作る手だけが無かった。
+ *   ・新しい表（member）にだけ書く。旧の表（members）には書かない
+ *     （2026-09-28 Naoki 確定。旧の表は落とす側で、書く道は管理者の券でしか
+ *       通らない作り）。手で作った行は 10 月の便のタスクに 1 行ずつ残す
+ *   ・役（role）は書かない。門番は空を member として扱う（src/gate.ts）
+ *   ・権利は付けない。付けるのは gate__entitlement_grant で、別の 1 手にする
+ *   依頼：10 月の便の 10 番（入れない 5 名の入口）
+ *   https://www.notion.so/3d89c6c1c439810dba20e1b6add6a9e3
  *
  * 設定の追加は無い（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  */
@@ -433,6 +449,113 @@ export function registerGateTools(server: McpServer, env: Env): void {
         });
       } catch (e) {
         return errorResult("gate__entitlement_revoke", e);
+      }
+    },
+  );
+
+
+  // ============================================================
+  // gate__member_create（会員の行を 1 行作る）
+  // ============================================================
+  server.tool(
+    "gate__member_create",
+    "会員の行を 1 行作る（新しい member の表）。決済を通らずに入る人（銀行振込・無料招待・決済の前に案内する人）のための手。名前とメールだけを書き、ログインの番号は空のまま置く。本人が確認済みのメールでログインすると、門番がその場で番号を埋めてつながる。役は書かない（門番は空を member として扱う）。権利は付けないので、続けて gate__entitlement_grant を呼ぶ。旧の表（members）には書かないので、会員管理くんの画面には出ない。同じメールの行がすでにあれば何も書かない。既定は下見（preview: true）で、実際に作るときだけ preview を false にする。返すのは member_id とメールのドメインと件数だけで、名前とメールの全体は返さない。",
+    {
+      email: z
+        .string()
+        .email()
+        .describe("本人がログインに使うメール。小文字にそろえて書く（表の側に小文字の決まりがある）"),
+      name: z
+        .string()
+        .min(1)
+        .max(100)
+        .describe("呼び名（例：しあらぼの生徒の台帳に載っている名前）"),
+      reason: z
+        .string()
+        .min(1)
+        .describe("なぜ手で作るか（例：銀行振込・無料招待）。表には書かれず、応答に残るだけ。記録は 10 月の便のタスクへ書く"),
+      preview: z
+        .boolean()
+        .optional()
+        .describe("true で作らずに影響だけ返す（省略時 true）"),
+    },
+    async ({ email, name, reason, preview }) => {
+      const dryRun = preview !== false;
+      const normalized = email.trim().toLowerCase();
+      const domain = normalized.includes("@") ? normalized.split("@")[1] : null;
+      try {
+        const existing = await sbSelect(
+          env,
+          `/member?select=id,auth_uid,role,created_at` +
+            `&email=eq.${encodeURIComponent(normalized)}&limit=2`,
+        );
+        const beforeAll = await sbSelect(env, `/member?select=id&limit=5000`);
+
+        if (dryRun) {
+          return textResult({
+            ok: true,
+            preview: true,
+            applied: false,
+            would_insert: { email_domain: domain, name_given: true, role: null, auth_uid: null },
+            is_test: isTestEmail(normalized),
+            already_exists: existing.length > 0,
+            existing_member_id: existing.length > 0 ? String(existing[0].id) : null,
+            reason,
+            before_total: beforeAll.length,
+            note: "実際に作るときは preview を false にして同じ呼び出しをする。already_exists が true なら作らない",
+          });
+        }
+
+        if (existing.length > 0) {
+          return textResult({
+            ok: true,
+            applied: false,
+            reason_not_applied: "same_email_exists",
+            member_id: String(existing[0].id),
+            has_login: existing[0].auth_uid !== null && existing[0].auth_uid !== undefined,
+            before_total: beforeAll.length,
+            note: "同じメールの行がすでにある。何も書いていない。権利を足すなら gate__entitlement_grant にこの member_id を渡す",
+          });
+        }
+
+        const wrote = await sbWrite(env, "POST", "/member", {
+          email: normalized,
+          name: name.trim(),
+        });
+
+        if (wrote.status < 200 || wrote.status >= 300 || wrote.rows.length !== 1) {
+          return textResult({
+            ok: false,
+            applied: false,
+            http_status: wrote.status,
+            body: wrote.raw,
+            note: "作れなかった。表の側の決まり（メールは小文字・同じメールは 1 行だけ）を先に見る",
+          });
+        }
+
+        const memberId = String(wrote.rows[0].id);
+        const check = await sbSelect(
+          env,
+          `/member?select=id,auth_uid,role&id=eq.${encodeURIComponent(memberId)}&limit=1`,
+        );
+        const afterAll = await sbSelect(env, `/member?select=id&limit=5000`);
+        return textResult({
+          ok: true,
+          applied: true,
+          member_id: memberId,
+          email_domain: domain,
+          is_test: isTestEmail(normalized),
+          found_after_write: check.length === 1,
+          role: check.length === 1 ? (check[0].role ?? null) : null,
+          reason,
+          before_total: beforeAll.length,
+          after_total: afterAll.length,
+          changed: afterAll.length - beforeAll.length,
+          next: "権利は gate__entitlement_grant（member_id を渡す）。学ぶくんへの結びは mn__put_curriculum",
+          note: "found_after_write が true で changed が 1 になっていること の両方を見る",
+        });
+      } catch (e) {
+        return errorResult("gate__member_create", e);
       }
     },
   );
