@@ -489,6 +489,7 @@
  * v0.86.0（2026-10-01 開発部）：sales_manager__list_unpaid と sales_manager__mark_paid 追加（指定した月の未入金を 1 行ずつ返す／契約と月を指定して入金済みにする。数え方と書き方は sales-manager 側の /api/sm-unpaid・/api/sm-mark-paid が持つ）。src/tools-sales-manager-payments.ts を新設。設定の追加は 0 個。
  * v0.87.0（2026-10-01 開発部）：sales_manager__get_revenue_summary と sales_manager__get_monthly_by_business が契約の停止（end_month_idx）を見るようにした。止めた月より後の未入金を未収から外し、見込にも入れない。判定は sales-manager の lib/salesRules.ts と同じ。src/tools-sales-manager.ts のみ。設定の追加は 0 個。
  * v0.88.0（2026-10-01 開発部）：sales_manager__mark_unpaid 追加（入金済みを未入金に戻す。mark_paid の逆。書き方は sales-manager 側の /api/sm-mark-unpaid が持つ）。src/tools-sales-manager-payments.ts のみ。設定の追加は 0 個。
+ * v0.89.0（2026-10-01 開発部）：sales_manager__replace_monthly_revenue・sales_manager__list_payments・sales_manager__set_contract_status・sales_manager__set_payer_name 追加（sales-manager 側の /api/sm-replace-monthly・/api/sm-payments-month・/api/sm-contract-status・/api/sm-payer-name を呼ぶ）。src/tools-sales-manager-ledger.ts を新設。list_unpaid の説明に payer_name を足した。設定の追加は 0 個。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -498,6 +499,7 @@ import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerSalesManagerPaymentTools } from "./tools-sales-manager-payments.js";
+import { registerSalesManagerLedgerTools } from "./tools-sales-manager-ledger.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerContentSheetTools } from "./tools-content-sheet.js";
 import { registerRuminScriptTools } from "./tools-rumin-script.js";
@@ -644,6 +646,7 @@ function createMcpServer(env: Env): McpServer {
   registerTaskmasterTools(server, env);
   registerSalesManagerTools(server, env);
   registerSalesManagerPaymentTools(server, env);
+  registerSalesManagerLedgerTools(server, env);
   registerContentOsTools(server, env);
   registerContentSheetTools(server, env);
   registerRuminScriptTools(server, env);

@@ -88,7 +88,7 @@ async function callSalesManager(
 export function registerSalesManagerPaymentTools(server: McpServer, env: Env): void {
   server.tool(
     "sales_manager__list_unpaid",
-    "sales-manager で、指定した月の未入金を 1 行ずつ返す。読むだけ。経理系が通帳の入金と 1 件ずつ突き合わせるために使う。画面の入金のタブと同じ行を返す：DB にある未入金の行（source が db）と、契約はあるがその月の行が DB にまだ無いもの（source が planned。画面で入金済みにしたときに初めて行が作られる）。止めた契約の止めた月より後は入らない。金額は未収に数えている額（実額があれば実額、無ければ予定の額）。返り値: { ok, year_month, month_idx, count, total（両方の合計）, db_count, db_total（source が db だけ。sales_manager__get_revenue_summary の uncollected_by_month の同じ月と一致する）, rows: [{ source（db / planned）, payment_id（planned は null）, contract_id（契約に紐づかない行は null）, name（入金のタブに出ている相手の名前）, business（事業の区分）, amount（未収に数えている額）, planned_amount（予定の額） }] }。入金済みにするときは contract_id と year_month をそのまま sales_manager__mark_paid に渡す",
+    "sales-manager で、指定した月の未入金を 1 行ずつ返す。読むだけ。経理系が通帳の入金と 1 件ずつ突き合わせるために使う。画面の入金のタブと同じ行を返す：DB にある未入金の行（source が db）と、契約はあるがその月の行が DB にまだ無いもの（source が planned。画面で入金済みにしたときに初めて行が作られる）。止めた契約の止めた月より後は入らない。金額は未収に数えている額（実額があれば実額、無ければ予定の額）。返り値: { ok, year_month, month_idx, count, total（両方の合計）, db_count, db_total（source が db だけ。sales_manager__get_revenue_summary の uncollected_by_month の同じ月と一致する）, rows: [{ source（db / planned）, payment_id（planned は null）, contract_id（契約に紐づかない行は null）, name（入金のタブに出ている相手の名前）, business（事業の区分）, amount（未収に数えている額）, planned_amount（予定の額）, payer_name（振込名義のカナ。未登録は null） }] }。入金済みにするときは contract_id と year_month をそのまま sales_manager__mark_paid に渡す",
     {
       year_month: z.string().describe("対象の年月。YYYY-MM の形（例: 2026-09）。2026-01 以降。必須"),
     },
