@@ -486,6 +486,7 @@
  * v0.83.0：content_os__update_post に buffer_post_id を足した（文字列・null 可・渡さなければ既存の値を保つ）。受け口側は content-os の update-post.js を同じ便で直している。設定の追加は 0 個。依頼書：3db9c6c1c4398142a6eaceb304d4487b
  * v0.84.0（2026-09-22 開発部）：rumin_script__put_row 追加（るーみんの YouTube 台本台帳。撮影番号で行を探し「台本を開く」「状態」「決めてほしいこと」の 3 列だけを書く。無ければ末尾に 1 行足す。人が入れた状態を上書きするのは「先生確認待ち」にするときだけ）。src/tools-rumin-script.ts を新設。設定の追加は 1 個（RUMIN_SCRIPT_SHEET_ID）。
  * v0.85.0（2026-09-28 開発部）：gate__member_create 追加（新しい member の表に名前とメールだけの行を 1 行作る。決済を通らずに入る人の入口。旧の members には書かない・役と権利は書かない・既定は下見）。src/tools-gate.ts のみ。設定の追加は 0 個。依頼書：3d89c6c1c439810dba20e1b6add6a9e3
+ * v0.86.0（2026-10-01 開発部）：sales_manager__list_unpaid と sales_manager__mark_paid 追加（指定した月の未入金を 1 行ずつ返す／契約と月を指定して入金済みにする。数え方と書き方は sales-manager 側の /api/sm-unpaid・/api/sm-mark-paid が持つ）。src/tools-sales-manager-payments.ts を新設。設定の追加は 0 個。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -494,6 +495,7 @@ import { createMcpHandler } from "agents/mcp";
 import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
+import { registerSalesManagerPaymentTools } from "./tools-sales-manager-payments.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerContentSheetTools } from "./tools-content-sheet.js";
 import { registerRuminScriptTools } from "./tools-rumin-script.js";
@@ -639,6 +641,7 @@ function createMcpServer(env: Env): McpServer {
   registerPayKunTools(server, env);
   registerTaskmasterTools(server, env);
   registerSalesManagerTools(server, env);
+  registerSalesManagerPaymentTools(server, env);
   registerContentOsTools(server, env);
   registerContentSheetTools(server, env);
   registerRuminScriptTools(server, env);
