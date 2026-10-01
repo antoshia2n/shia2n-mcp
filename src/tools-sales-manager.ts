@@ -1,5 +1,11 @@
 /**
- * shia2n-mcp / src/tools-sales-manager.ts / 第2版（2026-08-25 開発部）
+ * shia2n-mcp / src/tools-sales-manager.ts / 第3版（2026-10-01 開発部）
+ *
+ * 第3版で直したこと
+ *   契約の停止（end_month_idx）を見ていなかった。止めた契約の止めた月より後の未入金を
+ *   未収に数え続け、画面（/api/sm-summary）と数字がずれていた。画面と同じ判定を写した。
+ *
+ * （以下は第2版の記録）
  *
  * 第2版で直したこと
  *   事業別の当月確定（by_business）が、有効な契約に紐づく支払いだけを数えていた。
@@ -219,7 +225,7 @@ export function registerSalesManagerTools(server: McpServer, env: Env): void {
 // ─────────────────────────────────────────────
 
 type Payment  = { paid: boolean; month_idx: number; amount: number; actual_amount?: number | null; contract_id?: string; due_date?: string | null; business?: string };
-type Contract = { id: string; status: string; type: string; start_month_idx?: number; total_count?: number; amount: number; business?: string };
+type Contract = { id: string; status: string; type: string; start_month_idx?: number; total_count?: number; end_month_idx?: number | null; amount: number; business?: string };
 type Single   = { month_idx: number; amount: number; business?: string };
 type Budget   = { biz: string; month_idx: number; amount: number };
 type Business = { id: number; name: string; color?: string };
@@ -251,8 +257,38 @@ function nextAbs(): number {
 // 集計ヘルパー（useRevenue.js より移植）
 // ─────────────────────────────────────────────
 
+// 停止の判定（2026-10-01 開発部）
+// sales-manager の lib/salesRules.ts と同じ決まり。end_month_idx は「最後に有効な月」で、
+// それより後の月は見込にも未収にも数えない。入金済みの行は停止のあとでも事実として数える。
+// 同じ判定を sales-manager の画面・/api/sm-summary・/api/sm-unpaid が使っており、
+// ここだけ違うと毎朝の数字が画面とずれるため、同じ形で写した。
+function stoppedBefore(c: Contract, abs: number): boolean {
+  return c.end_month_idx != null && abs > c.end_month_idx;
+}
+
+function contractIncludesMonth(c: Contract, abs: number): boolean {
+  const start = c.start_month_idx ?? 0;
+  if (abs < start) return false;
+  if (stoppedBefore(c, abs)) return false;
+  if (c.type === "installment" && c.total_count != null) {
+    return abs <= start + c.total_count - 1;
+  }
+  return true;
+}
+
+function paymentsForPlan(payments: Payment[], contracts: Contract[]): Payment[] {
+  const byId = new Map(contracts.map((c) => [String(c.id), c]));
+  return payments.filter((p) => {
+    if (p.paid) return true;
+    if (p.contract_id == null) return true;
+    const c = byId.get(String(p.contract_id));
+    return !c || contractIncludesMonth(c, p.month_idx);
+  });
+}
+
 function contractAmountForMonth(contracts: Contract[], abs: number): number {
   return contracts.filter(c => c.status === "active").reduce((a, c) => {
+    if (stoppedBefore(c, abs)) return a;
     const s = c.start_month_idx ?? 0;
     if (c.type === "recurring" && s <= abs) return a + c.amount;
     if (c.type === "variable"  && s <= abs) return a + c.amount;
@@ -327,12 +363,14 @@ async function fetchSMData(
 export async function getRevenueSummary(env: Env) {
   // 2026-08-08：設定値が無いときの行き先も新しい住所に合わせる（保険）
   const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager.shia2n.jp";
-  const { payments, contracts, singles, budgets, businesses } = await fetchSMData(
+  const { payments: rawPayments, contracts, singles, budgets, businesses } = await fetchSMData(
     base,
     env.SALES_MANAGER_INTERNAL_SECRET,
     cfAccessHeaders(env)
   );
 
+  // 2026-10-01：止めた契約の、止めた月より後の未入金を外す（画面の /api/sm-summary と同じ）
+  const payments = paymentsForPlan(rawPayments, contracts);
   const cur     = currAbs();
   const absList = yearAbsList();
 
@@ -356,6 +394,7 @@ export async function getRevenueSummary(env: Env) {
 
   // 当月見込み
   const monthUnpaid = contracts.filter(c => c.status === "active").reduce((a, c) => {
+    if (stoppedBefore(c, cur)) return a;
     const s = c.start_month_idx ?? 0;
     if (c.type === "variable" && s <= cur) return a + c.amount;
     if (c.type === "recurring" && s <= cur)
@@ -522,12 +561,14 @@ export async function getMonthlyByBusiness(
   }
 
   const base = env.SALES_MANAGER_API_BASE ?? "https://sales-manager.shia2n.jp";
-  const { payments, contracts, singles, businesses: bizRows } = await fetchSMData(
+  const { payments: rawPayments, contracts, singles, businesses: bizRows } = await fetchSMData(
     base,
     env.SALES_MANAGER_INTERNAL_SECRET,
     cfAccessHeaders(env)
   );
 
+  // 2026-10-01：止めた契約の、止めた月より後の未入金を外す（getRevenueSummary と同じ）
+  const payments = paymentsForPlan(rawPayments, contracts);
   const known = (bizRows ?? []).map((b) => b.name);
   const knownSet = new Set(known);
   const targets = businesses && businesses.length > 0 ? businesses : known;
@@ -558,6 +599,7 @@ export async function getMonthlyByBusiness(
     if (abs < cur) return confirmed;
     if (abs > cur) return contractAmountForMonth(own, abs);
     const unpaid = own.reduce((a, c) => {
+      if (stoppedBefore(c, cur)) return a;
       const s = c.start_month_idx ?? 0;
       if (c.type === "variable" && s <= cur) return a + c.amount;
       if (c.type === "recurring" && s <= cur)
