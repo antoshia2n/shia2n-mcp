@@ -488,6 +488,7 @@
  * v0.85.0（2026-09-28 開発部）：gate__member_create 追加（新しい member の表に名前とメールだけの行を 1 行作る。決済を通らずに入る人の入口。旧の members には書かない・役と権利は書かない・既定は下見）。src/tools-gate.ts のみ。設定の追加は 0 個。依頼書：3d89c6c1c439810dba20e1b6add6a9e3
  * v0.86.0（2026-10-01 開発部）：sales_manager__list_unpaid と sales_manager__mark_paid 追加（指定した月の未入金を 1 行ずつ返す／契約と月を指定して入金済みにする。数え方と書き方は sales-manager 側の /api/sm-unpaid・/api/sm-mark-paid が持つ）。src/tools-sales-manager-payments.ts を新設。設定の追加は 0 個。
  * v0.87.0（2026-10-01 開発部）：sales_manager__get_revenue_summary と sales_manager__get_monthly_by_business が契約の停止（end_month_idx）を見るようにした。止めた月より後の未入金を未収から外し、見込にも入れない。判定は sales-manager の lib/salesRules.ts と同じ。src/tools-sales-manager.ts のみ。設定の追加は 0 個。
+ * v0.88.0（2026-10-01 開発部）：sales_manager__mark_unpaid 追加（入金済みを未入金に戻す。mark_paid の逆。書き方は sales-manager 側の /api/sm-mark-unpaid が持つ）。src/tools-sales-manager-payments.ts のみ。設定の追加は 0 個。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
