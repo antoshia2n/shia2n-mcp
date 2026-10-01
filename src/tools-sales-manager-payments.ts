@@ -135,4 +135,28 @@ export function registerSalesManagerPaymentTools(server: McpServer, env: Env): v
       return asMcpTextResult(data);
     }
   );
+
+  // 2026-10-01 追加（v0.88.0）：入金済みを未入金に戻す。sales_manager__mark_paid の逆。
+  server.tool(
+    "sales_manager__mark_unpaid",
+    "sales-manager で、契約 1 件の指定した月の入金済みを未入金に戻す（sales_manager__mark_paid の逆）。書く道具。その月の支払いの行がちょうど 1 行で、入金済みのときだけ書く。書くのは、入金済みを外す・実際に入った額を空に戻す・入金日を空に戻す、の 3 つ（画面で入金済みのチェックを外したときと同じ）。行は消さない。0 行（not_found）・2 行以上（ambiguous）・入金済みでない（not_paid）のときは何も書かずに断る（断るときは理由と該当の行を返す）。同じ呼び出しを 2 回送っても 2 回目は not_paid で断られ、二重には書かない。返り値: { ok, before: 書く前の行, after: 書いたあとの行, month_remaining: { count, total }（その月の未入金。sales_manager__list_unpaid と同じ数え方） }",
+    {
+      contract_id: z
+        .union([z.string(), z.number()])
+        .describe("契約の番号。sales_manager__list_unpaid などで見える contract_id をそのまま渡す。必須"),
+      year_month: z.string().describe("どの月の支払いか。YYYY-MM の形（例: 2026-09）。必須"),
+    },
+    async (args) => {
+      checkYearMonth(args.year_month);
+      const contractId = String(args.contract_id).trim();
+      if (!contractId) {
+        throw new Error("contract_id が空です。契約の番号をそのまま渡してください");
+      }
+      const data = await callSalesManager(env, "POST", "/api/sm-mark-unpaid", {
+        contract_id: contractId,
+        year_month: args.year_month,
+      });
+      return asMcpTextResult(data);
+    }
+  );
 }
