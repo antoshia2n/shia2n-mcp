@@ -46,7 +46,7 @@
  */
 
 import { Env } from "./index.js";
-import { getFirestoreToken } from "./taskmaster.js";
+import { getFirestoreToken, readLayout } from "./taskmaster.js";
 import { runAndRecord } from "./cron-log.js";
 
 /**
@@ -427,6 +427,33 @@ async function backupOneFirestoreDoc(
   try {
     budget.used += 1;
     const token = await getFirestoreToken(env);
+
+    // タスクが 1 本ずつの置き場（tm_tasks）に移っていたら、そちらを全部写す（2026-10-02 開発部）
+    if (name === "tasks") {
+      budget.used += 1;
+      if ((await readLayout(token, env.NAOKI_UID)) === "v2") {
+        const docs: unknown[] = [];
+        let pageToken = "";
+        for (let i = 0; i < 20; i++) {
+          budget.used += 1;
+          const r = await fetch(
+            `${FIRESTORE_BASE}/users/${env.NAOKI_UID}/tm_tasks?pageSize=300${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (!r.ok) {
+            return { key, ok: false, rows: null, total: null, truncated: false, error: `tm_tasks の取得に失敗（${r.status}）` };
+          }
+          const j = (await r.json()) as { documents?: unknown[]; nextPageToken?: string };
+          docs.push(...(j.documents ?? []));
+          if (!j.nextPageToken) { pageToken = ""; break; }
+          pageToken = j.nextPageToken;
+        }
+        const body = JSON.stringify({ layout: "v2", collection: "tm_tasks", documents: docs });
+        budget.used += 1;
+        await env.BACKUP_BUCKET.put(key, body, { httpMetadata: { contentType: "application/json; charset=utf-8" } });
+        return { key, ok: true, rows: docs.length, total: docs.length, truncated: pageToken !== "", parts: 1, bytes: byteSize(body) };
+      }
+    }
 
     budget.used += 1;
     const res = await fetch(

@@ -175,6 +175,68 @@ export async function fsPatch(
 }
 
 // ─────────────────────────────────────────────
+// タスクの置き場の形（2026-10-02 開発部）
+//   version 2：タスクは users/{uid}/tm_tasks/{id} に 1 本ずつ。目印は app_data/tm_layout の value.version
+//   それより前：users/{uid}/app_data/tasks の value（配列 1 本）
+//   移している途中（value.migrating）は書き込みを断る（移した後の写しから漏れないようにするため）
+// ─────────────────────────────────────────────
+
+type Layout = "v1" | "v2" | "migrating";
+
+export async function fsGetOrNull(token: string, path: string): Promise<FSDoc | null> {
+  const res = await fetch(`${FIRESTORE_BASE}/${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Firestore GET ${path} failed: ${res.status}`);
+  return res.json() as Promise<FSDoc>;
+}
+
+export async function readLayout(token: string, uid: string): Promise<Layout> {
+  const doc = await fsGetOrNull(token, `users/${uid}/app_data/tm_layout`);
+  const v = doc?.fields?.value ? (fromVal(doc.fields.value as FVal) as Record<string, unknown> | null) : null;
+  if (v && v.version === 2) return "v2";
+  if (v && v.migrating === true) return "migrating";
+  return "v1";
+}
+
+const MIGRATING = { error: "TaskMaster の置き場を移している途中です。1 分ほどおいてもう一度呼んでください", code: "migrating" };
+
+function docToItem(d: FSDoc): Item {
+  const out: Item = {};
+  for (const [k, v] of Object.entries(d.fields ?? {})) out[k] = fromVal(v);
+  if (!out.id) out.id = d.name.split("/").pop();
+  return out;
+}
+
+// 1 本ずつの置き場を条件で引く（equality 1 つだけ）
+async function queryTasks(token: string, uid: string, field: string, value: FVal): Promise<Item[]> {
+  const res = await fetch(`${FIRESTORE_BASE}/users/${uid}:runQuery`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: "tm_tasks" }],
+        where: { fieldFilter: { field: { fieldPath: field }, op: "EQUAL", value } },
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`Firestore runQuery tm_tasks failed: ${res.status} ${await res.text()}`);
+  const rows = (await res.json()) as { document?: FSDoc }[];
+  return rows.filter((r) => r.document).map((r) => docToItem(r.document as FSDoc));
+}
+
+// 1 本の文書の指定した欄だけを書く（無ければ作る）
+async function patchTask(token: string, uid: string, id: string, fields: Item): Promise<void> {
+  const f: Record<string, FVal> = {};
+  for (const [k, v] of Object.entries(fields)) f[k] = toFVal(v);
+  await fsPatch(token, `users/${uid}/tm_tasks/${encodeURIComponent(id)}`, f, Object.keys(fields));
+}
+
+// 日本時間の今日（終わった日 doneAt に使う）
+function tokyoToday(): string {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+// ─────────────────────────────────────────────
 // value フィールドを Item[] に展開
 //
 // 確認済み構造：
@@ -283,17 +345,18 @@ export async function handleTaskmasterTasks(_req: Request, env: Env): Promise<Re
     return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
   }
 
-  let tasksDoc: FSDoc, projectsDoc: FSDoc;
+  let items: Item[], projectsDoc: FSDoc;
   try {
-    [tasksDoc, projectsDoc] = await Promise.all([
-      fsGet(token, `users/${uid}/app_data/tasks`),
-      fsGet(token, `users/${uid}/app_data/projects`),
-    ]);
+    const layout = await readLayout(token, uid);
+    projectsDoc = await fsGet(token, `users/${uid}/app_data/projects`);
+    items = layout === "v2"
+      ? await queryTasks(token, uid, "completed", { booleanValue: false })
+      : expandValue(await fsGet(token, `users/${uid}/app_data/tasks`));
   } catch (e) {
     return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
   }
 
-  const tasks: TaskRecord[] = expandValue(tasksDoc)
+  const tasks: TaskRecord[] = items
     .filter((t) => !bool(t.archived) && !bool(t.completed))
     .map(toTask);
 
@@ -338,15 +401,10 @@ export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<R
     return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
   }
 
-  // 既存タスク配列を取得
-  let tasksDoc: FSDoc;
-  try {
-    tasksDoc = await fsGet(token, `users/${uid}/app_data/tasks`);
-  } catch (e) {
-    return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
-  }
-
-  const existingItems = expandValue(tasksDoc);
+  let layout: Layout;
+  try { layout = await readLayout(token, uid); }
+  catch (e) { return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 }); }
+  if (layout === "migrating") return Response.json(MIGRATING, { status: 503 });
 
   // 新規タスクオブジェクト
   const newTask: Item = {
@@ -362,16 +420,14 @@ export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<R
     createdAt: new Date().toISOString().slice(0, 10),
   };
 
-  const updatedItems = [...existingItems, newTask];
-
-  // Firestore に書き戻す（value フィールドのみ updateMask）
   try {
-    await fsPatch(
-      token,
-      `users/${uid}/app_data/tasks`,
-      { value: toFVal(updatedItems) },
-      ["value"]
-    );
+    if (layout === "v2") {
+      // 1 本の文書を足すだけ（ほかのタスクは読まない・書かない）
+      await patchTask(token, uid, newTask.id as string, { ...newTask, doneAt: "", subtasks: [], notes: "", links: [] });
+    } else {
+      const existingItems = expandValue(await fsGet(token, `users/${uid}/app_data/tasks`));
+      await fsPatch(token, `users/${uid}/app_data/tasks`, { value: toFVal([...existingItems, newTask]) }, ["value"]);
+    }
   } catch (e) {
     return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 });
   }
@@ -418,7 +474,30 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
     return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
   }
 
-  // 既存タスク配列を取得
+  let layout: Layout;
+  try { layout = await readLayout(token, uid); }
+  catch (e) { return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 }); }
+  if (layout === "migrating") return Response.json(MIGRATING, { status: 503 });
+
+  if (layout === "v2") {
+    // 1 本の文書の、渡された欄だけを書く。状態を変えたときは画面と同じく完了の印と終わった日もそろえる
+    let current: FSDoc | null;
+    try { current = await fsGetOrNull(token, `users/${uid}/tm_tasks/${encodeURIComponent(body.task_id)}`); }
+    catch (e) { return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 }); }
+    if (!current) return Response.json({ error: "task not found", task_id: body.task_id }, { status: 404 });
+    const fields: Item = {};
+    for (const k of ["title", "status", "priority", "deadline", "archived", "projectId", "groupId"] as const) {
+      if (body[k] !== undefined) fields[k] = body[k];
+    }
+    if (body.status !== undefined) {
+      fields.completed = body.status === "done";
+      fields.doneAt = body.status === "done" ? tokyoToday() : "";
+    }
+    try { await patchTask(token, uid, body.task_id, fields); }
+    catch (e) { return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 }); }
+    return Response.json({ ok: true, task: toTask({ ...docToItem(current), ...fields }) });
+  }
+
   let tasksDoc: FSDoc;
   try {
     tasksDoc = await fsGet(token, `users/${uid}/app_data/tasks`);
@@ -486,13 +565,16 @@ export async function handleTaskmasterDiag(_req: Request, env: Env): Promise<Res
 
   // tasks ドキュメント取得 + 変換処理を実行してサンプルを表示
   try {
-    const tasksDoc = await fsGet(token, `users/${uid}/app_data/tasks`);
-    const allItems = expandValue(tasksDoc);
+    const layout = await readLayout(token, uid);
+    const allItems = layout === "v2"
+      ? await queryTasks(token, uid, "completed", { booleanValue: false })
+      : expandValue(await fsGet(token, `users/${uid}/app_data/tasks`));
     const active   = allItems.filter((t) => !bool(t.archived) && !bool(t.completed));
     const mapped   = active.slice(0, 5).map(toTask);
 
     result.tasks = {
-      total_in_array:   allItems.length,
+      layout,
+      total_in_array:   layout === "v2" ? null : allItems.length,
       active_count:     active.length,
       sample_converted: mapped,
     };
@@ -618,13 +700,17 @@ export async function handleTaskmasterDeleteProject(req: Request, env: Env): Pro
     return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 });
   }
 
+  let layout: Layout;
+  try { layout = await readLayout(token, uid); }
+  catch (e) { return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 }); }
+  if (layout === "migrating") return Response.json(MIGRATING, { status: 503 });
+
   // projects・tasks を並行取得
-  let projectsDoc: FSDoc, tasksDoc: FSDoc;
+  let projectsDoc: FSDoc, tasksDoc: FSDoc | null = null, linked: Item[] = [];
   try {
-    [projectsDoc, tasksDoc] = await Promise.all([
-      fsGet(token, `users/${uid}/app_data/projects`),
-      fsGet(token, `users/${uid}/app_data/tasks`),
-    ]);
+    projectsDoc = await fsGet(token, `users/${uid}/app_data/projects`);
+    if (layout === "v2") linked = await queryTasks(token, uid, "projectId", { stringValue: body.project_id });
+    else tasksDoc = await fsGet(token, `users/${uid}/app_data/tasks`);
   } catch (e) {
     return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
   }
@@ -638,8 +724,19 @@ export async function handleTaskmasterDeleteProject(req: Request, env: Env): Pro
   // プロジェクトを配列から除外
   const updatedProjects = existingProjects.filter((p) => p.id !== body.project_id);
 
+  if (layout === "v2") {
+    // 配下のタスクは 1 本ずつ projectId だけを空にする
+    try {
+      await fsPatch(token, `users/${uid}/app_data/projects`, { value: toFVal(updatedProjects) }, ["value"]);
+      for (const t of linked) await patchTask(token, uid, String(t.id), { projectId: null });
+    } catch (e) {
+      return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 });
+    }
+    return Response.json({ ok: true, deleted: body.project_id, tasks_reset: linked.length });
+  }
+
   // 配下タスクの projectId を null にリセット
-  const existingTasks = expandValue(tasksDoc);
+  const existingTasks = expandValue(tasksDoc as FSDoc);
   const updatedTasks = existingTasks.map((t) =>
     t.projectId === body.project_id ? { ...t, projectId: null } : t
   );
