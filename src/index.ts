@@ -491,6 +491,7 @@
  * v0.88.0（2026-10-01 開発部）：sales_manager__mark_unpaid 追加（入金済みを未入金に戻す。mark_paid の逆。書き方は sales-manager 側の /api/sm-mark-unpaid が持つ）。src/tools-sales-manager-payments.ts のみ。設定の追加は 0 個。
  * v0.89.0（2026-10-01 開発部）：sales_manager__replace_monthly_revenue・sales_manager__list_payments・sales_manager__set_contract_status・sales_manager__set_payer_name 追加（sales-manager 側の /api/sm-replace-monthly・/api/sm-payments-month・/api/sm-contract-status・/api/sm-payer-name を呼ぶ）。src/tools-sales-manager-ledger.ts を新設。list_unpaid の説明に payer_name を足した。設定の追加は 0 個。
  * v0.90.0（2026-10-02 開発部）：TaskMaster のタスクを 1 本ずつの文書（users/{uid}/tm_tasks/{id}）へ移す変更に合わせた。taskmaster__ の 5 本は app_data/tm_layout の目印を見て、移した後は 1 本ずつの置き場を読み書きし、移す前は今までどおり配列 1 本を読み書きする。移している途中は書き込みを 503 で断る。update で status を渡したときは completed と doneAt もそろえる。毎日の控え（cron-backup）は移した後は tm_tasks を全部写す。src/taskmaster.ts・src/cron-backup.ts・src/version.ts。設定の追加は 0 個。
+ * v0.91.0（2026-10-03 開発部）：rumin_plan__put_row 追加（るーみんの YouTube 企画・制作シート。タブとキー（列と値・1〜3 組）で行を探し、渡した列だけを書く。無ければ末尾に 1 行足す。人が書く列・式の列には書かない。採用・進行の状態は「先生確認待ち」「修正中」にするときだけ書く）。src/tools-rumin-plan.ts を新設。設定の追加は 1 個（RUMIN_PLAN_SHEET_ID）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -504,6 +505,7 @@ import { registerSalesManagerLedgerTools } from "./tools-sales-manager-ledger.js
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerContentSheetTools } from "./tools-content-sheet.js";
 import { registerRuminScriptTools } from "./tools-rumin-script.js";
+import { registerRuminPlanTools } from "./tools-rumin-plan.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
@@ -564,6 +566,8 @@ export interface Env {
   CONTENT_SHEET_ID?: string;
   // 2026-09-22 追加：るーみんの YouTube 台本台帳の番号（シークレット。置き場が公開なので vars には書かない）
   RUMIN_SCRIPT_SHEET_ID?: string;
+  // 2026-10-03 追加：るーみんの YouTube 企画・制作シートの番号（シークレット。置き場が公開なので vars には書かない）
+  RUMIN_PLAN_SHEET_ID?: string;
   FIREBASE_SA_PRIVATE_KEY: string;
   NAOKI_UID: string;
   // 進化ラボ（公式サイト）。記事を入れる口を叩くため。
@@ -651,6 +655,7 @@ function createMcpServer(env: Env): McpServer {
   registerContentOsTools(server, env);
   registerContentSheetTools(server, env);
   registerRuminScriptTools(server, env);
+  registerRuminPlanTools(server, env);
   registerInboxReviewTools(server, env);
   registerHaakuTools(server, env);
   registerKnowledgeTagTools(server, env);
