@@ -493,6 +493,7 @@
  * v0.90.0（2026-10-02 開発部）：TaskMaster のタスクを 1 本ずつの文書（users/{uid}/tm_tasks/{id}）へ移す変更に合わせた。taskmaster__ の 5 本は app_data/tm_layout の目印を見て、移した後は 1 本ずつの置き場を読み書きし、移す前は今までどおり配列 1 本を読み書きする。移している途中は書き込みを 503 で断る。update で status を渡したときは completed と doneAt もそろえる。毎日の控え（cron-backup）は移した後は tm_tasks を全部写す。src/taskmaster.ts・src/cron-backup.ts・src/version.ts。設定の追加は 0 個。
  * v0.91.0（2026-10-03 開発部）：rumin_plan__put_row 追加（るーみんの YouTube 企画・制作シート。タブとキー（列と値・1〜3 組）で行を探し、渡した列だけを書く。無ければ末尾に 1 行足す。人が書く列・式の列には書かない。採用・進行の状態は「先生確認待ち」「修正中」にするときだけ書く）。src/tools-rumin-plan.ts を新設。設定の追加は 1 個（RUMIN_PLAN_SHEET_ID）。
  * v0.92.0（2026-10-03 開発部）：rumin_plan__put_row の書いてよい「状態」に「シアニンレビュー待ち」を足した（台本の流れが 下書き中 → シアニンレビュー待ち → 先生確認待ち に変わったため）。src/tools-rumin-plan.ts・src/version.ts。設定の追加は 0 個。
+ * v0.93.0（2026-10-03 開発部）：rumin_plan__put_row の書いてよいタブと守る列を、シートの作り直しに合わせて差し替えた（① ネタ帳・② 台本くらべ・③ 撮影〜公開・④ 公開テスト と 根拠｜・記録｜ のタブだけに書く。台本くらべの状態は 下書き中・シアニンレビュー待ち・先生に共有 だけ）。src/tools-rumin-plan.ts・src/version.ts。設定の追加は 0 個。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

@@ -19,6 +19,11 @@ import type { Env } from "./index.js";
  * 2026-10-03 v0.92.0：書いてよい「状態」に「シアニンレビュー待ち」を足した（Naoki 依頼・るーみん案件）。
  *   台本の流れが 下書き中 → シアニンレビュー待ち（Naoki が見て整える）→ 先生確認待ち に変わったため。
  *   Claude は書き上げた時点で「シアニンレビュー待ち」にする。値はシートのプルダウンにも入っている必要がある
+ *
+ * 2026-10-03 v0.93.0：シートのタブの作り直しに合わせて、書いてよいタブと守る列を差し替えた（Naoki 依頼・るーみん案件）。
+ *   書けるのは ① ネタ帳・② 台本くらべ・③ 撮影〜公開・④ 公開テスト と、名前が「根拠｜」「記録｜」で始まるタブだけ（許す側の一覧）。
+ *   それ以外（0 はじめに・消えた今週・企画案・採用・進行・ルール・今後足されるタブ）には書かない。
+ *   タブは頭の番号を省いて渡してよい（「ネタ帳」で「① ネタ帳」に当たる）
  *   ・式が入っている列（例：次に動く人）には書かない。プルダウンの列は、プルダウンの値だけを受け付ける
  *   ・列は位置ではなく見出しの文字で探す。見出しの末尾の（…）は見ない（「公開日（木曜・仮）」＝「公開日」）
  *   ・書き方は RAW。「=」で始まる文も式にはならない
@@ -34,20 +39,44 @@ const HEADER_SCAN_ROWS = 5;
 /** 1 セルに書く文字の上限 */
 const MAX_VALUE_LENGTH = 5000;
 
-/** この口では書かないタブ（説明とプルダウンの元の表） */
-export const BLOCKED_TABS = ["はじめに", "ルール"];
+/** タブ名の見分け：全角半角をそろえ、頭の番号（①・0 など）と空白を外し、波線をそろえる */
+export function tabKey(name: string | undefined): string {
+  return (name ?? "")
+    .normalize("NFKC")
+    .replace(/[〜～]/g, "~")
+    .replace(/^\d+\s*/, "")
+    .replace(/\s+/g, "");
+}
 
-/** 人が書く列。タブ名 → 見出し（headKey で比べる） */
+/** 書いてよいタブ（tabKey で比べる）。ここに無いタブには書かない */
+export const WRITABLE_TABS = ["ネタ帳", "台本くらべ", "撮影〜公開", "公開テスト"];
+/** 名前がこれで始まるタブも書いてよい（裏づけデータ） */
+export const WRITABLE_TAB_PREFIXES = ["根拠｜", "記録｜"];
+
+export function isWritableTab(key: string): boolean {
+  return WRITABLE_TABS.map((t) => tabKey(t)).includes(key) || WRITABLE_TAB_PREFIXES.some((p) => key.startsWith(tabKey(p)));
+}
+
+/** 人が書く列。タブ名 → 見出し（タブは tabKey、見出しは headKey で比べる） */
 export const PROTECTED: Record<string, string[]> = {
-  企画案: ["MTGの判断", "MTGメモ"],
-  "採用・進行": ["状態", "公開日", "撮影日"],
-  今週: ["MTGの結論"],
+  ネタ帳: ["判断"],
+  台本くらべ: ["MTGの判断", "状態"],
+  "撮影〜公開": ["状態", "公開予定日"],
+  公開テスト: ["テスト結果"],
 };
 
 /** 人が書く列のうち、Claude が書いてよい値。タブ名 → 見出し → 値 */
 export const PROTECTED_EXCEPTIONS: Record<string, Record<string, string[]>> = {
-  "採用・進行": { 状態: ["シアニンレビュー待ち", "先生確認待ち", "修正中"] },
+  台本くらべ: { 状態: ["下書き中", "シアニンレビュー待ち", "先生に共有"] },
 };
+
+function protectedList(key: string): string[] {
+  return Object.entries(PROTECTED).find(([t]) => tabKey(t) === key)?.[1] ?? [];
+}
+
+function exceptionsFor(key: string): Record<string, string[]> {
+  return Object.entries(PROTECTED_EXCEPTIONS).find(([t]) => tabKey(t) === key)?.[1] ?? {};
+}
 
 export type SheetsJson = <T>(url: string, init?: RequestInit) => Promise<T>;
 
@@ -129,9 +158,9 @@ export function lastFilledRow(values: Cells): number {
 
 /** 人が書く列か。書いてよい例外の値なら false */
 export function isProtected(tab: string, column: string, value: string): boolean {
-  const list = (PROTECTED[tab] ?? []).map((c) => headKey(c));
+  const list = protectedList(tab).map((c) => headKey(c));
   if (!list.includes(column)) return false;
-  const allowed = Object.entries(PROTECTED_EXCEPTIONS[tab] ?? {}).find(([c]) => headKey(c) === column)?.[1] ?? [];
+  const allowed = Object.entries(exceptionsFor(tab)).find(([c]) => headKey(c) === column)?.[1] ?? [];
   return !allowed.includes(value);
 }
 
@@ -202,20 +231,27 @@ export async function putRuminPlanRow(
   id: string,
   input: PutPlanRowInput
 ): Promise<Record<string, unknown>> {
-  const tab = (input.tab ?? "").trim();
+  const asked = (input.tab ?? "").trim();
+  // tab は守る列を引くための見分けの名前。シートの実際の名前は sheetTitle（タブがあると分かってから決まる）
+  const tab = tabKey(asked);
+  let sheetTitle = asked;
   const keys = (input.keys ?? []).map((k) => ({ column: headKey(k.column), value: (k.value ?? "").trim() }));
   const cells = (input.cells ?? []).map((c) => ({ column: headKey(c.column), value: (c.value ?? "").trim() }));
   const refuse = (reason: string, extra: Record<string, unknown> = {}) => ({
     ok: false,
     written: false,
     reason,
-    tab,
+    tab: sheetTitle,
     ...extra,
   });
 
   // ── 受け付ける形か（ここで止まったら Google には 1 回も触らない）
   if (!tab) return refuse("tab（タブの名前）が空です。書きませんでした");
-  if (BLOCKED_TABS.includes(tab)) return refuse(`タブ「${tab}」はこの口では書きません。書きませんでした`);
+  if (!isWritableTab(tab)) {
+    return refuse(
+      `タブ「${asked}」はこの口では書きません。書けるのは ${WRITABLE_TABS.join("・")} と、名前が ${WRITABLE_TAB_PREFIXES.join("・")} で始まるタブだけです。書きませんでした`
+    );
+  }
   if (keys.length < 1 || keys.length > 3) return refuse("keys は 1〜3 組で渡してください。書きませんでした");
   if (cells.length < 1 || cells.length > 20) return refuse("cells は 1〜20 組で渡してください。書きませんでした");
   if (keys.some((k) => !k.column || !k.value)) return refuse("keys の列と値は空にできません。書きませんでした");
@@ -231,12 +267,12 @@ export async function putRuminPlanRow(
   }
   const blocked = cells.filter((c) => isProtected(tab, c.column, c.value));
   if (blocked.length > 0) {
-    const allowedNote = Object.entries(PROTECTED_EXCEPTIONS[tab] ?? {})
+    const allowedNote = Object.entries(exceptionsFor(tab))
       .map(([col, vals]) => `「${col}」を ${vals.map((v) => `「${v}」`).join("・")} にするときだけ`)
       .join("、");
     return refuse(
       `人が書く列 ${blocked.map((c) => `「${c.column}」`).join("・")} が入っています。1 セルも書きませんでした${allowedNote ? `（書いてよいのは${allowedNote}）` : ""}`,
-      { protected_columns: PROTECTED[tab] ?? [] }
+      { protected_columns: protectedList(tab) }
     );
   }
 
@@ -245,10 +281,19 @@ export async function putRuminPlanRow(
     `${API}/${id}?fields=${encodeURIComponent("sheets.properties.title")}`
   );
   const allTabs = (meta.sheets ?? []).map((s) => s.properties?.title ?? "").filter((t) => t !== "");
-  if (!allTabs.includes(tab)) return refuse(`タブ「${tab}」がありません。書きませんでした`, { tabs: allTabs });
+  const hits = allTabs.filter((t) => tabKey(t) === tab);
+  if (hits.length !== 1) {
+    return refuse(
+      hits.length === 0
+        ? `タブ「${asked}」がありません。書きませんでした`
+        : `タブ「${asked}」に当たるタブが ${hits.length} つあります（${hits.join("・")}）。書きませんでした`,
+      { tabs: allTabs }
+    );
+  }
+  sheetTitle = hits[0];
 
   // ── 中身を 2 通りで読む（見えている文字と、式）
-  const range = encodeURIComponent(quoteTab(tab));
+  const range = encodeURIComponent(quoteTab(sheetTitle));
   const shown = await sheets<{ values?: Cells }>(`${API}/${id}/values/${range}?majorDimension=ROWS`);
   const formulas = await sheets<{ values?: Cells }>(
     `${API}/${id}/values/${range}?majorDimension=ROWS&valueRenderOption=FORMULA`
@@ -275,7 +320,7 @@ export async function putRuminPlanRow(
   const lastRow = Math.max(lastFilledRow(values), header.headerRow);
   const rowNo = adding ? lastRow + 1 : matched[0];
   if (adding) {
-    const protectedKeys = keys.filter((k) => (PROTECTED[tab] ?? []).map((c) => headKey(c)).includes(k.column));
+    const protectedKeys = keys.filter((k) => protectedList(tab).map((c) => headKey(c)).includes(k.column));
     if (protectedKeys.length > 0) {
       return refuse(
         `キー（${keyText}）の行が無く、足すと人が書く列 ${protectedKeys.map((k) => `「${k.column}」`).join("・")} に書くことになります。書きませんでした`
@@ -301,7 +346,7 @@ export async function putRuminPlanRow(
   const dropdowns = await readDropdowns(
     sheets,
     id,
-    tab,
+    sheetTitle,
     writeCols.map((c) => col[c]),
     header.headerRow + 1,
     Math.max(lastRow, rowNo, header.headerRow + 1)
@@ -329,7 +374,7 @@ export async function putRuminPlanRow(
   const after: Record<string, string> = { ...before };
   for (const u of updates) if (u.column in after) after[u.column] = u.value;
   const base = {
-    tab,
+    tab: sheetTitle,
     row_no: rowNo,
     keys: Object.fromEntries(keys.map((k) => [k.column, k.value])),
     action: updates.length === 0 ? "unchanged" : adding ? "added" : "updated",
@@ -348,7 +393,7 @@ export async function putRuminPlanRow(
     body: JSON.stringify({
       valueInputOption: "RAW",
       data: updates.map((u) => ({
-        range: `${quoteTab(tab)}!${columnLetter(col[u.column])}${rowNo}`,
+        range: `${quoteTab(sheetTitle)}!${columnLetter(col[u.column])}${rowNo}`,
         values: [[u.value]],
       })),
     }),
@@ -356,7 +401,7 @@ export async function putRuminPlanRow(
 
   // ── 書いたあとに同じ行を読み直す。書いたセルが書いた値か・キーがずれていないか
   const reread = await sheets<{ values?: Cells }>(
-    `${API}/${id}/values/${encodeURIComponent(`${quoteTab(tab)}!${rowNo}:${rowNo}`)}`
+    `${API}/${id}/values/${encodeURIComponent(`${quoteTab(sheetTitle)}!${rowNo}:${rowNo}`)}`
   );
   const rowAfter = reread.values?.[0] ?? [];
   const mismatched = updates.filter((u) => (rowAfter[col[u.column]] ?? "").trim() !== u.value);
@@ -381,15 +426,15 @@ export async function putRuminPlanRow(
 
 export function registerRuminPlanTools(server: McpServer, env: Env): void {
   const pair = z.object({
-    column: z.string().describe("列の見出し。末尾の（…）は省いてよい。例：番号・MTG日・台本リンク"),
+    column: z.string().describe("列の見出し。末尾の（…）は省いてよい。例：番号・ネタ番号・リンク・状態"),
     value: z.string().describe("値"),
   });
   server.tool(
     "rumin_plan__put_row",
-    "るーみんの YouTube 企画・制作シートで、tab の中から keys（列と値・1〜3 組）がすべて一致する行を探し、cells に渡した列だけを書き換える。行が無ければ末尾に 1 行足す（そのときだけキーの列も書く）。一致が 2 行以上なら書かない（キーを足してしぼる。例：今週タブは MTG日＋見てほしいもの＋名前）。人が書く列（企画案の MTGの判断・MTGメモ／採用・進行の 状態・公開日・撮影日／今週の MTGの結論）が cells に入っていたら 1 セルも書かない。例外は採用・進行の 状態 を シアニンレビュー待ち・先生確認待ち・修正中 のどれかにするときだけ（台本を書き上げたら シアニンレビュー待ち。先生確認待ち にするのは Naoki のレビュー後）。式の入った列（次に動く人など）にも書かない。プルダウンの列はプルダウンの値だけ。はじめに・ルールのタブは書かない。dry_run=true なら書かずに、入れ先の行と書く前後の値だけを返す。",
+    "るーみんの YouTube 企画・制作シートで、tab の中から keys（列と値・1〜3 組）がすべて一致する行を探し、cells に渡した列だけを書き換える。行が無ければ末尾に 1 行足す（そのときだけキーの列も書く）。一致が 2 行以上なら書かない（キーを足してしぼる）。書けるタブは ネタ帳・台本くらべ・撮影〜公開・公開テスト と、名前が 根拠｜・記録｜ で始まるタブだけ（頭の番号 ①〜④ は省いてよい）。キーの例：ネタ帳は 番号（N-01）、台本くらべは ネタ番号、撮影〜公開は タイトル、公開テストは 公開日。人が書く列（ネタ帳の 判断／台本くらべの MTGの判断／撮影〜公開の 状態・公開予定日／公開テストの テスト結果）が cells に入っていたら 1 セルも書かない。台本くらべの 状態 は 下書き中・シアニンレビュー待ち・先生に共有 のどれかにするときだけ書ける（台本を書き上げたら シアニンレビュー待ち。先生に共有 にするのは Naoki のレビュー後）。式の入った列（次に動く人など）にも書かない。プルダウンの列はプルダウンの値だけ。dry_run=true なら書かずに、入れ先の行と書く前後の値だけを返す。",
     {
-      tab: z.string().describe("タブの名前。例：今週・企画案・採用・進行"),
-      keys: z.array(pair).describe("行を見分けるキー（1〜3 組）。例：[{column:\"番号\",value:\"K-004\"}]"),
+      tab: z.string().describe("タブの名前。頭の番号は省いてよい。例：ネタ帳・台本くらべ・撮影〜公開・公開テスト・根拠｜テーマ候補"),
+      keys: z.array(pair).describe("行を見分けるキー（1〜3 組）。例：[{column:\"ネタ番号\",value:\"N-01\"}]"),
       cells: z.array(pair).describe("書く列と値（1〜20 組）。キーの列は入れない。空文字はそのセルを空にする"),
       dry_run: z.boolean().optional().describe("true なら書かずに、入れ先の行と書く前後の値だけを返す"),
     },
