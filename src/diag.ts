@@ -131,14 +131,6 @@ const ENV_KEYS: (keyof Env)[] = [
   "MCP_SERVER_SECRET",
   "MCP_DEFAULT_USER_ID",
   "OAUTH_KV",
-  "ZEUS_API_BASE",
-  "ZEUS_INTERNAL_SECRET",
-  "ZEUS_EXTERNAL_SECRET",
-  // 2026-08-03：zeus-worker の cron 廃止に伴い追加。
-  // 本 Worker の 0,30 cron（UTC 18:00 分岐）から POST /sync-all を叩くため、
-  // この 2 つが未設定だと毎晩の Zeus 取り込みが動かない。
-  "ZEUS_WORKER_URL",
-  "ZEUS_WORKER_SECRET",
   "PAY_KUN_API_BASE",
   "PAY_KUN_INTERNAL_SECRET",
   "FIREBASE_SA_EMAIL",
@@ -185,7 +177,6 @@ const SERVICES: {
   exact200?: true;
   describeFailure?: true;
 }[] = [
-  { name: "zeus",          envKey: "ZEUS_API_BASE"          },
   { name: "pay_kun",       envKey: "PAY_KUN_API_BASE",       path: "/api/diag",                    strictGet: true, exact200: true, describeFailure: true },
   { name: "sales_manager", envKey: "SALES_MANAGER_API_BASE", path: "/api/diag", accessGated: true, strictGet: true, exact200: true, describeFailure: true },
   { name: "kiroku",          base: "https://kiroku.shia2n.jp",          path: "/api/diag", accessGated: true, strictGet: true },
