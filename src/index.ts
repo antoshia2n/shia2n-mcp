@@ -494,6 +494,7 @@
  * v0.91.0（2026-10-03 開発部）：rumin_plan__put_row 追加（るーみんの YouTube 企画・制作シート。タブとキー（列と値・1〜3 組）で行を探し、渡した列だけを書く。無ければ末尾に 1 行足す。人が書く列・式の列には書かない。採用・進行の状態は「先生確認待ち」「修正中」にするときだけ書く）。src/tools-rumin-plan.ts を新設。設定の追加は 1 個（RUMIN_PLAN_SHEET_ID）。
  * v0.92.0（2026-10-03 開発部）：rumin_plan__put_row の書いてよい「状態」に「シアニンレビュー待ち」を足した（台本の流れが 下書き中 → シアニンレビュー待ち → 先生確認待ち に変わったため）。src/tools-rumin-plan.ts・src/version.ts。設定の追加は 0 個。
  * v0.93.0（2026-10-03 開発部）：rumin_plan__put_row の書いてよいタブと守る列を、シートの作り直しに合わせて差し替えた（① ネタ帳・② 台本くらべ・③ 撮影〜公開・④ 公開テスト と 根拠｜・記録｜ のタブだけに書く。台本くらべの状態は 下書き中・シアニンレビュー待ち・先生に共有 だけ）。src/tools-rumin-plan.ts・src/version.ts。設定の追加は 0 個。
+ * v0.94.0（2026-10-04 開発部）：コンサルマネージャーへの取り込み（JST 08:00）を runAndRecord で包み、記録 consult_intake を残すようにした。/diag の点検から Zeus の口と設定 5 つを外した（Zeus を畳む）。旧の rumin_script__put_row の登録を外した（ファイルは残す）。設定の追加は 0 個。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -506,7 +507,6 @@ import { registerSalesManagerPaymentTools } from "./tools-sales-manager-payments
 import { registerSalesManagerLedgerTools } from "./tools-sales-manager-ledger.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerContentSheetTools } from "./tools-content-sheet.js";
-import { registerRuminScriptTools } from "./tools-rumin-script.js";
 import { registerRuminPlanTools } from "./tools-rumin-plan.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
@@ -656,7 +656,6 @@ function createMcpServer(env: Env): McpServer {
   registerSalesManagerLedgerTools(server, env);
   registerContentOsTools(server, env);
   registerContentSheetTools(server, env);
-  registerRuminScriptTools(server, env);
   registerRuminPlanTools(server, env);
   registerInboxReviewTools(server, env);
   registerHaakuTools(server, env);
@@ -936,7 +935,11 @@ export default {
       // 2026-09-13：UTAGE の個別相談予約者をコンサルマネージャーへ取り込む
       // （UTC 23:00 = JST 08:00 のみ発火）。既存の 30 分ごとの枠に相乗りする。
       if (utcMinute === 0 && utcHour === 23) {
-        tasks.push(handleConsultManagerIntake(env).then(() => undefined));
+        tasks.push(
+          runAndRecord(env, "consult_intake", async () => {
+            return await handleConsultManagerIntake(env);
+          })
+        );
       }
 
       // 2026-08-28：面談の予定を読んで、しあらぼ管理の最終面談日へ入れる

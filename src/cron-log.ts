@@ -47,6 +47,9 @@ export const KNOWN_JOBS = [
   // 2026-08-28 追加：面談の予定を毎日読んで、しあらぼ管理の最終面談日へ反映する処理。
   // 依頼書：https://www.notion.so/3ca9c6c1c43981fd9575e6e9fdb4059b
   "shiarabo_mtg",
+  // 2026-10-04 追加：UTAGE の個別相談の予約者をコンサルマネージャーへ取り込む処理（JST 08:00）。
+  // 9/13 から毎朝動いていたが記録を残しておらず、動いたかを引けなかった。
+  "consult_intake",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];
