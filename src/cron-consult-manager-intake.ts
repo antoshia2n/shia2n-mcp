@@ -18,7 +18,7 @@ const DEFAULT_UTAGE_MCP_URL = "https://api.utage-system.com/mcp";
 type Row = Record<string, unknown>;
 
 interface McpResponse {
-  result?: { content?: Array<{ type?: string; text?: string }> };
+  result?: { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
   error?: { code?: number; message?: string };
 }
 
@@ -85,6 +85,7 @@ function dateFromValue(value: unknown): string | null {
 
 function applicantDate(row: Row): string | null {
   const keys = [
+    "start_datetime",
     "event_start_date",
     "schedule_start_date",
     "start_date",
@@ -115,37 +116,83 @@ function applicantRows(payload: unknown): Row[] {
   return [];
 }
 
-async function listEventApplicants(env: Env): Promise<Row[]> {
+// 2026-10-04 開発部：9/13 から 1 件も入っていなかった原因を直した。
+// ① UTAGE の道具の引数名は event_id ではなく project_id（違う名前で呼ぶと道具が誤りを返す）
+// ② 日程の日時は schedule.start_datetime にある（applicantDate の鍵に足した）
+// ③ 1 回で返るのは既定 20 件なので、100 件ずつページを送って全件を読む
+const PER_PAGE = 100;
+const MAX_PAGES = 20;
+
+async function callApplicantPage(env: Env, page: number): Promise<{ rows: Row[]; total: number | null }> {
   const url = requireEnv("UTAGE_MCP_URL", env.UTAGE_MCP_URL || DEFAULT_UTAGE_MCP_URL);
   const token = requireEnv("UTAGE_MCP_TOKEN", env.UTAGE_MCP_TOKEN);
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
-      id: 1,
+      id: page,
       method: "tools/call",
       params: {
         name: "event_applicant_list",
-        arguments: { event_id: EVENT_ID },
+        arguments: {
+          project_id: EVENT_ID,
+          date_from: `${TARGET_YEAR}-01-01`,
+          per_page: PER_PAGE,
+          page,
+        },
       },
     }),
   });
   if (!response.ok) {
     throw new Error(`UTAGE MCP HTTP ${response.status}: ${await response.text()}`);
   }
-  const rpc = await response.json() as McpResponse;
+  const raw = await response.text();
+  // 返りが SSE の形（"data: {...}"）でも JSON の形でも読めるようにする
+  const jsonText = raw.trim().startsWith("{")
+    ? raw
+    : raw.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).pop() ?? "";
+  let rpc: McpResponse;
+  try {
+    rpc = JSON.parse(jsonText) as McpResponse;
+  } catch {
+    throw new Error(`UTAGE MCP response is not JSON: ${raw.slice(0, 300)}`);
+  }
   if (rpc.error) {
     throw new Error(`UTAGE MCP error: ${rpc.error.message ?? rpc.error.code ?? "unknown"}`);
   }
   const text = rpc.result?.content?.find((item) => item.type === "text" && item.text)?.text;
   if (!text) throw new Error("UTAGE MCP response: no text content");
-  const rows = applicantRows(JSON.parse(text));
-  if (rows.length === 0) throw new Error("UTAGE event applicants returned 0 rows");
-  return rows;
+  if (rpc.result?.isError) throw new Error(`UTAGE tool error: ${text.slice(0, 300)}`);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(`UTAGE tool text is not JSON: ${text.slice(0, 300)}`);
+  }
+  const meta = asRecord(asRecord(payload)?.meta);
+  const total = typeof meta?.total === "number" ? meta.total : null;
+  return { rows: applicantRows(payload), total };
+}
+
+async function listEventApplicants(env: Env): Promise<Row[]> {
+  const all: Row[] = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { rows, total } = await callApplicantPage(env, page);
+    all.push(...rows);
+    if (rows.length < PER_PAGE || (total !== null && all.length >= total)) break;
+  }
+  if (all.length === 0) throw new Error("UTAGE event applicants returned 0 rows");
+  // テストの申込と、キャンセル（cancel_ で始まる参加状況）は面談に数えない
+  return all.filter((row) => {
+    if (row.is_test_mode === true) return false;
+    const status = asText(row.status_participation);
+    return !(status && status.startsWith("cancel"));
+  });
 }
 
 function supabaseHeaders(env: Env, prefer?: string): HeadersInit {
