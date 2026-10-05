@@ -151,6 +151,8 @@ const ENV_KEYS: (keyof Env)[] = [
   "RUMIN_SCRIPT_SHEET_ID",
   // 2026-10-03：るーみんの YouTube 企画・制作シートの番号。無いと rumin_plan__put_row が止まる。値は出さず有無だけ返す。
   "RUMIN_PLAN_SHEET_ID",
+  // 2026-10-05：開発部がプルリクを作る鍵。無いと github__open_pr が止まる。値は出さず有無だけ返す。
+  "GITHUB_TOKEN",
 ];
 
 // path を書いた行だけ、入口ではなくその道を叩く。
