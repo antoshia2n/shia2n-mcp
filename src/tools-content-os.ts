@@ -13,6 +13,7 @@ import type { Env } from "./index.js";
  * v0.16.0 で content_os__update_score 追加（依頼書：3579c6c1-c439-81b4-98b4-cd4940145e4a）
  * v0.17.0 で content_os__list_slots / content_os__fill_slot 追加（依頼書：3619c6c1-c439-817f-9533-ee9b661830f4）
  * v0.25.0 で content_os__create_slot 追加（依頼書：3619c6c1-c439-8128-9de8-fb5da46c209b）
+ * v0.96.0 で content_os__add_idea 追加、update_post に mm_url、list_posts の状態に idea を追加
  * v0.32.0 で add_post / bulk_add_posts / list_accounts / update_post 追加、
  *          list_posts に account_id・status、list_slots / search_posts に account_id 追加
  *          （要件定義 v1.2 F6：3ac9c6c1-c439-8175-88e5-e3d5747cf898）
@@ -86,9 +87,9 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         .optional()
         .describe("アカウントIDで絞り込む（content_os__list_accounts の id）。省略時は全アカウント横断"),
       status: z
-        .enum(["draft", "review", "waiting", "reserved", "published"])
+        .enum(["idea", "draft", "review", "waiting", "reserved", "published"])
         .optional()
-        .describe("制作段階で絞り込む。waiting＝本文は完成しているが投稿日時が未定。省略時は絞り込まない"),
+        .describe("制作段階で絞り込む。idea＝本文の無いネタ（アイデア）。waiting＝本文は完成しているが投稿日時が未定。省略時は絞り込まない"),
     },
     async (args) => {
       const result = await callContentOsInternalApi(env, "list-posts", {
@@ -415,7 +416,11 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         .string()
         .nullable()
         .optional()
-        .describe("Buffer の投稿ID。Buffer の予約へ流したら入れる。null を渡すと空に戻る。空なら未送信、値があれば送信済みの目印"),
+        .describe("Buffer の投稿ID。Buffer の予約へ流したら入れる。null を渡すと空に戻る。空なら未送信、値があれば送信済みの目印"),      mm_url: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("マインドマップ（Whimsical など）の住所。メモから作ったマインドマップのリンクを入れる。空の文字か null を渡すと空に戻る"),
     },
     async (args) => {
       const payload: Record<string, unknown> = { id: args.id };
@@ -429,8 +434,60 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
       if (args.score !== undefined) payload.score = args.score;
       if (args.labels !== undefined) payload.labels = args.labels;
       if (args.buffer_post_id !== undefined) payload.buffer_post_id = args.buffer_post_id;
+      if (args.mm_url !== undefined) payload.mm_url = args.mm_url;
 
       const result = await callContentOsInternalApi(env, "update-post", payload);
+      return asMcpTextResult(result);
+    }
+  );
+
+  // ─── 14. content_os__add_idea ────────────────────────────────────────
+  // v0.96.0 で追加（2026-10-05 開発部）。ContentOS 側の /api/internal/add-idea を呼ぶ
+  server.tool(
+    "content_os__add_idea",
+    "ContentOS に本文の無いネタ（アイデア）を1件足す。メモは「- 」と半角スペース2つで1階層の箇条書きで渡す（例: \"- 主題\\n  - 理由\"）。状態は idea・日時は空・本文は空で入り、画面のシート画面のネタ帳に出る。本文つきの原稿を入れるときは content_os__add_post を使う。マインドマップの住所はあとから content_os__update_post の mm_url でも入れられる。登録元は mcp として記録される。戻り値: { ok: true, account_name, post: {...} } または { ok: false, error: string }。",
+    {
+      memo: z
+        .string()
+        .min(1)
+        .describe("ネタのメモ（必須・空文字不可）。「- 」と半角スペース2つで1階層の箇条書き"),
+      title: z.string().optional().describe("題名（任意・空でよい）"),
+      post_type: z
+        .string()
+        .optional()
+        .describe("投稿タイプ（任意・既定 x_post）。例: x_post / x_article / note"),
+      account_id: z
+        .string()
+        .optional()
+        .describe("登録先アカウントID（省略時は既定アカウント）。content_os__list_accounts で確認できる"),
+      platform: z
+        .string()
+        .optional()
+        .describe("媒体（x / note）。省略時はアカウントの default_platform、それも空なら x"),
+      memo_links: z
+        .array(
+          z.object({
+            label: z.string().optional().describe("リンクの名前（任意）"),
+            url: z.string().describe("住所（http または https で始まる）"),
+          })
+        )
+        .optional()
+        .describe("メモに付ける素材のリンク（任意）"),
+      mm_url: z
+        .string()
+        .optional()
+        .describe("マインドマップ（Whimsical など）の住所（任意）"),
+    },
+    async (args) => {
+      const result = await callContentOsInternalApi(env, "add-idea", {
+        memo: args.memo,
+        title: args.title,
+        post_type: args.post_type,
+        account_id: args.account_id,
+        platform: args.platform,
+        memo_links: args.memo_links,
+        mm_url: args.mm_url,
+      });
       return asMcpTextResult(result);
     }
   );
