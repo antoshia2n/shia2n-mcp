@@ -495,6 +495,7 @@
  * v0.92.0（2026-10-03 開発部）：rumin_plan__put_row の書いてよい「状態」に「シアニンレビュー待ち」を足した（台本の流れが 下書き中 → シアニンレビュー待ち → 先生確認待ち に変わったため）。src/tools-rumin-plan.ts・src/version.ts。設定の追加は 0 個。
  * v0.93.0（2026-10-03 開発部）：rumin_plan__put_row の書いてよいタブと守る列を、シートの作り直しに合わせて差し替えた（① ネタ帳・② 台本くらべ・③ 撮影〜公開・④ 公開テスト と 根拠｜・記録｜ のタブだけに書く。台本くらべの状態は 下書き中・シアニンレビュー待ち・先生に共有 だけ）。src/tools-rumin-plan.ts・src/version.ts。設定の追加は 0 個。
  * v0.94.0（2026-10-04 開発部）：コンサルマネージャーへの取り込み（JST 08:00）を runAndRecord で包み、記録 consult_intake を残すようにした。/diag の点検から Zeus の口と設定 5 つを外した（Zeus を畳む）。旧の rumin_script__put_row の登録を外した（ファイルは残す）。設定の追加は 0 個。
+ * v0.98.0（2026-10-05 開発部）：github__open_pr に edits（探す文字列→置き換える文字列）を足した。長いファイルを丸ごと送らずに直せる。書いてよいリポジトリの既定に shia2n-mcp を足した。src/tools-github.ts・src/version.ts。設定の追加は 0 個。
  * v0.97.0（2026-10-05 開発部）：github__open_pr・github__pr_status 追加（開発部が claude/ の新しい枝に上げてプルリクを作る。結合は Naoki）。src/tools-github.ts・src/version.ts。設定の追加は 1 個（GITHUB_TOKEN・秘密の値）。書いてよいリポジトリは GITHUB_ALLOWED_REPOS（省略時は antoshia2n/content-os だけ）。
  * v0.96.0（2026-10-05 開発部）：content_os__add_idea 追加（本文の無いネタを足す。ContentOS の /api/internal/add-idea を呼ぶ）。content_os__update_post に mm_url を足した。content_os__list_posts の状態に idea を足した。src/tools-content-os.ts・src/version.ts。設定の追加は 0 個。
  */
