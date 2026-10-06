@@ -497,6 +497,7 @@
  * v0.94.0（2026-10-04 開発部）：コンサルマネージャーへの取り込み（JST 08:00）を runAndRecord で包み、記録 consult_intake を残すようにした。/diag の点検から Zeus の口と設定 5 つを外した（Zeus を畳む）。旧の rumin_script__put_row の登録を外した（ファイルは残す）。設定の追加は 0 個。
  * v0.98.0（2026-10-05 開発部）：github__open_pr に edits（探す文字列→置き換える文字列）を足した。長いファイルを丸ごと送らずに直せる。書いてよいリポジトリの既定に shia2n-mcp を足した。src/tools-github.ts・src/version.ts。設定の追加は 0 個。
  * v0.97.0（2026-10-05 開発部）：github__open_pr・github__pr_status 追加（開発部が claude/ の新しい枝に上げてプルリクを作る。結合は Naoki）。src/tools-github.ts・src/version.ts。設定の追加は 1 個（GITHUB_TOKEN・秘密の値）。書いてよいリポジトリは GITHUB_ALLOWED_REPOS（省略時は antoshia2n/content-os だけ）。
+ * v0.99.1（2026-10-06 開発部）：rumin_doc__replace_text の書いたあとの題名の確かめを Drive から読むようにした（Docs の読み直しは改名の直後に古い題名を返し、ok:false になっていた。本番で見た）。src/tools-rumin-doc.ts・src/version.ts。設定の追加は 0 個。
  * v0.99.0（2026-10-06 開発部）：rumin_doc__replace_text 追加（るーみんの YouTube 台本の Google ドキュメントを同じリンクのまま直す。探す文字がちょうど 1 か所の組だけを置き換え、1 組でも違えば書かない。題名も変えられる。書けるのは台本フォルダ直下で持ち主がフォルダと同じドキュメントだけ）。src/tools-rumin-doc.ts を新設。設定の追加は 0 個（台本フォルダを FIREBASE_SA_EMAIL へ編集者で共有・Google 側で Docs API を有効にする前提）。
  * v0.96.0（2026-10-05 開発部）：content_os__add_idea 追加（本文の無いネタを足す。ContentOS の /api/internal/add-idea を呼ぶ）。content_os__update_post に mm_url を足した。content_os__list_posts の状態に idea を足した。src/tools-content-os.ts・src/version.ts。設定の追加は 0 個。
  */
