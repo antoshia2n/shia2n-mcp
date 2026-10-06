@@ -258,7 +258,11 @@ export async function replaceInRuminDoc(google: GoogleJson, input: ReplaceInput)
     return { i: l.i, ok: got === l.replace, ...around(flat2.text, at, l.replace.length) };
   });
   results.sort((a, b) => a.i - b.i);
-  const titleNow = again.title;
+  // 題名は Drive から読み直す。Docs の読み直しの title は、題名を変えた直後はまだ古い名前を返すことがある（2026-10-06 本番で見た）
+  const titleNow =
+    newTitle !== undefined && newTitle !== doc.title
+      ? (await google<FileMeta>(`${DRIVE}/${docId}?fields=name&supportsAllDrives=true`)).name
+      : again.title;
   const mismatched = results.filter((r) => !r.ok).map((r) => r.i);
   const titleOk = newTitle === undefined || titleNow === newTitle;
   if (mismatched.length > 0 || !titleOk || again.documentId !== docId) {
