@@ -6,7 +6,7 @@
  *
  * 守ること
  * - 書けるのは「claude/」で始まる新しい枝だけ。main など既にある枝には書かない（既にある名前ならエラー）
- * - 書いてよいリポジトリは GITHUB_ALLOWED_REPOS（カンマ区切り）。未設定なら content-os と shia2n-mcp
+ * - 書いてよいリポジトリは GITHUB_ALLOWED_REPOS（カンマ区切り）。未設定なら content-os と shia2n-mcp と utage-alt-demo（2026-10-08 v1.1.1 で足した）
  * - 大きなファイルは全文を送らず、edits（探す文字列→置き換える文字列）で送れる。元の枝の中身に当てて、1 か所に当たらなければ止まる
  *   （2026-10-05 v0.98.0：長いファイルを丸ごと書き写すと写し間違いが入り得るため）
  * - ファイルを消す・名前を変える・結合する・強制で書き換える、はしない
@@ -25,7 +25,7 @@ import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 
 const API = "https://api.github.com";
-const DEFAULT_REPOS = ["antoshia2n/content-os", "antoshia2n/shia2n-mcp"];
+const DEFAULT_REPOS = ["antoshia2n/content-os", "antoshia2n/shia2n-mcp", "antoshia2n/utage-alt-demo"];
 const BRANCH_PREFIX = "claude/";
 const MAX_FILES = 40;
 
