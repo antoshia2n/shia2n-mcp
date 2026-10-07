@@ -1,6 +1,9 @@
 /**
  * UTAGE 診断 HTTP Handler v1.1.0
  *
+ * v1.2.0（2026-10-07 開発部）：読者の写し先が会員管理くんからデータベースへ替わったので、
+ *   members_api の確かめを「member_utage_readers を 1 行引けるか」に替えた（応答の欄の名前は変えない）。
+ *
  * v1.1.0（2026-08-04）：連絡ツールの宛先の項目（SLACK_WEBHOOK_03）を削除。
  *   通知そのものを廃止したため、設定の有無を見ても意味が無くなった。
  *
@@ -14,7 +17,6 @@
 
 import type { Env } from "./index.js";
 import { listUtageAccounts } from "./utage-client.js";
-import { cfAccessHeaders } from "./cf-access.js";
 
 const DEFAULT_UTAGE_API_BASE = "https://api.utage-system.com/v1";
 
@@ -75,24 +77,25 @@ export async function handleUtageDiag(env: Env): Promise<Response> {
   }
 
   // ------------------------------------------------------------
-  // 会員管理くん疎通確認（GET でヘルスチェック応答）
+  // 書き先の疎通確認（2026-10-07 v1.2.0：会員管理くんではなくデータベースを見る）
+  // 読者の写し先 member_utage_readers を 1 行だけ引けるかを見る。件数・中身は返さない。
   // ------------------------------------------------------------
-  const membersEndpoint = envCheck.MEMBERS_API_BASE_set
-    ? `${env.MEMBERS_API_BASE!.replace(/\/$/, "")}/api/internal/sync-utage-batch`
-    : "";
+  const membersEndpoint = "supabase:member_utage_readers";
   const membersCheck: MembersCheck = {
     reachable: false,
     endpoint: membersEndpoint,
   };
-  if (envCheck.MEMBERS_API_BASE_set) {
+  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
     try {
-      // 2026-08-13：会員管理くんの住所の手前に入口の関門を置くため、
-      // サービス用の合言葉を載せる。載せないと、アプリが生きていても
-      // ログイン画面に跳ね返されて「つながらない」と出る。
-      const response = await fetch(membersEndpoint, {
-        method: "GET",
-        headers: cfAccessHeaders(env),
-      });
+      const response = await fetch(
+        `${env.SUPABASE_URL}/rest/v1/member_utage_readers?select=id&limit=1`,
+        {
+          headers: {
+            apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+        }
+      );
       membersCheck.reachable = response.ok;
       membersCheck.status = response.status;
       if (!response.ok) {
@@ -102,7 +105,7 @@ export async function handleUtageDiag(env: Env): Promise<Response> {
       membersCheck.error = e instanceof Error ? e.message : String(e);
     }
   } else {
-    membersCheck.error = "MEMBERS_API_BASE is not set";
+    membersCheck.error = "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set";
   }
 
   // ------------------------------------------------------------

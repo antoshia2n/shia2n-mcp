@@ -2,12 +2,16 @@
  * UTAGE ポーリング Scheduled Handler v2.1.0
  *
  * cron 0,30 * * * * で発火。
- * UTAGE REST API から最新読者を取得し、会員管理くん内部 API にPOSTする。
+ * UTAGE REST API から最新読者を取得し、データベースへ直接写す（v2.2.0 から）。
  *
  * 注意:
  * - MCPではなくREST APIを使う
  * - UTAGE_API_KEY は Cloudflare Secret に保存する
  * - fatal error / partial failure は再throwして Cron Events に失敗として残す
+ *
+ * v2.2.0（2026-10-07 開発部）：会員管理くんの受け口を経由せず、utage-sync-db.ts で
+ *   データベースへ直接写す形にした（会員管理くんの画面を畳むため・旧の 2 本を落とす行の 9 便の 7 番目）。
+ *   MEMBERS_API_BASE と MEMBERS_INTERNAL_SECRET はこのファイルからは参照しなくなった。
  *
  * v2.1.0（2026-08-04）：連絡ツール（Slack #03-開発部）への異常通知を削除。
  *   判断記録：https://www.notion.so/3b29c6c1c4398113bc59df5a566ea591
@@ -20,8 +24,7 @@
 
 import type { Env } from "./index.js";
 import { listUtageAccounts, listReadersForAccount } from "./utage-client.js";
-import { postSyncUtageBatch } from "./members-client.js";
-import { cfAccessHeaders } from "./cf-access.js";
+import { syncUtageBatchToDb } from "./utage-sync-db.js";
 
 const DEFAULT_UTAGE_API_BASE = "https://api.utage-system.com/v1";
 
@@ -63,11 +66,8 @@ export async function handleUtagePolling(env: Env): Promise<UtagePollingSummary>
   try {
     const utageApiBase = env.UTAGE_API_BASE || DEFAULT_UTAGE_API_BASE;
     const utageApiKey = getUtageApiKey(env);
-    const membersApiBase = requireEnv("MEMBERS_API_BASE", env.MEMBERS_API_BASE);
-    const membersInternalSecret = requireEnv(
-      "MEMBERS_INTERNAL_SECRET",
-      env.MEMBERS_INTERNAL_SECRET
-    );
+    requireEnv("SUPABASE_URL", env.SUPABASE_URL);
+    requireEnv("SUPABASE_SERVICE_ROLE_KEY", env.SUPABASE_SERVICE_ROLE_KEY);
 
     const accounts = await listUtageAccounts(utageApiBase, utageApiKey);
 
@@ -121,18 +121,11 @@ export async function handleUtagePolling(env: Env): Promise<UtagePollingSummary>
           };
         }
 
-        const result = await postSyncUtageBatch(
-          membersApiBase,
-          membersInternalSecret,
-          {
-            utage_account_id: account.id,
-            utage_account_name: account.name,
-            readers,
-          },
-          // 2026-08-13：会員管理くんの住所の手前に入口の関門を置くため、
-          // サービス用の合言葉を載せる。合言葉が未設定なら空で、今までどおり。
-          cfAccessHeaders(env)
-        );
+        const result = await syncUtageBatchToDb(env, {
+          utage_account_id: account.id,
+          utage_account_name: account.name,
+          readers,
+        });
 
         return {
           account,
