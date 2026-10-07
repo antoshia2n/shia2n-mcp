@@ -1,5 +1,6 @@
 /**
  * MCP tool 登録：shr__billing / shr__contracts / logs__records
+ * （shr__contracts は 2026-10-07 に新しい表 member・member_subscription を読む形へ作り直した）
  *
  * 統括が人を待たずに答えられるようにするための、**読むだけ**の道具。
  * 書く列は 3 本とも 0 個。
@@ -282,45 +283,94 @@ export function registerInspectTools(server: McpServer, env: Env): void {
 
   // ============================================================
   // shr__contracts（区間 4 契約の台帳・区間 12 継続と解約）
+  // 2026-10-07 開発部：旧の shr_members を読むのをやめ、新しい表
+  // （member と member_subscription）を読む形に作り直した（旧の 2 本を落とす行の 9 便の 2 番目）。
+  // 登録日は member.enrolled_at、解約日と課金の周期は member_subscription.canceled_at /
+  // billing_cycle（同じ日に足した列）。列は決め打ちせず select=* で取り、無い列は空で返す。
+  // memo・portal_uid・contact_email の 3 列は退避の表 shr_members_archive にだけ残る。
   // ============================================================
   server.tool(
     "shr__contracts",
-    "しあらぼの契約の台帳を引く（shr_members）。契約の状態・プラン・次の課金日・登録日・解約日を返す。次の課金日の分布も同じ応答で返すので、継続と解約の様子はこの 1 回で分かる。個人のメールは返さない（呼び名は返す）。この表は 10 月に落とす予定の旧の表で、そのときこの道具も作り直しになる。読むだけで、書く列は 0。",
+    "しあらぼの契約の台帳を引く（新しい表の member と member_subscription）。1 人 1 行で、呼び名・役・登録日と、その人の継続課金（決済業者・プラン・状態・次の課金日・課金の周期・解約日）を返す。契約の状態・プラン・次の課金日の分布も同じ応答で返すので、継続と解約の様子はこの 1 回で分かる。個人のメールは返さない。既定ではテスト用の人（メールが example.com）を外し、外した数を別に返す。読むだけで、書く列は 0。",
     {
-      limit: z.number().int().min(1).max(200).optional().describe("返す行数（1-200・省略時 100）"),
+      limit: z.number().int().min(1).max(200).optional().describe("返す人数（1-200・省略時 100）"),
       subscription_status: z
         .string()
         .optional()
-        .describe("契約の状態で絞る（完全一致）。省略すると全部"),
+        .describe("継続課金の状態で絞る（完全一致）。指定すると、その状態の課金を持つ人だけを返す"),
+      include_test: z.boolean().optional().describe("テスト用の人も数に入れる（省略時 false）"),
     },
-    async ({ limit, subscription_status }) => {
+    async ({ limit, subscription_status, include_test }) => {
       try {
         const n = limit ?? 100;
-        let query = `select=*&limit=${n}`;
+        const m = await sbSelect(env, "/member?select=*&order=created_at.desc&limit=2000");
+        if (!m.ok) {
+          return errorResult("shr__contracts", `member HTTP ${m.status}: ${m.body.slice(0, 300)}`);
+        }
+        const s = await sbSelect(env, "/member_subscription?select=*&order=created_at.desc&limit=2000");
+        if (!s.ok) {
+          return errorResult(
+            "shr__contracts",
+            `member_subscription HTTP ${s.status}: ${s.body.slice(0, 300)}`,
+          );
+        }
+
+        const allMembers = m.rows;
+        const members = include_test === true ? allMembers : allMembers.filter((r) => !isTestEmail(r["email"]));
+        const memberIds = new Set(members.map((r) => String(r["id"])));
+        const subs = s.rows.filter((r) => memberIds.has(String(r["member_id"])));
+
+        const subsByMember = new Map<string, Row[]>();
+        for (const sub of subs) {
+          const key = String(sub["member_id"]);
+          const list = subsByMember.get(key) ?? [];
+          list.push(sub);
+          subsByMember.set(key, list);
+        }
+
+        const memberCols = redact(members);
+        const subCols = redact(subs);
+        const cleanMembers = memberCols.rows;
+        const cleanSubs = new Map<string, Row[]>();
+        for (const sub of subCols.rows) {
+          const key = String(sub["member_id"]);
+          const list = cleanSubs.get(key) ?? [];
+          list.push(sub);
+          cleanSubs.set(key, list);
+        }
+
+        let joined = cleanMembers.map((row) => ({
+          ...row,
+          subscriptions: cleanSubs.get(String(row["id"])) ?? [],
+        }));
         if (subscription_status) {
-          query += `&subscription_status=eq.${encodeURIComponent(subscription_status)}`;
+          joined = joined.filter((row) =>
+            row.subscriptions.some((sub) => sub["status"] === subscription_status),
+          );
         }
-        const r = await sbSelectOrdered(env, "shr_members", query);
-        if (!r.ok) {
-          return errorResult("shr__contracts", `HTTP ${r.status}: ${r.body.slice(0, 300)}`);
-        }
-        const { rows, columns_seen, columns_omitted } = redact(r.rows);
+        const returned = joined.slice(0, n);
+
+        const withSub = members.filter((r) => subsByMember.has(String(r["id"]))).length;
 
         return textResult({
           ok: true,
-          table: "shr_members",
+          tables: ["member", "member_subscription"],
           writes: "無し（この道具は読むだけ）",
-          total_rows_in_table: r.total,
-          returned: rows.length,
-          ordered_by: r.ordered_by,
-          columns_seen,
-          columns_omitted,
-          count_by_subscription_status: countBy(rows, "subscription_status"),
-          count_by_plan: countBy(rows, "plan"),
-          count_by_next_billing_date: countBy(rows, "next_billing_date"),
+          members_counted: members.length,
+          excluded_test: allMembers.length - members.length,
+          members_with_subscription: withSub,
+          members_without_subscription: members.length - withSub,
+          subscriptions_counted: subs.length,
+          returned: returned.length,
+          member_columns_seen: memberCols.columns_seen,
+          subscription_columns_seen: subCols.columns_seen,
+          columns_omitted: [...memberCols.columns_omitted, ...subCols.columns_omitted],
+          count_by_subscription_status: countBy(subs, "status"),
+          count_by_plan: countBy(subs, "plan"),
+          count_by_next_billing_date: countBy(subs, "next_billing_date"),
           note:
-            "次の課金日は、更新されずに古い日付のまま残っている行がありうる（2026-09-05 実測で 2 件）。分布をそのまま切り替えの窓の根拠にしない",
-          rows,
+            "次の課金日は、更新されずに古い日付のまま残っている行がありうる。切り替えの窓は決済の実績（shr__billing）で測る。課金を持たない人（手で入れた人・決済を通っていない生徒）は subscriptions が空になる。旧の shr_members にしか無かった memo・portal_uid・contact_email は退避の表 shr_members_archive にある",
+          rows: returned,
         });
       } catch (e) {
         return errorResult("shr__contracts", e);
