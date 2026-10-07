@@ -501,6 +501,7 @@
  * v0.99.1（2026-10-06 開発部）：rumin_doc__replace_text の書いたあとの題名の確かめを Drive から読むようにした（Docs の読み直しは改名の直後に古い題名を返し、ok:false になっていた。本番で見た）。src/tools-rumin-doc.ts・src/version.ts。設定の追加は 0 個。
  * v0.99.0（2026-10-06 開発部）：rumin_doc__replace_text 追加（るーみんの YouTube 台本の Google ドキュメントを同じリンクのまま直す。探す文字がちょうど 1 か所の組だけを置き換え、1 組でも違えば書かない。題名も変えられる。書けるのは台本フォルダ直下で持ち主がフォルダと同じドキュメントだけ）。src/tools-rumin-doc.ts を新設。設定の追加は 0 個（台本フォルダを FIREBASE_SA_EMAIL へ編集者で共有・Google 側で Docs API を有効にする前提）。
  * v0.96.0（2026-10-05 開発部）：content_os__add_idea 追加（本文の無いネタを足す。ContentOS の /api/internal/add-idea を呼ぶ）。content_os__update_post に mm_url を足した。content_os__list_posts の状態に idea を足した。src/tools-content-os.ts・src/version.ts。設定の追加は 0 個。
+ * v1.1.0（2026-10-07 開発部）：会員管理くんの画面を畳む（同日 Naoki 判断）のに合わせ、会員管理くんの受け口を経由していた 3 つを新しい表へ直接向けた。① 道具 members__search / get / update を member・member_alias・member_entitlement・member_subscription を直接読み書きする形に作り直した（tools-members.ts v2.0.0・権利の付け外しは gate__entitlement_* に寄せた）。② UTAGE の読者の取り込み（30 分ごと）と取り込み直しの口を、関数 sync_utage_readers_batch_v2 を直接呼ぶ形にした（utage-sync-db.ts 新設・cron-utage-polling.ts v2.2.0・handle-utage-backfill.ts v2.1.0・handle-utage-diag.ts v1.2.0）。③ 15・45 分の自動写像（handleAutoMappingCron）を止めた。旧の 2 本を落とす行の 9 便の 7 番目。設定の追加は 0 個。cron-auto-mapping.ts と members-client.ts はもう呼ばれていない（消すのは 9 便の 8 番目）。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
@@ -533,7 +534,6 @@ import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleGateResolve, handleGateAttempts, handleGateDiag } from "./gate.js";
-import { handleAutoMappingCron } from "./cron-auto-mapping.js";
 import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
@@ -988,9 +988,9 @@ export default {
         );
       }
     } else if (controller.cron === "15,45 * * * *") {
-      // v0.28.0：会員管理くん Phase 3 ④ 自動写像適用 reconciliation
-      // UTAGE ポーリング（0,30）の 15 分後に走ることで payment_status 変更を反映
-      tasks.push(handleAutoMappingCron(env));
+      // 2026-10-07（v1.1.0）：会員管理くんの自動写像（handleAutoMappingCron）を止めた。
+      // プラン表から権利を付ける仕組みは 2026-09-07 に手放す側と決まり、支払いからの権利は
+      // shr-webhook が新しい表 member_entitlement へ付けている。この枠は控えの続きだけになる。
 
       // 2026-08-06（v0.40.0）：控えの続き。15 分おきに進めたいので、
       // こちらの枠でも同じ判定で呼ぶ。開始は 0,30 側の JST 04:00 のみ。

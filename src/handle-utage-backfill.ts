@@ -2,7 +2,10 @@
  * UTAGE バックフィル HTTP Handler v2.0.0
  *
  * POST /utage/backfill で発火。指定アカウント（or 全アカウント）の
- * 全読者を per_page=200 ページングで取得して会員管理くん内部 API に POST する。
+ * 全読者を per_page=200 ページングで取得してデータベースへ直接写す。
+ *
+ * v2.1.0（2026-10-07 開発部）：会員管理くんの受け口を経由せず utage-sync-db.ts で直接写す形にした
+ *   （会員管理くんの画面を畳むため・旧の 2 本を落とす行の 9 便の 7 番目）。
  *
  * v2.0.0: UTAGE REST API 版に切り替え（MCP 直叩きから移行）
  * Bearer 認証は index.ts の isAuthorized 内で実施済。
@@ -14,8 +17,7 @@
 
 import type { Env } from "./index.js";
 import { listUtageAccounts, listReadersForAccount } from "./utage-client.js";
-import { postSyncUtageBatch } from "./members-client.js";
-import { cfAccessHeaders } from "./cf-access.js";
+import { syncUtageBatchToDb } from "./utage-sync-db.js";
 
 const DEFAULT_UTAGE_API_BASE = "https://api.utage-system.com/v1";
 
@@ -56,11 +58,8 @@ export async function handleUtageBackfill(request: Request, env: Env): Promise<R
   try {
     const utageApiBase = env.UTAGE_API_BASE || DEFAULT_UTAGE_API_BASE;
     const utageApiKey = requireEnv("UTAGE_API_KEY", env.UTAGE_API_KEY || env.UTAGE_MCP_TOKEN);
-    const membersApiBase = requireEnv("MEMBERS_API_BASE", env.MEMBERS_API_BASE);
-    const membersInternalSecret = requireEnv(
-      "MEMBERS_INTERNAL_SECRET",
-      env.MEMBERS_INTERNAL_SECRET
-    );
+    requireEnv("SUPABASE_URL", env.SUPABASE_URL);
+    requireEnv("SUPABASE_SERVICE_ROLE_KEY", env.SUPABASE_SERVICE_ROLE_KEY);
 
     const allAccounts = await listUtageAccounts(utageApiBase, utageApiKey);
     const targetAccounts = body.account_id
@@ -97,18 +96,11 @@ export async function handleUtageBackfill(request: Request, env: Env): Promise<R
             break;
           }
 
-          const result = await postSyncUtageBatch(
-            membersApiBase,
-            membersInternalSecret,
-            {
-              utage_account_id: account.id,
-              utage_account_name: account.name,
-              readers,
-            },
-            // 2026-08-13：会員管理くんの住所の手前に入口の関門を置くため、
-            // サービス用の合言葉を載せる。合言葉が未設定なら空で、今までどおり。
-            cfAccessHeaders(env)
-          );
+          const result = await syncUtageBatchToDb(env, {
+            utage_account_id: account.id,
+            utage_account_name: account.name,
+            readers,
+          });
 
           pagesProcessed++;
           totalReadersSent += readers.length;
