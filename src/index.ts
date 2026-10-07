@@ -504,6 +504,7 @@
  * v1.1.0（2026-10-07 開発部）：会員管理くんの画面を畳む（同日 Naoki 判断）のに合わせ、会員管理くんの受け口を経由していた 3 つを新しい表へ直接向けた。① 道具 members__search / get / update を member・member_alias・member_entitlement・member_subscription を直接読み書きする形に作り直した（tools-members.ts v2.0.0・権利の付け外しは gate__entitlement_* に寄せた）。② UTAGE の読者の取り込み（30 分ごと）と取り込み直しの口を、関数 sync_utage_readers_batch_v2 を直接呼ぶ形にした（utage-sync-db.ts 新設・cron-utage-polling.ts v2.2.0・handle-utage-backfill.ts v2.1.0・handle-utage-diag.ts v1.2.0）。③ 15・45 分の自動写像（handleAutoMappingCron）を止めた。旧の 2 本を落とす行の 9 便の 7 番目。設定の追加は 0 個。cron-auto-mapping.ts と members-client.ts はもう呼ばれていない（消すのは 9 便の 8 番目）。
  *   2026-10-07 21:55 追記：#33 の Merge で Cloudflare の組み立てが走らなかったので、この注記の 1 行だけのコミットで出し直した（動きの変更 0）。
  * v1.1.1（2026-10-08 開発部）：github__open_pr・github__pr_status の書いてよいリポジトリ（省略時の一覧）に antoshia2n/utage-alt-demo を足した（UTAGE の代わりのデモ 便2 以降の書く道）。src/tools-github.ts・src/version.ts。設定の追加は 0 個。
+ * v1.1.2（2026-10-08 開発部）：github__open_pr・github__pr_status の書いてよいリポジトリに antoshia2n/shr-webhook を足した（テストモードの知らせを捨てる直しのため）。src/tools-github.ts・src/version.ts。設定の追加は 0 個。
  */
 import { APP_VERSION } from "./version.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";

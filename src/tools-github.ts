@@ -25,7 +25,7 @@ import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 
 const API = "https://api.github.com";
-const DEFAULT_REPOS = ["antoshia2n/content-os", "antoshia2n/shia2n-mcp", "antoshia2n/utage-alt-demo"];
+const DEFAULT_REPOS = ["antoshia2n/content-os", "antoshia2n/shia2n-mcp", "antoshia2n/utage-alt-demo", "antoshia2n/shr-webhook"];
 const BRANCH_PREFIX = "claude/";
 const MAX_FILES = 40;
 
