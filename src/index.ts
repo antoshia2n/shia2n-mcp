@@ -546,6 +546,7 @@ import { runBackupSlot } from "./cron-backup.js";
 import { registerRestoreTools } from "./tools-restore.js";
 import { registerTsumiageTools } from "./tools-tsumiage.js";
 import { registerEvolabTools } from "./tools-evolab.js";
+import { registerBTools } from "./tools-b.js";
 import { registerGithubTools } from "./tools-github.js";
 import { registerMoneyTools } from "./tools-money.js";
 import { registerGateTools } from "./tools-gate.js";
@@ -588,6 +589,10 @@ export interface Env {
   // SITE_INGEST_SECRET は shia2n-site 側に入れたのと同じ値。
   SITE_API_BASE?: string;
   SITE_INGEST_SECRET?: string;
+  // 2026-10-08 追加：UTAGE の代わり（B）の AI の入口を呼ぶ（tools-b.ts）。
+  // B_MCP_URL は省略可（省略時は utage-alt-demo の /mcp）。B_MCP_SECRET は B の MCP_SECRET と同じ値（秘密の値）。無いと b__* は止まる
+  B_MCP_URL?: string;
+  B_MCP_SECRET?: string;
   // 2026-10-05 追加：開発部がプルリクを作る鍵（GitHub の細かく絞れる鍵。秘密の値）。無いと github__* は止まる
   GITHUB_TOKEN?: string;
   // 書いてよいリポジトリ（カンマ区切り）。省略時は antoshia2n/content-os だけ
@@ -685,6 +690,7 @@ function createMcpServer(env: Env): McpServer {
   registerRestoreTools(server, env);
   registerTsumiageTools(server, env);
   registerEvolabTools(server, env);
+  registerBTools(server, env);
   registerGithubTools(server, env);
   registerMoneyTools(server, env);
   registerGateTools(server, env);
