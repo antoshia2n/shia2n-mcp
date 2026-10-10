@@ -512,6 +512,7 @@
  * v1.6.1（2026-10-10 開発部）：db__impact の読む順を直した。公開のリポジトリ（codeload）を全部先に読み、読めなかった分にだけ鍵を使う。鍵で 404 が 2 本続き 1 本も読めていなければ残りは試さない。1.6.0 は非公開の 404 で上限 45 を使い切り、shia2n-mcp など後ろの公開を読まずに返していた。src/impact-core.ts の readInOrder・test/impact-order.test.ts。
  * v1.6.2（2026-10-10 開発部）：db__impact の読み替えの拾い方を直した。左の名前は表の名前の末尾と一致するもの（events: "b_events" の形）だけにした。1.6.1 は table: "member" という設定の鍵を読み替えと見て、shia2n-mcp で 'table' の行を 2 行多く拾っていた。src/impact-core.ts・test/impact.test.ts。
  * v1.6.3（2026-10-10 開発部）：db__impact が非公開のリポジトリを読む鍵を GITHUB_READ_TOKEN（読むだけ・全リポジトリ）に分けた。無ければ GITHUB_TOKEN で試す。/diag に有無を出す。設定の追加 1 個（Naoki が入れる）。
+ * v1.6.4（2026-10-10 開発部）：db__impact の外への呼び出しの頭打ちを 45 から 120 に上げた（有料の枠・非公開 18 本を読み切るため）。src/tools-impact.ts の MAX_OUTBOUND だけ。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
