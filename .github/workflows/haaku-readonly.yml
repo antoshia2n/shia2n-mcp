@@ -1,0 +1,32 @@
+name: haAku read-only MCP validation
+
+on:
+  push:
+    branches:
+      - task-20261011-ai-readonly
+  pull_request:
+    paths:
+      - 'src/haaku-plan-summary.ts'
+      - 'src/tools-haaku-plan.ts'
+      - 'src/tools-haaku.ts'
+      - 'test/haaku-plan-summary.test.ts'
+      - '.github/workflows/haaku-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Type-check entire MCP project
+        run: npm run type-check
+      - name: Test haAku plan read-only logic (no live database)
+        run: node --experimental-strip-types --test test/haaku-plan-summary.test.ts
