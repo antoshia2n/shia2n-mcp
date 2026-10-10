@@ -98,10 +98,11 @@ export function findInRepo(files: TarFile[], table: string): { files: FileHits[]
   const reWord = new RegExp(`(?<![A-Za-z0-9_])${t}(?![A-Za-z0-9_])`);
   const reAliasDef = new RegExp(`(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\\s*:\\s*["']${t}["']`, "g");
 
-  // ④ 読み替えの左の名前を先に集める
+  // ④ 読み替えの左の名前を先に集める。左の名前は表の名前の末尾と一致するものだけ（events: "b_events" の形）。
+  //    v1.6.2：table: "member" のような設定の鍵を読み替えと見て、'table' の行まで拾っていたため（2026-10-10 実測で 2 行）
   const aliases = new Set<string>();
   for (const f of files) {
-    for (const m of f.text.matchAll(reAliasDef)) if (m[1] !== table) aliases.add(m[1]);
+    for (const m of f.text.matchAll(reAliasDef)) if (m[1] !== table && table.endsWith(`_${m[1]}`)) aliases.add(m[1]);
   }
   const aliasRes = [...aliases].map((a) => ({ a, re: quoted(a) }));
 

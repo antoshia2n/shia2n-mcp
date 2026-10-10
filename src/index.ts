@@ -510,6 +510,7 @@
  * v1.5.0（2026-10-10 開発部）：B の便 16b。mn__link_contents を新設（学ぶくんに今ある教材を写さずに別のプログラムの棚へ結ぶ。所属の表 mn_content_courses に足すだけ・dry_run あり・書く前と書いたあとの総数を返す）。設定の追加は 0 個。
  * v1.6.0（2026-10-10 開発部）：土台 6 番。db__impact を新設（表を 1 本変えたときに壊れるものを引く。データベースの中＝データベース側の読み出し専用の処理 list_table_dependents（sql/list_table_dependents.sql）・コードの中＝Systems の稼働中と開発中のリポジトリの固まりを読んで表の名前が出る行・見ていない先＝読めなかったリポジトリ）。src/tools-impact.ts・src/impact-core.ts。設定の追加は 0 個。健康の記録は OAUTH_KV の impact:last 1 行。
  * v1.6.1（2026-10-10 開発部）：db__impact の読む順を直した。公開のリポジトリ（codeload）を全部先に読み、読めなかった分にだけ鍵を使う。鍵で 404 が 2 本続き 1 本も読めていなければ残りは試さない。1.6.0 は非公開の 404 で上限 45 を使い切り、shia2n-mcp など後ろの公開を読まずに返していた。src/impact-core.ts の readInOrder・test/impact-order.test.ts。
+ * v1.6.2（2026-10-10 開発部）：db__impact の読み替えの拾い方を直した。左の名前は表の名前の末尾と一致するもの（events: "b_events" の形）だけにした。1.6.1 は table: "member" という設定の鍵を読み替えと見て、shia2n-mcp で 'table' の行を 2 行多く拾っていた。src/impact-core.ts・test/impact.test.ts。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";

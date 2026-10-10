@@ -44,8 +44,8 @@ test("拾う：引用符の中・URL の中・public.名前・.sql・読み替�
       "db(env, 'GET', 'member_entitlement?select=*');",                 // 3 拾わない（似た名前）
       "const member = row.member;",                                     // 4 拾わない（変数）
       "// member の人数を数える",                                        // 5 拾わない（ただの語）
-      "const map = { customers: \"member\" };",                         // 6 拾う（name）
-      "db(env, 'GET', 'customers?select=id');",                         // 7 拾う（alias:customers）
+      "const map = { table: \"member\" };",                             // 6 拾う（name）
+      "const r2 = { table: 'table' };",                                // 7 拾わない（設定の鍵は読み替えではない・v1.6.2）
     ].join("\n"),
     "supabase/x.sql": "create view v as select * from member m;\nselect * from member_entitlement;",
     "src/b.ts": "await sql`insert into public.member (id) values (1)`;",
@@ -53,10 +53,18 @@ test("拾う：引用符の中・URL の中・public.名前・.sql・読み替�
   const files = untarSources(await gunzip(gz.buffer.slice(gz.byteOffset, gz.byteOffset + gz.byteLength) as ArrayBuffer));
   const r = findInRepo(files, "member");
   const flat = r.files.flatMap((f) => f.lines.map((l) => `${f.path}:${l.n}:${l.via}`));
-  assert.deepEqual(flat, ["src/a.js:1:name", "src/a.js:2:name", "src/a.js:6:name", "src/a.js:7:alias:customers", "src/b.ts:1:public", "supabase/x.sql:1:sql"]);
-  assert.equal(r.total_lines, 6);
+  assert.deepEqual(flat, ["src/a.js:1:name", "src/a.js:2:name", "src/a.js:6:name", "src/b.ts:1:public", "supabase/x.sql:1:sql"]);
+  assert.equal(r.total_lines, 5);
   assert.equal(r.total_files, 3);
+  assert.deepEqual(r.aliases, []);
+});
+
+test("読み替えの左は、表の名前の末尾と一致するときだけ拾う（B の events: \"b_events\" の形）", () => {
+  const files = [{ path: "src/index.js", text: ["const T = { customers: \"b_customers\", table: \"b_customers\" };", "db(env, 'GET', 'customers?select=id');", "const q = { a: 'table' };"].join("\n") }];
+  const r = findInRepo(files as any, "b_customers");
+  const flat = r.files.flatMap((f) => f.lines.map((l) => `${l.n}:${l.via}`));
   assert.deepEqual(r.aliases, ["customers"]);
+  assert.deepEqual(flat, ["1:name", "2:alias:customers"]);
 });
 
 test("Systems の行から読む先を決める：稼働中と開発中だけ・GitHub の住所だけ・同じリポジトリは 1 回", () => {
