@@ -14,7 +14,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Env } from "./index.js";
-import { TABLE_RE, untarSources, gunzip, findInRepo, targetsFromSystems, type RepoTarget } from "./impact-core.js";
+import { TABLE_RE, untarSources, gunzip, findInRepo, targetsFromSystems, type RepoTarget, readInOrder } from "./impact-core.js";
 
 const SYSTEMS_DATA_SOURCE_ID = "f4132219-976e-48ba-ad3a-452108a6ee30";
 const NOTION_VERSION = "2025-09-03";
@@ -73,20 +73,25 @@ async function readDatabase(env: Env, table: string, budget: { left: number }): 
   }
 }
 
-async function readRepo(env: Env, t: RepoTarget, budget: { left: number }): Promise<{ ok: true; via: string; files: ReturnType<typeof untarSources> } | { ok: false; reason: string }> {
+type RepoRead = { ok: true; via: string; files: ReturnType<typeof untarSources> } | { ok: false; reason: string; status?: number };
+
+// 1 回目：公開の固まりを codeload から取る（1 本と数える）
+async function readPublic(t: RepoTarget, budget: { left: number }): Promise<RepoRead> {
   if (budget.left < 1) return { ok: false, reason: "今回は調べていない（外への呼び出しの上限）" };
   budget.left--;
-  let first = 0;
   try {
     const r = await fetch(`https://codeload.github.com/${t.repo}/tar.gz/HEAD`, { signal: AbortSignal.timeout(20000) });
-    first = r.status;
     if (r.ok) return { ok: true, via: "codeload", files: untarSources(await gunzip(await r.arrayBuffer())) };
+    return { ok: false, reason: `非公開か消えている（${r.status}）`, status: r.status };
   } catch (e) {
     return { ok: false, reason: `読めなかった（${String(e).slice(0, 120)}）` };
   }
-  if (!env.GITHUB_TOKEN) return { ok: false, reason: `非公開か消えている（${first}）・鍵が無い` };
+}
+
+// 2 回目：codeload で読めなかったものだけ、鍵で API から取る（別の住所へ移されるので 2 本と数える）
+async function readWithKey(env: Env, t: RepoTarget, first: number, budget: { left: number }): Promise<RepoRead> {
   if (budget.left < 2) return { ok: false, reason: `非公開か消えている（${first}）・鍵で試す前に上限` };
-  budget.left -= 2; // API の固まりは別の住所へ移されるので 2 本と数える
+  budget.left -= 2;
   try {
     const r = await fetch(`https://api.github.com/repos/${t.repo}/tarball`, {
       headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json", "User-Agent": "shia2n-mcp" },
@@ -94,10 +99,19 @@ async function readRepo(env: Env, t: RepoTarget, budget: { left: number }): Prom
       signal: AbortSignal.timeout(20000),
     });
     if (r.ok) return { ok: true, via: "api", files: untarSources(await gunzip(await r.arrayBuffer())) };
-    return { ok: false, reason: `非公開で鍵でも読めない（${first}→${r.status}）` };
+    return { ok: false, reason: `非公開で鍵でも読めない（${first}→${r.status}）`, status: r.status };
   } catch (e) {
     return { ok: false, reason: `鍵で読めなかった（${String(e).slice(0, 120)}）` };
   }
+}
+
+async function readAllRepos(env: Env, targets: RepoTarget[], budget: { left: number }): Promise<RepoRead[]> {
+  return readInOrder<RepoTarget, RepoRead>(
+    targets,
+    (t) => readPublic(t, budget),
+    (t, first) => readWithKey(env, t, first, budget),
+    !!env.GITHUB_TOKEN,
+  );
 }
 
 export function registerImpactTools(server: McpServer, env: Env) {
@@ -128,20 +142,16 @@ export function registerImpactTools(server: McpServer, env: Env) {
       const unseen: { app: string; repo: string; use: string | null; reason: string }[] = [];
       let files = 0;
       let lines = 0;
-      // 4 本ずつ並べて読む（遅くなりすぎず、外への呼び出しが一度に増えすぎないように）
-      for (let i = 0; i < targets.length; i += 4) {
-        const part = targets.slice(i, i + 4);
-        const got = await Promise.all(part.map((t) => readRepo(env, t, budget)));
-        part.forEach((t, k) => {
-          const g = got[k];
-          if (!g.ok) { unseen.push({ app: t.app, repo: t.repo, use: t.use, reason: g.reason }); return; }
-          const f = findInRepo(g.files, name);
-          if (!f.total_files) { readNoHits.push(t.repo); return; }
-          files += f.total_files;
-          lines += f.total_lines;
-          code.push({ app: t.app, repo: t.repo, use: t.use, read_via: g.via, files_scanned: g.files.length, files_with_hits: f.total_files, lines: f.total_lines, aliases: f.aliases, files: f.files });
-        });
-      }
+      const got = await readAllRepos(env, targets, budget);
+      targets.forEach((t, k) => {
+        const g = got[k];
+        if (!g.ok) { unseen.push({ app: t.app, repo: t.repo, use: t.use, reason: g.reason }); return; }
+        const f = findInRepo(g.files, name);
+        if (!f.total_files) { readNoHits.push(t.repo); return; }
+        files += f.total_files;
+        lines += f.total_lines;
+        code.push({ app: t.app, repo: t.repo, use: t.use, read_via: g.via, files_scanned: g.files.length, files_with_hits: f.total_files, lines: f.total_lines, aliases: f.aliases, files: f.files });
+      });
 
       const db = database && database.ok ? database : null;
       const dbCount = db && db.exists
