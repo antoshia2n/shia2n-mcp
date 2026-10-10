@@ -18,8 +18,12 @@ import { TABLE_RE, untarSources, gunzip, findInRepo, targetsFromSystems, type Re
 
 const SYSTEMS_DATA_SOURCE_ID = "f4132219-976e-48ba-ad3a-452108a6ee30";
 const NOTION_VERSION = "2025-09-03";
-/** 無料の枠（1 回 50 本）でも収まるように頭打ちにする。一覧 1〜2・データベース 1・リポジトリ 1 本につき 1〜3 */
-const MAX_OUTBOUND = 45;
+/**
+ * 頭打ち。一覧 1〜2・データベース 1・リポジトリ 1 本につき 1〜3（公開 1・非公開 3）。28 本ならいちばん多くて 87。
+ * v1.6.4：45 から 120 に上げた。このアカウントは有料の枠（1 回 10,000 本）で、同じアカウントの zeus-worker が
+ * 1 回 300 本台を通している（zeus-worker の src/index.js の注）。45 では非公開 18 本のうち 11 本を読めなかった（2026-10-10 実測）
+ */
+const MAX_OUTBOUND = 120;
 const HEALTH_KEY = "impact:last";
 
 function textResult(value: unknown) {
