@@ -159,3 +159,43 @@ export function targetsFromSystems(pages: any[]): RepoTarget[] {
   }
   return out;
 }
+
+/**
+ * v1.6.1：リポジトリを読む順番。公開（codeload）を全部先に読み、読めなかった分にだけ鍵を使う。
+ * 鍵で 404 が 2 本続き、1 本も読めていなければ、鍵に非公開を読む許可が無いと見て残りは試さない。
+ * 1.6.0 は 1 本ずつ「codeload → 鍵」を続けたので、非公開の 404 で上限 45 を使い切り、
+ * 後ろに並んだ公開のリポジトリ（shia2n-mcp など）を読まずに返していた（2026-10-10 実測）。
+ */
+export type ReadResult = { ok: boolean; status?: number; reason?: string };
+export async function readInOrder<T, R extends ReadResult>(
+  targets: T[],
+  readPublic: (t: T) => Promise<R>,
+  readWithKey: (t: T, first: number) => Promise<R>,
+  hasKey: boolean,
+): Promise<R[]> {
+  const out: R[] = new Array(targets.length);
+  for (let i = 0; i < targets.length; i += 4) {
+    const idx = targets.slice(i, i + 4).map((_, k) => i + k);
+    const got = await Promise.all(idx.map((j) => readPublic(targets[j])));
+    idx.forEach((j, k) => { out[j] = got[k]; });
+  }
+  const retry = out.map((g, j) => (!g.ok && g.status ? j : -1)).filter((j) => j >= 0);
+  if (!hasKey) {
+    for (const j of retry) out[j] = { ok: false, reason: `非公開か消えている（${out[j].status}）・鍵が無い` } as R;
+    return out;
+  }
+  let keyNoAccess = 0;
+  let keyWorked = false;
+  for (const j of retry) {
+    const first = out[j].status as number;
+    if (!keyWorked && keyNoAccess >= 2) {
+      out[j] = { ok: false, reason: `非公開か消えている（${first}）・鍵に非公開を読む許可が無いと見て試していない` } as R;
+      continue;
+    }
+    const g = await readWithKey(targets[j], first);
+    out[j] = g;
+    if (g.ok) keyWorked = true;
+    else if (g.status === 404) keyNoAccess++;
+  }
+  return out;
+}
