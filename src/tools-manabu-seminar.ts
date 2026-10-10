@@ -1055,6 +1055,135 @@ export function registerManabuSeminarTools(server: McpServer, env: Env): void {
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   );
+
+  // ─────────────────────────────────────────────
+  // 今ある教材を、別のプログラムの棚へ結ぶ（写さない）。B の便 16b（2026-10-10）
+  // ─────────────────────────────────────────────
+  server.tool(
+    "mn__link_contents",
+    "学ぶくんに今ある教材（コンテンツ）を、写さずに別のプログラムの棚（コース）へ結ぶ（1 回に最大 50 本）。プログラムと棚が無ければ作る（作ったプログラムはどのカリキュラムにも結ばないので、学ぶ人の画面には出ない）。教材は items の from_course（今いる棚の名前）と title（今の題名そのまま）で 1 件に決める。0 件・2 件以上なら 1 本も書かずに止まる。所属の表 mn_content_courses に 1 行足すだけで、教材の本文・要約・視聴の記録は元のまま。同じ組がすでにあれば足さない。書く前と書いたあとの教材の総数と所属の表の行数を返す（ほかの棚が変わっていないことを数で確かめるため）。dry_run=true で書かずに予定だけ返す。",
+    {
+      program_title: z.string().min(1).describe("結ぶ先のプログラムの名前（無ければ作る）"),
+      course_title: z.string().min(1).describe("結ぶ先の棚（コース）の名前（無ければ作る）"),
+      course_order_index: z.number().optional().describe("棚を新しく作るときの並び順。省略すると末尾"),
+      course_description: z.string().optional().describe("棚を新しく作るときの説明"),
+      program_description: z.string().optional().describe("プログラムを新しく作るときの説明"),
+      items: z
+        .array(
+          z.object({
+            from_course: z.string().min(1).describe("その教材が今いる棚の名前（例：その他のアーカイブ）"),
+            title: z.string().min(1).describe("その教材の今の題名（mn__titles の題名をそのまま）"),
+            order_index: z.number().describe("結ぶ先の棚での並び順"),
+          })
+        )
+        .min(1)
+        .max(MAX_ROWS)
+        .describe("結ぶ教材。1 回に最大 50 本"),
+      user_id: z.string().optional().describe("持ち主。省略すると今あるプログラムから読み取る（1 種類でなければ止まる）"),
+      dry_run: z.boolean().optional().describe("true で書かずに予定だけ返す"),
+    },
+    async (args) => {
+      const 結果 = await linkContents(env, args as LinkContentsArgs);
+      return { content: [{ type: "text", text: JSON.stringify(結果, null, 2) }] };
+    }
+  );
+}
+
+export interface LinkContentsArgs {
+  program_title: string;
+  course_title: string;
+  course_order_index?: number;
+  course_description?: string;
+  program_description?: string;
+  items: Array<{ from_course: string; title: string; order_index: number }>;
+  user_id?: string;
+  dry_run?: boolean;
+}
+
+/** mn__link_contents の中身。教材を写さず、所属の表に 1 行ずつ足す */
+export async function linkContents(env: Env, a: LinkContentsArgs): Promise<Record<string, unknown>> {
+  const [programs, allCourses, contents] = await Promise.all([
+    sbGet(env, `${T_PROGRAMS}?select=id,user_id,title,order_index&order=order_index`),
+    sbGet(env, `${T_COURSES}?select=id,user_id,program_id,title,order_index`),
+    sbGetAll(env, `${T_CONTENTS}?select=id,course_id,title`),
+  ]);
+  const { map, linkRows } = await courseMembership(env, contents);
+  const byId = new Map(contents.map((c) => [String(c.id), c]));
+
+  // 1 本ずつ、今いる棚と題名で 1 件に決める。決まらない行が 1 つでもあれば書かずに止める
+  const 決まらない: string[] = [];
+  const resolved = a.items.map((it) => {
+    const shelves = allCourses.filter((c) => c.title === it.from_course);
+    const ids = new Set<string>();
+    for (const sh of shelves) for (const cid of map.get(String(sh.id)) ?? []) {
+      const ct = byId.get(cid);
+      if (ct && ct.title === it.title) ids.add(cid);
+    }
+    if (ids.size !== 1) 決まらない.push(`${it.from_course}／${it.title}（${ids.size} 件）`);
+    return { ...it, content_id: ids.size === 1 ? [...ids][0] : null };
+  });
+  if (決まらない.length) throw new Error(`教材を 1 件に決められませんでした：${決まらない.join(" / ")}`);
+  const dupIds = resolved.map((r) => r.content_id).filter((v, i, arr) => arr.indexOf(v) !== i);
+  if (dupIds.length) throw new Error(`同じ教材が 2 回渡されています（${[...new Set(dupIds)].join(", ")}）`);
+
+  let owner = a.user_id;
+  if (!owner) {
+    const owners = Array.from(new Set(programs.map((p) => p.user_id).filter(Boolean)));
+    if (owners.length !== 1) throw new Error(`持ち主を決められませんでした（今あるプログラムの持ち主が ${owners.length} 種類）。user_id を指定してください`);
+    owner = owners[0] as string;
+  }
+  let program = programs.find((p) => p.title === a.program_title && p.user_id === owner);
+  const course0 = program ? allCourses.find((c) => c.program_id === program.id && c.title === a.course_title) : null;
+  const already = course0 ? map.get(String(course0.id)) ?? new Set<string>() : new Set<string>();
+  const toAdd = resolved.filter((r) => !already.has(r.content_id as string));
+  const before = { 教材の総数: contents.length, 所属の表の行数: linkRows };
+
+  if (a.dry_run) {
+    return {
+      試しに組み立てただけ: true,
+      プログラム: { title: a.program_title, 新しく作る: !program },
+      コース: { title: a.course_title, 新しく作る: !course0 },
+      渡された本数: resolved.length,
+      足す本数: toAdd.length,
+      すでに結ばれている本数: resolved.length - toAdd.length,
+      書く前: before,
+      中身: resolved.map((r) => ({ 題名: r.title, 今いる棚: r.from_course, 並び順: r.order_index, 教材の番号: r.content_id })),
+    };
+  }
+
+  let programCreated = false;
+  if (!program) {
+    const maxOrder = programs.reduce((m, p) => (typeof p.order_index === "number" && p.order_index > m ? p.order_index : m), -1);
+    program = await sbInsert(env, T_PROGRAMS, { user_id: owner, title: a.program_title, description: a.program_description ?? a.program_title, order_index: maxOrder + 1 });
+    programCreated = true;
+  }
+  let course = course0;
+  let courseCreated = false;
+  if (!course) {
+    const mine = allCourses.filter((c) => c.program_id === program.id);
+    const maxCourseOrder = mine.reduce((m, c) => (typeof c.order_index === "number" && c.order_index > m ? c.order_index : m), -1);
+    course = await sbInsert(env, T_COURSES, {
+      user_id: owner, program_id: program.id, title: a.course_title,
+      description: a.course_description ?? a.course_title,
+      order_index: typeof a.course_order_index === "number" ? a.course_order_index : maxCourseOrder + 1,
+    });
+    courseCreated = true;
+  }
+  for (const r of toAdd) await sbLinkContentToCourse(env, r.content_id as string, course.id, r.order_index);
+
+  // 書いたあとに取り直して数える（教材の総数は変わらず、所属の表は足した本数だけ増えるはず）
+  const afterContents = await sbGetAll(env, `${T_CONTENTS}?select=id,course_id`);
+  const after = await courseMembership(env, afterContents);
+  return {
+    プログラム: { id: program.id, title: a.program_title, 新しく作った: programCreated },
+    コース: { id: course.id, title: a.course_title, 新しく作った: courseCreated },
+    渡された本数: resolved.length,
+    足した本数: toAdd.length,
+    すでに結ばれていた本数: resolved.length - toAdd.length,
+    書く前: before,
+    書いたあと: { 教材の総数: afterContents.length, 所属の表の行数: after.linkRows },
+    この棚の今の件数: (after.map.get(String(course.id)) ?? new Set()).size,
+  };
 }
 
 /** mn__put_seminar の中身。道具からも HTTP の口からも同じものを呼ぶ（2026-09-09 切り出し） */
