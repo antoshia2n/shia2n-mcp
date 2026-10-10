@@ -506,9 +506,11 @@
  * v1.1.1（2026-10-08 開発部）：github__open_pr・github__pr_status の書いてよいリポジトリ（省略時の一覧）に antoshia2n/utage-alt-demo を足した（UTAGE の代わりのデモ 便2 以降の書く道）。src/tools-github.ts・src/version.ts。設定の追加は 0 個。
  * v1.1.2（2026-10-08 開発部）：github__open_pr・github__pr_status の書いてよいリポジトリに antoshia2n/shr-webhook を足した（テストモードの知らせを捨てる直しのため）。src/tools-github.ts・src/version.ts。設定の追加は 0 個。
  * v1.3.0（2026-10-09 開発部）：B（utage-alt-demo）の便 8f-2。タスクマスターの今日の分を B のホームへ渡す口 TaskmasterReader（読むだけ・外からは呼べない・同じアカウントの Worker からサービスの結びでだけ呼べる）。src/taskmaster-reader.ts を新設。設定の追加は 0 個（合言葉は要らない）。
+ * v1.4.0（2026-10-10 開発部）：B の便 16a。UTAGE の読者を B が読む口 UtageReader（accounts・readers。読むだけ・サービスの結びでだけ呼べる・鍵は既存の UTAGE_API_KEY）。src/utage-reader.ts を新設。設定の追加は 0 個。今ある 30 分ごとの取り込みには触っていない。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
+export { UtageReader } from "./utage-reader.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
