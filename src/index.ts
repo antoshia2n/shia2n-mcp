@@ -508,6 +508,7 @@
  * v1.3.0（2026-10-09 開発部）：B（utage-alt-demo）の便 8f-2。タスクマスターの今日の分を B のホームへ渡す口 TaskmasterReader（読むだけ・外からは呼べない・同じアカウントの Worker からサービスの結びでだけ呼べる）。src/taskmaster-reader.ts を新設。設定の追加は 0 個（合言葉は要らない）。
  * v1.4.0（2026-10-10 開発部）：B の便 16a。UTAGE の読者を B が読む口 UtageReader（accounts・readers。読むだけ・サービスの結びでだけ呼べる・鍵は既存の UTAGE_API_KEY）。src/utage-reader.ts を新設。設定の追加は 0 個。今ある 30 分ごとの取り込みには触っていない。
  * v1.5.0（2026-10-10 開発部）：B の便 16b。mn__link_contents を新設（学ぶくんに今ある教材を写さずに別のプログラムの棚へ結ぶ。所属の表 mn_content_courses に足すだけ・dry_run あり・書く前と書いたあとの総数を返す）。設定の追加は 0 個。
+ * v1.6.0（2026-10-10 開発部）：土台 6 番。db__impact を新設（表を 1 本変えたときに壊れるものを引く。データベースの中＝データベース側の読み出し専用の処理 list_table_dependents（sql/list_table_dependents.sql）・コードの中＝Systems の稼働中と開発中のリポジトリの固まりを読んで表の名前が出る行・見ていない先＝読めなかったリポジトリ）。src/tools-impact.ts・src/impact-core.ts。設定の追加は 0 個。健康の記録は OAUTH_KV の impact:last 1 行。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
@@ -556,6 +557,7 @@ import { registerGithubTools } from "./tools-github.js";
 import { registerMoneyTools } from "./tools-money.js";
 import { registerGateTools } from "./tools-gate.js";
 import { registerInspectTools } from "./tools-inspect.js";
+import { registerImpactTools } from "./tools-impact.js";
 
 export interface Env {
   // Core
@@ -700,6 +702,7 @@ function createMcpServer(env: Env): McpServer {
   registerMoneyTools(server, env);
   registerGateTools(server, env);
   registerInspectTools(server, env);
+  registerImpactTools(server, env);
   return server;
 }
 
