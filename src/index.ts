@@ -511,6 +511,7 @@
  * v1.6.0（2026-10-10 開発部）：土台 6 番。db__impact を新設（表を 1 本変えたときに壊れるものを引く。データベースの中＝データベース側の読み出し専用の処理 list_table_dependents（sql/list_table_dependents.sql）・コードの中＝Systems の稼働中と開発中のリポジトリの固まりを読んで表の名前が出る行・見ていない先＝読めなかったリポジトリ）。src/tools-impact.ts・src/impact-core.ts。設定の追加は 0 個。健康の記録は OAUTH_KV の impact:last 1 行。
  * v1.6.1（2026-10-10 開発部）：db__impact の読む順を直した。公開のリポジトリ（codeload）を全部先に読み、読めなかった分にだけ鍵を使う。鍵で 404 が 2 本続き 1 本も読めていなければ残りは試さない。1.6.0 は非公開の 404 で上限 45 を使い切り、shia2n-mcp など後ろの公開を読まずに返していた。src/impact-core.ts の readInOrder・test/impact-order.test.ts。
  * v1.6.2（2026-10-10 開発部）：db__impact の読み替えの拾い方を直した。左の名前は表の名前の末尾と一致するもの（events: "b_events" の形）だけにした。1.6.1 は table: "member" という設定の鍵を読み替えと見て、shia2n-mcp で 'table' の行を 2 行多く拾っていた。src/impact-core.ts・test/impact.test.ts。
+ * v1.6.3（2026-10-10 開発部）：db__impact が非公開のリポジトリを読む鍵を GITHUB_READ_TOKEN（読むだけ・全リポジトリ）に分けた。無ければ GITHUB_TOKEN で試す。/diag に有無を出す。設定の追加 1 個（Naoki が入れる）。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
@@ -604,6 +605,9 @@ export interface Env {
   B_MCP_SECRET?: string;
   // 2026-10-05 追加：開発部がプルリクを作る鍵（GitHub の細かく絞れる鍵。秘密の値）。無いと github__* は止まる
   GITHUB_TOKEN?: string;
+  // 2026-10-10 追加：db__impact が非公開のリポジトリを読むだけの鍵（GitHub の細かく絞れる鍵・全リポジトリの中身を読むだけ・秘密の値）。
+  // 無ければ GITHUB_TOKEN で試す。書く鍵の範囲を広げないために分けた
+  GITHUB_READ_TOKEN?: string;
   // 書いてよいリポジトリ（カンマ区切り）。省略時は antoshia2n/content-os だけ
   GITHUB_ALLOWED_REPOS?: string;
   // 学ぶくんへセミナーを入れる口（/manabu/put-seminar）専用の合言葉。

@@ -6,7 +6,7 @@
  *   ① データベースの中：データベース側の読み出し専用の処理 list_table_dependents（sql/list_table_dependents.sql）を呼ぶ。
  *      ビュー・処理・引き金・守りの決まり・外部キー・ブラウザ側の許可・定時の処理
  *   ② コードの中：読む先は Systems の稼働中と開発中の行のリポジトリ（毎回読む。一覧をここに持たない）。
- *      公開のものは codeload から固まりを 1 回で取る。読めなかったものは、鍵（GITHUB_TOKEN）があれば API でもう 1 回試す
+ *      公開のものは codeload から固まりを 1 回で取る。読めなかったものは、鍵（GITHUB_READ_TOKEN、無ければ GITHUB_TOKEN）があれば API でもう 1 回試す
  *   ③ 見ていない先：読めなかったリポジトリを名前と理由で並べる。0 件と混ぜない
  *   健康：最後に引けた日時・表・読めた本数と見ていない本数（OAUTH_KV の 1 行）
  * 読むだけで、書く表は 0。新しい表も作らない。外への呼び出しは MAX_OUTBOUND 本で頭打ちにし、超えた分は「今回は調べていない」で返す。
@@ -73,6 +73,11 @@ async function readDatabase(env: Env, table: string, budget: { left: number }): 
   }
 }
 
+// 読むだけの鍵を先に使う（書く鍵の範囲を広げないため・v1.6.3）
+function readKey(env: Env): string | undefined {
+  return env.GITHUB_READ_TOKEN || env.GITHUB_TOKEN;
+}
+
 type RepoRead = { ok: true; via: string; files: ReturnType<typeof untarSources> } | { ok: false; reason: string; status?: number };
 
 // 1 回目：公開の固まりを codeload から取る（1 本と数える）
@@ -94,7 +99,7 @@ async function readWithKey(env: Env, t: RepoTarget, first: number, budget: { lef
   budget.left -= 2;
   try {
     const r = await fetch(`https://api.github.com/repos/${t.repo}/tarball`, {
-      headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json", "User-Agent": "shia2n-mcp" },
+      headers: { Authorization: `Bearer ${readKey(env)}`, Accept: "application/vnd.github+json", "User-Agent": "shia2n-mcp" },
       redirect: "follow",
       signal: AbortSignal.timeout(20000),
     });
@@ -110,7 +115,7 @@ async function readAllRepos(env: Env, targets: RepoTarget[], budget: { left: num
     targets,
     (t) => readPublic(t, budget),
     (t, first) => readWithKey(env, t, first, budget),
-    !!env.GITHUB_TOKEN,
+    !!readKey(env),
   );
 }
 

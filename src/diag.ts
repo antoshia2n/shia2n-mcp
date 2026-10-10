@@ -153,6 +153,8 @@ const ENV_KEYS: (keyof Env)[] = [
   "RUMIN_PLAN_SHEET_ID",
   // 2026-10-05：開発部がプルリクを作る鍵。無いと github__open_pr が止まる。値は出さず有無だけ返す。
   "GITHUB_TOKEN",
+  // 2026-10-10：db__impact が非公開のリポジトリを読むだけの鍵。無ければ GITHUB_TOKEN で試す。値は出さず有無だけ返す。
+  "GITHUB_READ_TOKEN",
 ];
 
 // path を書いた行だけ、入口ではなくその道を叩く。
