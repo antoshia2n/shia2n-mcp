@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
+import { registerHaakuPlanTools } from "./tools-haaku-plan.js";
 import type { Env } from "./index.js";
 import { getFirestoreToken, fsGet, fsPatch, toFVal, fromVal, type FVal, type FSDoc } from "./taskmaster.js";
 
@@ -397,6 +398,8 @@ function yesterdayJst(): string {
 // ─── ツール登録 ───────────────────────────────────────────────────────────────
 
 export function registerHaakuTools(server: McpServer, env: Env): void {
+  // Phase 3: 読み取り専用の経営文脈。既存のKPI・日報の口は変えない。
+  registerHaakuPlanTools(server, env);
 
   // ─── 1. haAku__get_kpi_progress ───────────────────────────────────────────
   server.tool(

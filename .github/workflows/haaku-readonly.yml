@@ -1,0 +1,55 @@
+name: haAku read-only MCP validation
+
+on:
+  push:
+    branches:
+      - task-20261011-ai-readonly
+  pull_request:
+    paths:
+      - 'src/haaku-plan-summary.ts'
+      - 'src/tools-haaku-plan.ts'
+      - 'src/tools-haaku.ts'
+      - 'test/haaku-plan-summary.test.ts'
+      - '.github/workflows/haaku-readonly.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Test haAku plan read-only logic (no live database)
+        run: node --experimental-strip-types --test test/haaku-plan-summary.test.ts
+      - name: Compare TypeScript diagnostics against untouched main
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run type-check > /tmp/branch-typecheck.log 2>&1 || true
+          git worktree add --detach /tmp/haaku-mcp-base origin/main
+          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/haaku-mcp-base/node_modules
+          (cd /tmp/haaku-mcp-base && npm run type-check > /tmp/base-typecheck.log 2>&1) || true
+          grep -E '^src/.*error TS[0-9]+' /tmp/base-typecheck.log | sort > /tmp/base-errors.txt || true
+          grep -E '^src/.*error TS[0-9]+' /tmp/branch-typecheck.log | sort > /tmp/branch-errors.txt || true
+          echo "main TypeScript diagnostics:"
+          cat /tmp/base-errors.txt
+          echo "branch TypeScript diagnostics:"
+          cat /tmp/branch-errors.txt
+          if ! diff -u /tmp/base-errors.txt /tmp/branch-errors.txt; then
+            echo "::error::New TypeScript diagnostics were introduced. Review the difference."
+            exit 1
+          fi
+          if test -s /tmp/base-errors.txt; then
+            echo "::warning::Pre-existing TypeScript errors on main are unchanged; no new diagnostics."
+          else
+            echo "TypeScript type-check passed on both main and branch."
+          fi
