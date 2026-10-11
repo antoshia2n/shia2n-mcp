@@ -5,7 +5,9 @@
  * 結合（Merge）は Naoki が GitHub の画面で押す。ここからはしない。
  *
  * 守ること
- * - 書けるのは「claude/」で始まる新しい枝だけ。main など既にある枝には書かない（既にある名前ならエラー）
+ * - 書けるのは「claude/」で始まる枝だけ。main などには書かない。既にある名前は、add_to_branch: true のときだけ
+ *   その枝にコミットを 1 つ積む（2026-10-11 v1.7.0：出したあとの直しを同じプルリクに足し、Merge を 1 回で済ませるため）
+ * - 上げたファイルごとに sha256 を返す（2026-10-11 v1.7.0：手元の sha256sum と比べ、枝の取り直しをせずに一致を確かめるため）
  * - 書いてよいリポジトリは GITHUB_ALLOWED_REPOS（カンマ区切り）。未設定なら content-os と shia2n-mcp と utage-alt-demo（2026-10-08 v1.1.1 で足した）
  * - 大きなファイルは全文を送らず、edits（探す文字列→置き換える文字列）で送れる。元の枝の中身に当てて、1 か所に当たらなければ止まる
  *   （2026-10-05 v0.98.0：長いファイルを丸ごと書き写すと写し間違いが入り得るため）
@@ -23,6 +25,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
+import { applyEdits, EditError, utf8Bytes, base64ToBytes, decodeBase64Utf8, sha256Hex } from "./github-core.js";
 
 const API = "https://api.github.com";
 const DEFAULT_REPOS = ["antoshia2n/content-os", "antoshia2n/shia2n-mcp", "antoshia2n/utage-alt-demo", "antoshia2n/shr-webhook"];
@@ -75,20 +78,14 @@ function checkRepo(env: Env, repo: string): string | null {
   return null;
 }
 
-function decodeBase64Utf8(b64: string): string {
-  const bin = atob(b64.replace(/\s/g, ""));
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder("utf-8").decode(bytes);
-}
-
 export function registerGithubTools(server: McpServer, env: Env): void {
   server.tool(
     "github__open_pr",
-    "許可されたリポジトリに、claude/ で始まる新しい枝を作ってファイルを上げ、プルリクを 1 本作る。結合（Merge）はしない（Naoki が GitHub の画面で押す）。files に渡したファイルだけが、置き換えか新規として入る。大きなファイルは edits（探す文字列→置き換える文字列）で部分だけ送れる（元の枝の中身に当て、1 か所に当たらなければ止まる）。消す・名前を変えることはできない。文字のファイルは content、画像などは content_base64 で渡す。既にある枝の名前を渡すとエラーで止まる。戻り値: 成功 { ok: true, pr_url, pr_number, branch, base, commit_sha, files }／失敗 { ok: false, step, status, message }。",
+    "許可されたリポジトリに、claude/ で始まる新しい枝を作ってファイルを上げ、プルリクを 1 本作る。結合（Merge）はしない（Naoki が GitHub の画面で押す）。files に渡したファイルだけが、置き換えか新規として入る。大きなファイルは edits（探す文字列→置き換える文字列）で部分だけ送れる（元の枝の中身に当て、1 か所に当たらなければ止まる）。消す・名前を変えることはできない。文字のファイルは content、画像などは content_base64 で渡す。既にある枝の名前を渡すとエラーで止まる。ただし add_to_branch: true なら、既にある claude/ の枝にコミットを 1 つ積み（edits はその枝の中身に当てる）、開いているプルリクがあればそれを返す（無ければ作る）。files は上げた中身ごとの sha256（手元の sha256sum と同じ値）とバイト数を返す。戻り値: 成功 { ok: true, mode, pr_url, pr_number, branch, base, commit_sha, files: [{ path, sha256, bytes }] }／失敗 { ok: false, step, status, message }。",
     {
       repo:   z.string().describe("owner/name の形。例 antoshia2n/content-os"),
-      branch: z.string().describe("新しく作る枝の名前。claude/ で始める。例 claude/contentos-light-load"),
+      branch: z.string().describe("枝の名前。claude/ で始める。例 claude/contentos-light-load"),
+      add_to_branch: z.boolean().optional().describe("true なら既にある claude/ の枝に足す（無い枝なら止まる）。省略か false なら新しい枝を作る"),
       title:  z.string().describe("プルリクとコミットの題名"),
       body:   z.string().optional().describe("プルリクの本文（何を・なぜ・確かめ方）"),
       base:   z.string().optional().describe("元にする枝。省略時は main"),
@@ -114,43 +111,68 @@ export function registerGithubTools(server: McpServer, env: Env): void {
         if (f.path.startsWith("/") || f.path.includes("..")) return asMcpTextResult({ ok: false, step: "check", status: 0, message: `${f.path}：道すじはリポジトリの根からの相対で書いてください` });
       }
       const base = args.base ?? "main";
+      const add = args.add_to_branch === true;
       const r = `/repos/${args.repo}`;
+      const enc = (p: string) => p.split("/").map(encodeURIComponent).join("/");
       try {
-        const ref = await gh(env, "read_base", "GET", `${r}/git/ref/heads/${encodeURIComponent(base)}`);
-        const baseSha: string = ref.object.sha;
-        const baseCommit = await gh(env, "read_base", "GET", `${r}/git/commits/${baseSha}`);
+        // 元にする先：新しい枝なら base の先頭、足すならその枝の先頭
+        const from = add ? args.branch : base;
+        const ref = await gh(env, add ? "read_branch" : "read_base", "GET", `${r}/git/ref/heads/${enc(from)}`);
+        const parentSha: string = ref.object.sha;
+        const parentCommit = await gh(env, add ? "read_branch" : "read_base", "GET", `${r}/git/commits/${parentSha}`);
         const tree = [];
+        const sums: { path: string; sha256: string; bytes: number }[] = [];
         for (const f of args.files) {
           let payload: { content: string; encoding: string };
+          let bytes: Uint8Array;
           if (f.edits) {
-            const cur = await gh(env, "read_file", "GET", `${r}/contents/${f.path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(base)}`);
-            let text = decodeBase64Utf8(String(cur.content ?? ""));
-            for (let i = 0; i < f.edits.length; i++) {
-              const { old_str, new_str } = f.edits[i];
-              const hits = text.split(old_str).length - 1;
-              if (hits !== 1) throw new StepError("edit", 0, `${f.path} の ${i + 1} 番目の置き換え：探す文字列が ${hits} か所に当たりました（1 か所でないと止めます）`);
-              text = text.replace(old_str, () => new_str);
+            const cur = await gh(env, "read_file", "GET", `${r}/contents/${enc(f.path)}?ref=${encodeURIComponent(from)}`);
+            let text: string;
+            try {
+              text = applyEdits(decodeBase64Utf8(String(cur.content ?? "")), f.path, f.edits);
+            } catch (err) {
+              if (err instanceof EditError) throw new StepError("edit", 0, err.message);
+              throw err;
             }
             payload = { content: text, encoding: "utf-8" };
+            bytes = utf8Bytes(text);
           } else if (f.content !== undefined) {
             payload = { content: f.content, encoding: "utf-8" };
+            bytes = utf8Bytes(f.content);
           } else {
             payload = { content: f.content_base64 as string, encoding: "base64" };
+            bytes = base64ToBytes(f.content_base64 as string);
           }
           const blob = await gh(env, "blob", "POST", `${r}/git/blobs`, payload);
           tree.push({ path: f.path, mode: "100644", type: "blob", sha: blob.sha });
+          sums.push({ path: f.path, sha256: await sha256Hex(bytes), bytes: bytes.length });
         }
-        const newTree = await gh(env, "tree", "POST", `${r}/git/trees`, { base_tree: baseCommit.tree.sha, tree });
-        const commit = await gh(env, "commit", "POST", `${r}/git/commits`, { message: args.title, tree: newTree.sha, parents: [baseSha] });
-        await gh(env, "branch", "POST", `${r}/git/refs`, { ref: `refs/heads/${args.branch}`, sha: commit.sha });
-        const pr = await gh(env, "pull_request", "POST", `${r}/pulls`, { title: args.title, head: args.branch, base, body: args.body ?? "" });
+        const newTree = await gh(env, "tree", "POST", `${r}/git/trees`, { base_tree: parentCommit.tree.sha, tree });
+        const commit = await gh(env, "commit", "POST", `${r}/git/commits`, { message: args.title, tree: newTree.sha, parents: [parentSha] });
+        let pr: any;
+        if (add) {
+          // 強制はしない：読んだあとに枝が動いていたら GitHub が断る
+          await gh(env, "update_branch", "PATCH", `${r}/git/refs/heads/${enc(args.branch)}`, { sha: commit.sha, force: false });
+          const owner = args.repo.split("/")[0];
+          const open = await gh(env, "find_pr", "GET", `${r}/pulls?state=open&head=${encodeURIComponent(`${owner}:${args.branch}`)}`);
+          pr = Array.isArray(open) && open.length > 0
+            ? open[0]
+            : await gh(env, "pull_request", "POST", `${r}/pulls`, { title: args.title, head: args.branch, base, body: args.body ?? "" });
+        } else {
+          await gh(env, "branch", "POST", `${r}/git/refs`, { ref: `refs/heads/${args.branch}`, sha: commit.sha });
+          pr = await gh(env, "pull_request", "POST", `${r}/pulls`, { title: args.title, head: args.branch, base, body: args.body ?? "" });
+        }
         return asMcpTextResult({
-          ok: true, pr_url: pr.html_url, pr_number: pr.number, branch: args.branch, base,
-          commit_sha: commit.sha, files: args.files.map((f) => f.path),
+          ok: true, mode: add ? "added_to_branch" : "new_branch",
+          pr_url: pr.html_url, pr_number: pr.number, branch: args.branch, base: pr.base?.ref ?? base,
+          commit_sha: commit.sha, files: sums,
         });
       } catch (e) {
         if (e instanceof StepError) {
-          const hint = e.step === "branch" && e.status === 422 ? "（同じ名前の枝が既にあります。別の名前にしてください）" : "";
+          const hint =
+            e.step === "branch" && e.status === 422 ? "（同じ名前の枝が既にあります。足すなら add_to_branch: true）" :
+            e.step === "read_branch" && e.status === 404 ? "（その枝はありません。新しく作るなら add_to_branch を外してください）" :
+            e.step === "update_branch" && e.status === 422 ? "（読んだあとに枝が動きました。もう一度送ってください）" : "";
           return asMcpTextResult({ ok: false, step: e.step, status: e.status, message: e.message + hint });
         }
         return asMcpTextResult({ ok: false, step: "unknown", status: 0, message: String(e) });

@@ -513,6 +513,7 @@
  * v1.6.2（2026-10-10 開発部）：db__impact の読み替えの拾い方を直した。左の名前は表の名前の末尾と一致するもの（events: "b_events" の形）だけにした。1.6.1 は table: "member" という設定の鍵を読み替えと見て、shia2n-mcp で 'table' の行を 2 行多く拾っていた。src/impact-core.ts・test/impact.test.ts。
  * v1.6.3（2026-10-10 開発部）：db__impact が非公開のリポジトリを読む鍵を GITHUB_READ_TOKEN（読むだけ・全リポジトリ）に分けた。無ければ GITHUB_TOKEN で試す。/diag に有無を出す。設定の追加 1 個（Naoki が入れる）。
  * v1.6.4（2026-10-10 開発部）：db__impact の外への呼び出しの頭打ちを 45 から 120 に上げた（有料の枠・非公開 18 本を読み切るため）。src/tools-impact.ts の MAX_OUTBOUND だけ。
+ * v1.7.0（2026-10-11 開発部）：github__open_pr を直した。① 上げたファイルごとに sha256 とバイト数を返す（手元の sha256sum と比べ、枝を取り直さずに一致を確かめるため）② add_to_branch: true で既にある claude/ の枝にコミットを 1 つ積み、開いているプルリクを返す（出したあとの直しを同じプルリクに足し、Merge を 1 回で済ませるため・強制の書き換えはしない）。計算は src/github-core.ts・試験は test/github-core.test.ts。設定の追加 0 個。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
