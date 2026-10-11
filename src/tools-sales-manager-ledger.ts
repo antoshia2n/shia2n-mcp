@@ -66,6 +66,27 @@ async function callLedger(env: Env, method: "GET" | "POST", path: string, body?:
   return parsed;
 }
 
+/**
+ * v1.8.0：sales_manager__list_payments と同じ入口で、その月の行を読む（把握くんの夜の書き込みが使う）。
+ * 断られたとき・形が違うときは止める（数え間違いの値を書かないため）。
+ */
+export async function fetchPaymentsMonth(
+  env: Env,
+  yearMonth: string
+): Promise<{ year_month: string; rows: { source: string; contract_id: number | string | null; business: string | null }[] }> {
+  checkYearMonth("year_month", yearMonth);
+  const data = (await callLedger(env, "GET", `/api/sm-payments-month?year_month=${encodeURIComponent(yearMonth)}`)) as {
+    ok?: boolean;
+    http_status?: number;
+    year_month?: string;
+    rows?: unknown;
+  };
+  if (data?.ok !== true || !Array.isArray(data.rows)) {
+    throw new Error(`売上管理の ${yearMonth} の行を読めませんでした（状態 ${String(data?.http_status ?? "?")}）: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  return { year_month: String(data.year_month ?? yearMonth), rows: data.rows as never };
+}
+
 export function registerSalesManagerLedgerTools(server: McpServer, env: Env): void {
   server.tool(
     "sales_manager__replace_monthly_revenue",
