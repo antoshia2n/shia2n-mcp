@@ -103,6 +103,7 @@ export function writeKeys(ops: Change[]): string[] {
 }
 // Stable JSON for digest and re-read verification, regardless of Firestore map-field ordering.
 export function canonical(value: unknown): string {
+  if (value === undefined) throw new Error("保存確認値に未定義の欄があります");
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
   if (value !== null && typeof value === "object") {
     return "{" + Object.keys(value).sort().map(key =>
