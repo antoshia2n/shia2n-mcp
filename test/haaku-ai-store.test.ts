@@ -88,7 +88,7 @@ function mock(){
       const record={
         uid,previewId,issuedAt:new Date(NOW).toISOString(),
         expiresAt:new Date(NOW+30*60000).toISOString(),
-        status:"approved",approvedUid:uid,approvedAt:new Date(NOW+500).toISOString(),
+        status:"approved",approvedUid:uid,approvedAt:new Date(NOW).toISOString(),
         changes:[],affectedDocs:[],
       };
       docs.set(approvalKey,{value:{...record,...overrides},version:"2026-10-11T09:00:00.000Z"});
