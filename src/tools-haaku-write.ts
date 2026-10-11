@@ -3,8 +3,9 @@ import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { getFirestoreToken } from "./taskmaster.js";
-import { parseChanges } from "./haaku-ai-changes.js";
-import { previewManagementChanges, applyManagementChanges } from "./haaku-ai-store.js";
+import { parseChanges, assertWeekStart } from "./haaku-ai-changes.js";
+import { previewManagementChanges, applyManagementChanges, readSnapshot } from "./haaku-ai-store.js";
+import { managementWriteAudit } from "./haaku-ai-audit.js";
 
 /**
  * haAku plans are human decisions, never an AI inference committed as fact.
@@ -79,4 +80,25 @@ export function registerHaakuWriteTools(server: McpServer, env: Env): void {
       ));
     }
   );
+  server.tool(
+    "haAku__get_management_write_audit",
+    "AIがhaAkuの戦略・フェーズ・マイルストーン・週間コミットへ承認付きで保存した記録を取得する。"+
+    "確認した対象ID・操作時刻・改訂理由と件数を返す読み取り専用の診断口。"+
+    "週間コミットはweek_start（月曜日）を指定したときだけ、その週の履歴を含める。"+
+    "未登録と取得失敗を区別する。ブラウザから手作業で変更したものはAIの更新件数へ含めない。",
+    {
+      week_start: z.string().optional().describe(
+        "読みたい週間コミットの週初め月曜日 YYYY-MM-DD。省略時は週間履歴を除外"
+      ),
+    },
+    async args => {
+      if(args.week_start)assertWeekStart(args.week_start);
+      const uid=uidFor(env),token=await getFirestoreToken(env);
+      const keys=["os_roadmap_v1","os_strategy_records_v1",
+        ...(args.week_start?["os_weekly_commits_v1_"+args.week_start]:[])];
+      const snap=await readSnapshot(fetch,token,uid,keys);
+      return asMcpTextResult(managementWriteAudit(snap.store,args.week_start));
+    }
+  );
+
 }
