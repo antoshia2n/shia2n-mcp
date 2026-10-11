@@ -8,10 +8,12 @@ on:
     paths:
       - 'src/haaku-ai-changes.ts'
       - 'src/haaku-ai-model.ts'
+      - 'src/haaku-ai-audit.ts'
       - 'src/haaku-ai-store.ts'
       - 'src/tools-haaku-write.ts'
       - 'src/tools-haaku.ts'
       - 'test/haaku-ai-model.test.ts'
+      - 'test/haaku-ai-audit.test.ts'
       - 'test/haaku-ai-store.test.ts'
       - '.github/workflows/haaku-ai-write.yml'
 
@@ -35,6 +37,7 @@ jobs:
         run: |
           npx --yes esbuild@0.25.5 \
             test/haaku-ai-model.test.ts \
+            test/haaku-ai-audit.test.ts \
             test/haaku-ai-store.test.ts \
             --bundle --platform=node --format=esm \
             --outdir=/tmp/haaku-ai-tests \
