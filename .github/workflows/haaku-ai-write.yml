@@ -3,16 +3,20 @@ name: haAku AI management write safety
 on:
   push:
     branches:
-      - task-20261011-haaku-ai-write
+      - 'task-*'
   pull_request:
     paths:
       - 'src/haaku-ai-changes.ts'
       - 'src/haaku-ai-model.ts'
+      - 'src/haaku-approval-record.ts'
+      - 'src/haaku-human-approval.ts'
+      - 'src/index.ts'
       - 'src/haaku-ai-audit.ts'
       - 'src/haaku-ai-store.ts'
       - 'src/tools-haaku-write.ts'
       - 'src/tools-haaku.ts'
       - 'test/haaku-ai-model.test.ts'
+      - 'test/haaku-human-approval.test.ts'
       - 'test/haaku-ai-audit.test.ts'
       - 'test/haaku-ai-store.test.ts'
       - '.github/workflows/haaku-ai-write.yml'
@@ -36,7 +40,7 @@ jobs:
       - name: Bundle isolated tests without touching Firestore
         run: |
           npx --yes esbuild@0.25.5 \
-            test/haaku-ai-model.test.ts \
+            test/haaku-ai-model.test.ts             test/haaku-human-approval.test.ts \
             test/haaku-ai-audit.test.ts \
             test/haaku-ai-store.test.ts \
             --bundle --platform=node --format=esm \
