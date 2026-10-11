@@ -37,7 +37,7 @@ export interface SyncUtageBatchResponse {
 function headers(env: DbEnv, prefer?: string): Record<string, string> {
   const h: Record<string, string> = {
     apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
     "Content-Type": "application/json",
   };
   if (prefer) h.Prefer = prefer;

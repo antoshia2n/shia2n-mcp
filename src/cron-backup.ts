@@ -193,7 +193,7 @@ async function listSupabaseTables(env: Env, budget: Budget): Promise<string[]> {
   const res = await fetch(`${env.SUPABASE_URL}/rest/v1/`, {
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
       Accept: "application/json",
     },
   });
@@ -234,7 +234,7 @@ async function fetchTablePage(
   const res = await fetch(url, {
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
       Accept: "application/json",
       // 全件数を返してもらう（取り切れたかの判定に使う）
       Prefer: "count=exact",

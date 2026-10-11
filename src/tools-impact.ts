@@ -61,7 +61,7 @@ async function readDatabase(env: Env, table: string, budget: { left: number }): 
       method: "POST",
       headers: {
         apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ p_table: table }),

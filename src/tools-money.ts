@@ -39,7 +39,7 @@ const BALANCE_TABLE = "mo_balances";
 function sbHeaders(env: Env, extra: Record<string, string> = {}): Record<string, string> {
   return {
     apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
     "Content-Type": "application/json",
     ...extra,
   };

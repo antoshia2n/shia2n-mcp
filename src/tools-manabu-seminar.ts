@@ -78,7 +78,7 @@ const BACKSLASH_HASH = "\\#";
 function sbHeaders(env: Env): Record<string, string> {
   return {
     apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
     "Content-Type": "application/json",
   };
 }
