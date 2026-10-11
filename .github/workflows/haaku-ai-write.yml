@@ -1,0 +1,64 @@
+name: haAku AI management write safety
+
+on:
+  push:
+    branches:
+      - task-20261011-haaku-ai-write
+  pull_request:
+    paths:
+      - 'src/haaku-ai-changes.ts'
+      - 'src/haaku-ai-model.ts'
+      - 'src/haaku-ai-store.ts'
+      - 'src/tools-haaku-write.ts'
+      - 'src/tools-haaku.ts'
+      - 'test/haaku-ai-model.test.ts'
+      - 'test/haaku-ai-store.test.ts'
+      - '.github/workflows/haaku-ai-write.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Bundle isolated tests without touching Firestore
+        run: |
+          npx --yes esbuild@0.25.5 \
+            test/haaku-ai-model.test.ts \
+            test/haaku-ai-store.test.ts \
+            --bundle --platform=node --format=esm \
+            --outdir=/tmp/haaku-ai-tests \
+            --out-extension:.js=.mjs
+      - name: Run safe management edit model and Firestore mock tests
+        run: node --test /tmp/haaku-ai-tests/*.mjs
+      - name: Existing management read-only model tests
+        run: node --experimental-strip-types --test test/haaku-plan-summary.test.ts
+      - name: Compare TypeScript diagnostics to untouched main
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run type-check > /tmp/haaku-ai-typecheck.log 2>&1 || true
+          git worktree add --detach /tmp/haaku-ai-base origin/main
+          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/haaku-ai-base/node_modules
+          (cd /tmp/haaku-ai-base && npm run type-check > /tmp/haaku-ai-base-typecheck.log 2>&1) || true
+          grep -E '^src/.*error TS[0-9]+' /tmp/haaku-ai-base-typecheck.log | sort > /tmp/haaku-ai-base-errors.txt || true
+          grep -E '^src/.*error TS[0-9]+' /tmp/haaku-ai-typecheck.log | sort > /tmp/haaku-ai-branch-errors.txt || true
+          echo 'main TypeScript errors:'
+          cat /tmp/haaku-ai-base-errors.txt
+          echo 'branch TypeScript errors:'
+          cat /tmp/haaku-ai-branch-errors.txt
+          if ! diff -u /tmp/haaku-ai-base-errors.txt /tmp/haaku-ai-branch-errors.txt; then
+            echo '::error::New TypeScript diagnostics introduced'
+            exit 1
+          fi
+          test ! -s /tmp/haaku-ai-base-errors.txt || echo '::warning::Pre-existing TypeScript diagnostics unchanged'
