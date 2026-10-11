@@ -3,6 +3,8 @@
 import { fsGetOrNull, fromVal, toFVal, type FVal } from "./taskmaster.js";
 import { type Change, neededKeys, canonical } from "./haaku-ai-changes.js";
 import { buildManagementChangePlan, verifyPlannedValues, type Stored } from "./haaku-ai-model.js";
+import { approvalDocName, canCommitApprovedRecord } from "./haaku-approval-record.js";
+import { readHumanApproval } from "./haaku-human-approval.js";
 
 const DB = "projects/gen-lang-client-0371348401/databases/ai-studio-622b9a97-52df-425a-85c6-1a2670c54e0a";
 const API = "https://firestore.googleapis.com/v1/" + DB + "/documents";
@@ -112,9 +114,11 @@ export async function previewManagementChanges(
   };
 }
 export async function applyManagementChanges(
-  http:Http,token:string,uid:string,ops:Change[],previewId:string,approved:boolean,now=Date.now(),
+  http:Http,token:string,uid:string,ops:Change[],previewId:string,approvalId:string,now=Date.now(),
 ){
-  if(approved!==true)throw new Error("本人の明示承認がないため書き込みません");
+  // An MCP caller cannot approve a change by asserting a Boolean.
+  // The owner must authenticate in the haAku browser and confirm the exact preview.
+  const approvalName=approvalDocName(uid,approvalId);
   const issuedAt=previewIdTime(previewId,now);
   const keys=neededKeys(ops);
   let transaction:string|null=null;
@@ -124,7 +128,13 @@ export async function applyManagementChanges(
     if(typeof begin.transaction!=="string"||!begin.transaction)throw new Error("Firestoreトランザクションを開始できません");
     transaction=begin.transaction;
     // 全ての参照先を同じRead-Writeトランザクション内で読む。
-    const snap=await readSnapshot(http,token,uid,keys,transaction);
+    const [snap,approval]=await Promise.all([
+      readSnapshot(http,token,uid,keys,transaction),
+      readHumanApproval(http,token,uid,approvalId,transaction),
+    ]);
+    if(!canCommitApprovedRecord(approval.value,uid,previewId,now)) {
+      throw new Error("haAkuでログイン済み本人の承認が確認できません。書き込みはしていません");
+    }
     if(previewId!==await tokenFor(ops,snap,uid,issuedAt)) {
       throw new Error("プレビュー後にデータまたは変更案が変わりました。再確認が必要です。書き込みはしていません");
     }
@@ -134,17 +144,34 @@ export async function applyManagementChanges(
       updateMask:{fieldPaths:["value"]},
       currentDocument:snap.versions[key] ? {updateTime:snap.versions[key]} : {exists:false},
     }));
+    // The approval is consumed in the SAME Firestore commit as the business documents.
+    // Concurrent or repeated applies cannot reuse it.
+    const consumedAt=new Date(now).toISOString();
+    writes.push({
+      update:{name:approvalName,fields:{value:toFVal({
+        ...approval.value,status:"consumed",consumedAt,
+      })}},
+      updateMask:{fieldPaths:["value"]},
+      currentDocument:{updateTime:approval.version},
+    });
     // Writes apply atomically. Firestore also checks all documents read by this transaction.
     const result=await jsonRequest(http,API+":commit",token,"POST",{transaction,writes}) as
       {commitTime?:string;writeResults?:unknown[]};
     committed=true;
     transaction=null;
     if(!result.commitTime || !Array.isArray(result.writeResults) ||
-       result.writeResults.length!==plan.changed.length){
+       result.writeResults.length!==plan.changed.length+1){
       throw new Error("Firestoreのcommit結果が不完全です。保存された可能性があります。自動再試行しないでください");
     }
-    const after=await readSnapshot(http,token,uid,plan.changed);
+    const [after,afterApproval]=await Promise.all([
+      readSnapshot(http,token,uid,plan.changed),
+      readHumanApproval(http,token,uid,approvalId),
+    ]);
     verifyPlannedValues(after.store,plan);
+    if(afterApproval.value.status!=="consumed"||
+       afterApproval.value.consumedAt!==consumedAt){
+      throw new Error("承認の消費状態を再取得できません");
+    }
     return {ok:true,mode:"applied",state:"verified",verified:plan.changed,
       commit_time:result.commitTime,changes:plan.steps.map(visibleStep),
       note:"更新対象の文書を保存後に再取得して一致を確認しました"};
