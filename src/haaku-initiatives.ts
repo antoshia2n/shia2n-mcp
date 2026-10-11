@@ -1,0 +1,283 @@
+/**
+ * shia2n-mcp / src/haaku-initiatives.ts / 新設（2026-10-11 v1.9.0 開発部）
+ *
+ * haAku の「取り組み」（2026 年の 13 の取り組み）の正本。
+ * 依頼：https://www.notion.so/3f69c6c1c43981078ffddb4e003925ee（統括 2026-10-11 20:05：戦略とは別の文書に持つ）
+ *
+ * 置き場：users/{uid}/app_data/os_initiatives_v1（1 文書）
+ *   { schemaVersion: 1, records: [{ id: "initiative_01", initiativeNo: "01", revisions: [版, …] }], updatedAt }
+ *   版：{ id, number, savedAt, requestId, source, reason, name, stage, overview,
+ *         ideals, conditions, kpis, approaches, plans, obstacles（どれも [{ text, theme }]・theme は空を許す）,
+ *         progress, linkedMilestoneIds, linkedKpiIds }
+ *
+ * 書き込みは戦略と同じ承認の流れ（preview → haAku の画面で本人が承認 → apply）だけ。
+ * 改訂のたびに版が 1 つ増え、2 版目からは理由が要る。中身が同じなら断る。
+ *
+ * 結び（マイルストーン・KPI）は取り組みの側に持つ。
+ *   マイルストーン（os_roadmap_v1）と KPI（os_kpis）の文書は haAku の画面も書くため、
+ *   そちらに新しい欄を足すと、画面が知らない欄を落としたときに結びが黙って消える。取り組みの側なら消えない。
+ *   マイルストーン・KPI から取り組みの番号を引くのは、読む道具（haAku__get_initiatives）が逆引きで返す。
+ */
+import type { Change } from "./haaku-ai-changes.js";
+
+type Obj = Record<string, unknown>;
+type Item = Record<string, unknown>;
+export type InitiativeEntry = { text: string; theme: string };
+export type InitiativeStepView = {
+  kind: "initiative"; action: "create" | "update";
+  id: string; title: string; before: Obj | null; after: Obj;
+};
+
+export const INITIATIVES_KEY = "os_initiatives_v1";
+export const STAGES = ["整える", "時間を作る", "構築する"] as const;
+export const LIST_FIELDS = ["ideals", "conditions", "kpis", "approaches", "plans", "obstacles"] as const;
+const LIST_LABEL: Record<string, string> = {
+  ideals: "理想", conditions: "条件", kpis: "KPI", approaches: "アプローチ", plans: "計画", obstacles: "障害対策",
+};
+const TEXT_LIMIT: Record<string, number> = { name: 90, overview: 1200, progress: 300, reason: 600 };
+const MAX_ITEMS = 40;
+const MAX_TEXT = 600;
+const MAX_THEME = 80;
+const MAX_LINKS = 30;
+const NO = /^(0[1-9]|[1-9][0-9])$/;
+const REF = /^[A-Za-z0-9_-]{1,180}$/;
+
+const str = (v: unknown) => typeof v === "string" ? v.trim() : "";
+const bytes = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).byteLength;
+
+export function initiativeId(no: string): string {
+  return "initiative_" + no;
+}
+
+/** 文書を読む。無ければ空。形が違えば止める（空とみなさない） */
+export function initiativeStore(value: unknown): Obj {
+  if (value === null || value === undefined) return { schemaVersion: 1, records: [] };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("取り組みの保存形式が不正です。変更を停止しました");
+  }
+  const out = value as Obj;
+  if (out.schemaVersion !== 1) throw new Error("取り組みの版が不一致です");
+  const records = out.records;
+  if (!Array.isArray(records) || records.some(r => !r || typeof r !== "object" || Array.isArray(r))) {
+    throw new Error("取り組みの一覧を確認できません。変更を停止しました");
+  }
+  const rows = records as Item[];
+  if (new Set(rows.map(r => r.id)).size !== rows.length ||
+      rows.some(r => !NO.test(str(r.initiativeNo)) || r.id !== initiativeId(str(r.initiativeNo)) ||
+        !Array.isArray(r.revisions) || !r.revisions.length)) {
+    throw new Error("取り組みの番号または版の並びが不正です");
+  }
+  return { ...out, records: rows };
+}
+
+/** 一覧の欄（JSON の文字列）を [{ text, theme }] に直す。文字だけの要素はテーマ無しとして受ける */
+export function parseEntries(raw: string, field: string): InitiativeEntry[] {
+  const label = LIST_LABEL[field] ?? field;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); }
+  catch { throw new Error(label + "は JSON の配列（[{\"text\":\"…\",\"theme\":\"…\"}]）で渡してください"); }
+  if (!Array.isArray(parsed)) throw new Error(label + "は配列で渡してください");
+  if (parsed.length > MAX_ITEMS) throw new Error(label + "は " + MAX_ITEMS + " 項目までです");
+  return parsed.map((v, i): InitiativeEntry => {
+    const o = typeof v === "string" ? { text: v } : v;
+    if (!o || typeof o !== "object" || Array.isArray(o) ||
+        Object.keys(o).some(k => k !== "text" && k !== "theme")) {
+      throw new Error(label + "の " + (i + 1) + " 項目めは { text, theme } の形にしてください");
+    }
+    const text = str((o as Obj).text), theme = str((o as Obj).theme);
+    if (!text) throw new Error(label + "の " + (i + 1) + " 項目めが空です");
+    if (text.length > MAX_TEXT) throw new Error(label + "の " + (i + 1) + " 項目めは " + MAX_TEXT + " 文字以内にしてください");
+    if (theme.length > MAX_THEME) throw new Error(label + "の " + (i + 1) + " 項目めのテーマは " + MAX_THEME + " 文字以内にしてください");
+    return { text, theme };
+  });
+}
+
+function parseIds(raw: string, label: string): string[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); }
+  catch { throw new Error(label + "は JSON の配列（[\"id\", …]）で渡してください"); }
+  if (!Array.isArray(parsed) || parsed.some(v => typeof v !== "string" || !REF.test(v))) {
+    throw new Error(label + "は ID の文字列の配列で渡してください");
+  }
+  if (parsed.length > MAX_LINKS) throw new Error(label + "は " + MAX_LINKS + " 件までです");
+  if (new Set(parsed).size !== parsed.length) throw new Error(label + "に同じ ID が重複しています");
+  return parsed as string[];
+}
+
+function entriesText(list: unknown): string {
+  if (!Array.isArray(list)) return "";
+  return (list as InitiativeEntry[]).map(e => "・" + (e.theme ? "［" + e.theme + "］" : "") + e.text).join("\n");
+}
+
+function linksText(ids: unknown, rows: Item[]): string {
+  if (!Array.isArray(ids)) return "";
+  return (ids as string[]).map(id => {
+    const row = rows.find(r => r.id === id);
+    return (row ? str(row.title) : "（見つからない）") + "（" + id + "）";
+  }).join("\n");
+}
+
+/** 承認の画面で読める形（一覧は 1 行ずつの文字、結びは名前つき）に直す。保存する中身は配列のまま */
+function display(rev: Obj | null, milestones: Item[], kpis: Item[]): Obj | null {
+  if (!rev) return null;
+  const out: Obj = { ...rev };
+  for (const f of LIST_FIELDS) out[f] = entriesText(rev[f]);
+  out.linkedMilestoneIds = linksText(rev.linkedMilestoneIds, milestones);
+  out.linkedKpiIds = linksText(rev.linkedKpiIds, kpis);
+  return out;
+}
+
+function sameContent(a: Obj, b: Obj): boolean {
+  const keys = ["name", "stage", "overview", "progress", ...LIST_FIELDS, "linkedMilestoneIds", "linkedKpiIds"];
+  return keys.every(k => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null));
+}
+
+/** 取り組み 1 件を新規または改訂する（state を書き換える）。マイルストーンと KPI は読むだけ */
+export function writeInitiative(
+  state: Record<string, unknown>, op: Change, at: string, milestones: Item[], kpis: Item[],
+): InitiativeStepView {
+  const doc = initiativeStore(state[INITIATIVES_KEY]);
+  const records = doc.records as Item[];
+  const no = str(op.data.initiativeNo);
+  if (!NO.test(no)) throw new Error("取り組みの番号は 01〜99 の 2 桁で渡してください");
+  const id = initiativeId(no);
+  const current = records.find(r => r.id === id);
+  const revisions = (current?.revisions || []) as Obj[];
+  if (records.some(r => (r.revisions as Obj[]).some(rev => rev.id === "ai_revision_" + op.request_id))) {
+    throw new Error("同じ操作IDが取り組みの版に既に存在します");
+  }
+  const previous = revisions.length ? revisions[revisions.length - 1] : null;
+
+  const next: Obj = {};
+  for (const [key, max] of Object.entries(TEXT_LIMIT)) {
+    if (key === "reason") continue;
+    const v = op.data[key] !== undefined ? str(op.data[key]) : str(previous?.[key]);
+    if (v.length > max) throw new Error(key + " は " + max + " 文字以内にしてください");
+    next[key] = v;
+  }
+  next.stage = op.data.stage !== undefined ? str(op.data.stage) : str(previous?.stage);
+  for (const f of LIST_FIELDS) {
+    next[f] = op.data[f] !== undefined ? parseEntries(op.data[f], f) : (previous?.[f] ?? []);
+  }
+  next.linkedMilestoneIds = op.data.linkedMilestoneIds !== undefined ?
+    parseIds(op.data.linkedMilestoneIds, "結ぶマイルストーン") : (previous?.linkedMilestoneIds ?? []);
+  next.linkedKpiIds = op.data.linkedKpiIds !== undefined ?
+    parseIds(op.data.linkedKpiIds, "結ぶ KPI") : (previous?.linkedKpiIds ?? []);
+
+  if (!next.name) throw new Error("取り組みの名前が必要です");
+  if (!(STAGES as readonly string[]).includes(str(next.stage))) {
+    throw new Error("段階は「整える」「時間を作る」「構築する」のどれかにしてください");
+  }
+  for (const mid of next.linkedMilestoneIds as string[]) {
+    if (!milestones.some(m => m.id === mid)) throw new Error("結ぶマイルストーンが見つかりません：" + mid);
+  }
+  for (const kid of next.linkedKpiIds as string[]) {
+    if (!kpis.some(k => k.id === kid)) throw new Error("結ぶ KPI が見つかりません：" + kid);
+  }
+  if (records.some(r => r.id !== id &&
+      str(((r.revisions as Obj[]).at(-1))?.name).toLocaleLowerCase("ja") === str(next.name).toLocaleLowerCase("ja"))) {
+    throw new Error("同じ名前の取り組みが別の番号で登録済みです");
+  }
+  const reason = str(op.data.reason);
+  if (reason.length > TEXT_LIMIT.reason) throw new Error("理由は " + TEXT_LIMIT.reason + " 文字以内にしてください");
+  if (previous) {
+    // 前の理由を使い回さない。改訂のたびに新しい理由が要る
+    if (!reason) throw new Error("取り組みの改訂には理由が必要です");
+    if (sameContent(previous, next)) throw new Error("前の版と中身が変わっていません");
+  }
+
+  const revision: Obj = {
+    id: "ai_revision_" + op.request_id, number: revisions.length + 1, savedAt: at,
+    requestId: op.request_id, source: "approved_mcp_change",
+    reason: previous ? reason : (reason || "初回記録"),
+    ...next,
+  };
+  const record = current ? { ...current, revisions: [...revisions, revision] } :
+    { id, initiativeNo: no, revisions: [revision] };
+  doc.records = (current ? records.map(r => r.id === id ? record : r) : [...records, record])
+    .sort((a, b) => str((a as Item).initiativeNo).localeCompare(str((b as Item).initiativeNo)));
+  doc.updatedAt = at;
+  if (bytes(doc) > 700000) throw new Error("取り組みの保存容量が上限に達しました");
+  state[INITIATIVES_KEY] = doc;
+  return {
+    kind: "initiative", action: current ? "update" : "create", id,
+    title: no + " " + str(next.name),
+    before: display(previous, milestones, kpis), after: display(revision, milestones, kpis) as Obj,
+  };
+}
+
+/** 読む道具の中身。13 件の現在の版と結び、逆引き（マイルストーン・KPI → 取り組みの番号）を返す */
+export function buildInitiativesView(
+  rawStore: unknown, milestones: Item[], kpis: Item[], opts: { initiativeNo?: string; includeHistory?: boolean } = {},
+) {
+  if (rawStore === null) {
+    return { ok: true, readonly: true, state: "not_configured", count: 0, initiatives: [],
+      note: "取り組みはまだ 1 件も登録されていません（文書 os_initiatives_v1 が無い）" };
+  }
+  const doc = initiativeStore(rawStore);
+  let rows = doc.records as Item[];
+  if (opts.initiativeNo !== undefined) {
+    if (!NO.test(opts.initiativeNo)) throw new Error("initiative_no は 01〜99 の 2 桁で渡してください");
+    rows = rows.filter(r => r.initiativeNo === opts.initiativeNo);
+    if (!rows.length) throw new Error("取り組み " + opts.initiativeNo + " は登録されていません");
+  }
+  const milestoneLinks: Record<string, string[]> = {};
+  const kpiLinks: Record<string, string[]> = {};
+  for (const r of doc.records as Item[]) {
+    const last = (r.revisions as Obj[]).at(-1) as Obj;
+    for (const mid of (last.linkedMilestoneIds as string[] | undefined) ?? []) (milestoneLinks[mid] ??= []).push(str(r.initiativeNo));
+    for (const kid of (last.linkedKpiIds as string[] | undefined) ?? []) (kpiLinks[kid] ??= []).push(str(r.initiativeNo));
+  }
+  const content = (rev: Obj) => ({
+    name: rev.name, stage: rev.stage, overview: rev.overview,
+    ideals: rev.ideals, conditions: rev.conditions, kpis: rev.kpis,
+    approaches: rev.approaches, plans: rev.plans, obstacles: rev.obstacles, progress: rev.progress,
+  });
+  const initiatives = rows.map(r => {
+    const revs = r.revisions as Obj[];
+    const last = revs.at(-1) as Obj;
+    return {
+      initiative_no: r.initiativeNo, id: r.id,
+      version: last.number, saved_at: last.savedAt, last_reason: last.reason,
+      ...content(last),
+      linked_milestones: ((last.linkedMilestoneIds as string[] | undefined) ?? []).map(mid => {
+        const m = milestones.find(x => x.id === mid);
+        return m ? { id: mid, title: m.title, status: m.status, dueDate: m.dueDate ?? "" } : { id: mid, missing: true };
+      }),
+      linked_kpis: ((last.linkedKpiIds as string[] | undefined) ?? []).map(kid => {
+        const k = kpis.find(x => x.id === kid);
+        return k ? { id: kid, title: k.title, unit: k.unit ?? "", monthlyTarget: k.monthlyTarget ?? null } : { id: kid, missing: true };
+      }),
+      ...(opts.includeHistory ? {
+        history: [...revs].reverse().map(rev => ({
+          version: rev.number, saved_at: rev.savedAt, reason: rev.reason, ...content(rev),
+          linkedMilestoneIds: rev.linkedMilestoneIds ?? [], linkedKpiIds: rev.linkedKpiIds ?? [],
+        })),
+      } : {}),
+    };
+  });
+  return {
+    ok: true, readonly: true, state: "ready", count: initiatives.length,
+    total_versions: (doc.records as Item[]).reduce((n, r) => n + (r.revisions as Obj[]).length, 0),
+    initiatives,
+    milestone_links: milestoneLinks,
+    kpi_links: kpiLinks,
+    note: "KPI の今月の実績は haAku__get_kpi_progress で読む。過去の版と理由は include_history: true で返す。",
+  };
+}
+
+/** 書き込みの記録（get_management_write_audit）に載せる行 */
+export function initiativeEvents(raw: unknown): { state: string; items: { request_id: string; kind: string; target_id: string; at: string; title: string; reason: string }[] } {
+  if (raw === null || raw === undefined) return { state: "not_configured", items: [] };
+  const doc = initiativeStore(raw);
+  const items = [];
+  for (const r of doc.records as Item[]) {
+    for (const rev of r.revisions as Obj[]) {
+      if (rev.source === "approved_mcp_change") {
+        items.push({ request_id: str(rev.requestId), kind: "initiative", target_id: str(r.id),
+          at: str(rev.savedAt), title: str(r.initiativeNo) + " " + str(rev.name), reason: str(rev.reason) });
+      }
+    }
+  }
+  return { state: "ready", items };
+}

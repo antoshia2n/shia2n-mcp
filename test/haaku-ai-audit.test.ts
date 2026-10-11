@@ -29,7 +29,8 @@ const values=buildManagementChangePlan(changes,{
 test("MCPから書いた更新は3種類の既存履歴に記録され、1回で件数を取れる",()=>{
   const result=managementWriteAudit(values,week);
   assert.equal(result.ok,true);
-  assert.deepEqual(result.counts,{roadmap:2,strategies:1,weekly:1,total:4});
+  // v1.9.0：取り組みの件数（initiatives）が並びに加わった。この束に取り組みは無いので 0
+  assert.deepEqual(result.counts,{roadmap:2,strategies:1,initiatives:0,weekly:1,total:4});
   assert.equal(result.latest.length,4);
   assert.ok(result.latest.every(item=>item.request_id.startsWith("audit-")));
   assert.ok(result.latest.some(item=>item.kind==="strategy"&&item.title==="長期"));

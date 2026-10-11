@@ -10,6 +10,7 @@ import {
   parseHaakuStrategyStore,
   validAsOfDate,
 } from "./haaku-plan-summary.js";
+import { buildInitiativesView } from "./haaku-initiatives.js";
 
 /**
  * Phase 3: haAku が記録した経営の北極星、マイルストーン、
@@ -80,6 +81,33 @@ export function registerHaakuPlanTools(server: McpServer, env: Env): void {
       const raw = await loadHaakuValue(token, uid, "os_strategy_records_v1");
       const strategy = parseHaakuStrategyStore(raw);
       return asMcpTextResult(getHaakuStrategyHistory(strategy, args.record_id));
+    }
+  );
+
+  // v1.9.0：取り組み（13 の取り組み）を読む。書き込みは haAku__preview_management_changes の kind initiative だけ
+  server.tool(
+    "haAku__get_initiatives",
+    "haAkuの取り組み（2026年の13の取り組み）の現在の版を読む。読むだけ。各件の番号・名前・段階・全体像・理想・条件・KPI・アプローチ・計画・障害対策（項目ごとに text と親テーマ theme）・進捗・版の番号・最後の理由と、結ばれたマイルストーン（状態・期限）とKPI（単位・月の目標）を返す。"+
+    "milestone_links・kpi_links は逆引き（マイルストーンID・KPIID → 取り組みの番号）。initiative_no で1件に絞り、include_history: true で過去の版と理由を新しい順に返す。"+
+    "未登録なら state:not_configured、取得エラーは停止（0件と区別）。KPIの今月の実績は haAku__get_kpi_progress を使う。",
+    {
+      initiative_no: z.string().optional().describe("取り組みの番号（01〜99 の 2 桁）。省くと全件"),
+      include_history: z.boolean().optional().describe("true で過去の版と理由も返す。省くと現在の版だけ"),
+    },
+    async args => {
+      const uid = requireFirestoreEnv(env);
+      const token = await getFirestoreToken(env);
+      const [rawInitiatives, rawRoadmap, rawKpis] = await Promise.all([
+        loadHaakuValue(token, uid, "os_initiatives_v1"),
+        loadHaakuValue(token, uid, "os_roadmap_v1"),
+        loadHaakuValue(token, uid, "os_kpis"),
+      ]);
+      const milestones = rawRoadmap && typeof rawRoadmap === "object" && Array.isArray((rawRoadmap as { milestones?: unknown }).milestones)
+        ? (rawRoadmap as { milestones: Record<string, unknown>[] }).milestones : [];
+      const kpis = Array.isArray(rawKpis) ? rawKpis as Record<string, unknown>[] : [];
+      return asMcpTextResult(buildInitiativesView(rawInitiatives, milestones, kpis, {
+        initiativeNo: args.initiative_no, includeHistory: args.include_history,
+      }));
     }
   );
 }
