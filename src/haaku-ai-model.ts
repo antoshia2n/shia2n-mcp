@@ -162,7 +162,8 @@ function writeStrategy(state: Stored, op: Change, at: string): StepView {
     throw new Error("同名の戦略が登録済みです。IDで改訂してください");
   }
   if (previous) {
-    if (!values.reason) throw new Error("戦略改訂には理由が必要です");
+    // 以前の理由を使い回して改訂することを禁止。毎回、新しく明示された理由が必要。
+    if (!str(op.data.reason)) throw new Error("戦略改訂には理由が必要です");
     if (Object.keys(REQUIRED_STRATEGY).filter(k=>k!=="reason").every(k=>
       str(previous[k])===values[k])) throw new Error("前の戦略と内容が変わっていません");
     if (str(previous.horizon)!==values.horizon && records.some(row=>row.id!==id && 
