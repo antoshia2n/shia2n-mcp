@@ -50,6 +50,8 @@ export const KNOWN_JOBS = [
   // 2026-10-04 追加：UTAGE の個別相談の予約者をコンサルマネージャーへ取り込む処理（JST 08:00）。
   // 9/13 から毎朝動いていたが記録を残しておらず、動いたかを引けなかった。
   "consult_intake",
+  // 2026-10-12 追加：haAku のホームの率（取り組みとステップの行動と成果）を毎週日曜の夜に残す処理（JST 23:30）。
+  "haaku_weekly",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];
