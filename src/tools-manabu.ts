@@ -193,7 +193,7 @@ export function registerManabuTools(server: McpServer, env: Env): void {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
           apikey: env.SUPABASE_SERVICE_ROLE_KEY,
           Prefer: "return=representation",
         },

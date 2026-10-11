@@ -66,7 +66,7 @@ async function sbGet(env: Env, path: string): Promise<Row[]> {
   const res = await fetch(`${env.SUPABASE_URL}/rest/v1${path}`, {
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
     },
   });
   if (!res.ok) throw new Error(`Supabase から読めません（${res.status}）：${await res.text()}`);
@@ -78,7 +78,7 @@ async function sbPatch(env: Env, path: string, body: Row): Promise<void> {
     method: "PATCH",
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
       "Content-Type": "application/json",
       Prefer: "return=minimal",
     },
@@ -94,7 +94,7 @@ async function sbUpsert(env: Env, path: string, rows: Row[]): Promise<void> {
     method: "POST",
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
       "Content-Type": "application/json",
       Prefer: "resolution=merge-duplicates,return=minimal",
     },

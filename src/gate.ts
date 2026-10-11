@@ -65,7 +65,7 @@ async function sbGet(env: Env, path: string): Promise<Row[]> {
   const res = await fetch(`${env.SUPABASE_URL}/rest/v1${path}`, {
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
       "Content-Type": "application/json",
     },
   });
@@ -80,7 +80,7 @@ async function sbPatch(env: Env, path: string, body: Row): Promise<Row[]> {
     method: "PATCH",
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
       "Content-Type": "application/json",
       Prefer: "return=representation",
     },
@@ -97,7 +97,7 @@ async function sbInsert(env: Env, table: string, body: Row): Promise<void> {
     method: "POST",
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
       "Content-Type": "application/json",
       Prefer: "return=minimal",
     },
@@ -480,7 +480,7 @@ export async function handleGateDiag(env: Env): Promise<Response> {
       const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${t}?select=id&limit=1`, {
         headers: {
           apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+          ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}),
           Prefer: "count=exact",
           Range: "0-0",
         },
