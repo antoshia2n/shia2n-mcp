@@ -129,7 +129,7 @@ function writeStrategy(state: Stored, op: Change, at: string): StepView {
   if (op.data.recordId && !current) throw new Error("更新する戦略IDが存在しません");
   if (!op.data.recordId && current) throw new Error("戦略は既に登録済みです");
   const revisions = (current?.revisions || []) as Obj[];
-  if (records.some(row=>(row.revisions as Obj[]).some(rev=>rev.id==="revision_"+op.request_id))) {
+  if (records.some(row=>(row.revisions as Obj[]).some(rev=>rev.id==="ai_revision_"+op.request_id))) {
     throw new Error("同じ操作IDが戦略履歴に既に存在します");
   }
   const previous = revisions.length ? revisions[revisions.length-1] : null;
@@ -172,8 +172,9 @@ function writeStrategy(state: Stored, op: Change, at: string): StepView {
       throw new Error("下位の戦略が紐づくため期間区分を変更できません");
     }
   }
-  const revision = { id: "revision_"+op.request_id, number: revisions.length+1,
-    savedAt: at, ...values, reason: previous ? values.reason : (values.reason||"初回記録") };
+  const revision = { id: "ai_revision_"+op.request_id, number: revisions.length+1,
+    savedAt: at, requestId: op.request_id, source: "approved_mcp_change",
+    ...values, reason: previous ? values.reason : (values.reason||"初回記録") };
   const record = current ? { ...current, revisions: [...revisions,revision] } :
     { id, revisions: [revision] };
   doc.records = current ? records.map(r=>r.id===id?record:r) : [...records,record];
@@ -280,7 +281,7 @@ function writeWeekly(state:Stored,op:Change,at:string):StepView{
   if(!op.data.id&&old)throw new Error("同じ操作IDの週間コミットは登録済みです");
   if(!old&&commitments.length>=3)throw new Error("週間コミットは最大3件です");
   if(history.length>=MAX_HISTORY)throw new Error("週間コミット履歴の上限に達しました");
-  if(history.some(h=>h.id==="change_"+op.request_id))throw new Error("同じ操作IDが週間履歴に既にあります");
+  if(history.some(h=>h.id==="ai_change_"+op.request_id))throw new Error("同じ操作IDが週間履歴に既にあります");
   const fields:Record<string,string>={};
   for(const [k,max] of Object.entries({
     title:140,criterion:600,milestoneId:180,status:16,evidence:1000,note:600,
@@ -303,7 +304,8 @@ function writeWeekly(state:Stored,op:Change,at:string):StepView{
   if(changed&&!reason)throw new Error("週間コミットの計画変更には理由が必要です");
   if(old&&Object.keys(fields).every(k=>str(old[k])===fields[k]))throw new Error("週間コミットに変更がありません");
   const candidate:Item={...old,id,...fields,createdAt:old?.createdAt??at,updatedAt:at};
-  const nextHistory={id:"change_"+op.request_id,commitmentId:id,at,
+  const nextHistory={id:"ai_change_"+op.request_id,requestId:op.request_id,
+    source:"approved_mcp_change",commitmentId:id,at,
     reason:reason||(!old?"今週の成果として登録":"進捗・状況を更新"),
     before:old?snapshot(old):null,after:snapshot(candidate)};
   doc.commitments=old?commitments.map(c=>c.id===id?candidate:c):[...commitments,candidate];
