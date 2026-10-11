@@ -531,6 +531,7 @@ import { registerRuminPlanTools } from "./tools-rumin-plan.js";
 import { registerRuminDocTools } from "./tools-rumin-doc.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
+import { handleHaakuHumanApproval } from "./haaku-human-approval.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
 import { registerManabuSeminarTools, putSeminar, type PutSeminarArgs } from "./tools-manabu-seminar.js";
@@ -758,6 +759,12 @@ const oauthProvider = new OAuthProvider({
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    // Browser approval is independent from MCP OAuth and its AI-controlled tool args.
+    // Handle OPTIONS here as well: strict origin rather than the gateway-wide CORS '*'.
+    if (url.pathname.startsWith("/haaku/approvals/")) {
+      return handleHaakuHumanApproval(request, env);
+    }
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
