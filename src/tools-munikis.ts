@@ -15,6 +15,7 @@ import { fetchMunikisContext } from "./munikis-client.js";
 import { readAllRuns, runAndRecord } from "./cron-log.js";
 import { runBackupSlot, resetBackupProgress } from "./cron-backup.js";
 import type { SlotResult } from "./cron-backup.js";
+import { handleHaakuFill } from "./cron-haaku-fill.js";
 import type { Env } from "./index.js";
 
 export function registerMunikisTools(server: McpServer, env: Env): void {
@@ -98,6 +99,30 @@ export function registerMunikisTools(server: McpServer, env: Env): void {
               2
             ),
           },
+        ],
+      };
+    }
+  );
+
+  // 2026-10-11 v1.8.0：把握くんの目標欄 2 本の夜の書き込み（JST 03:30）を手で 1 回動かす口。
+  // 数え方を替えた日に、翌朝を待たずに入った値を確かめるため。記録は自動と同じ haaku_fill に残る。
+  server.tool(
+    "haAku__fill_now",
+    "把握くんの目標欄 2 本（着金・しあらぼ）への夜の書き込み（JST 03:30）を、手で 1 回動かす。書く道具。自動と同じ処理・同じ数え方（着金＝売上管理の当月の確定のうち X広告収益・メンシプ・しあらぼ新規・しあらぼ継続の合計を万円に、しあらぼ＝売上管理の当月の契約の行のうちしあらぼ新規・継続の人数）。結果は recorded（記録 haaku_fill の最新）と GET /diag の last_runs.haaku_fill に出る。返り値: { recorded, thrown }",
+    {
+      confirm: z.literal("yes").describe("実行する場合は yes を指定する（取り違えを防ぐための確認）"),
+    },
+    async () => {
+      let thrown: string | null = null;
+      try {
+        await runAndRecord(env, "haaku_fill", async () => await handleHaakuFill(env));
+      } catch (error) {
+        thrown = error instanceof Error ? error.message : String(error);
+      }
+      const runs = await readAllRuns(env);
+      return {
+        content: [
+          { type: "text", text: JSON.stringify({ recorded: runs.haaku_fill?.[0] ?? null, thrown }, null, 2) },
         ],
       };
     }

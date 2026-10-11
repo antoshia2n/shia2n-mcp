@@ -514,6 +514,7 @@
  * v1.6.3（2026-10-10 開発部）：db__impact が非公開のリポジトリを読む鍵を GITHUB_READ_TOKEN（読むだけ・全リポジトリ）に分けた。無ければ GITHUB_TOKEN で試す。/diag に有無を出す。設定の追加 1 個（Naoki が入れる）。
  * v1.6.4（2026-10-10 開発部）：db__impact の外への呼び出しの頭打ちを 45 から 120 に上げた（有料の枠・非公開 18 本を読み切るため）。src/tools-impact.ts の MAX_OUTBOUND だけ。
  * v1.7.0（2026-10-11 開発部）：github__open_pr を直した。① 上げたファイルごとに sha256 とバイト数を返す（手元の sha256sum と比べ、枝を取り直さずに一致を確かめるため）② add_to_branch: true で既にある claude/ の枝にコミットを 1 つ積み、開いているプルリクを返す（出したあとの直しを同じプルリクに足し、Merge を 1 回で済ませるため・強制の書き換えはしない）。計算は src/github-core.ts・試験は test/github-core.test.ts。設定の追加 0 個。
+ * v1.8.0（2026-10-11 開発部）：把握くんの目標欄 2 本の夜の書き込み（JST 03:30・haaku_fill）の数え方を替えた（統括の判断）。着金＝当月の確定のうち X広告収益・メンシプ・しあらぼ新規・しあらぼ継続の合計（CW案件を外す）、しあらぼ＝売上管理の当月の契約の行のうちしあらぼ新規・継続の人数（しあらぼ管理の生徒数から替える）。当月は日本の時刻で決める。数え方は src/haaku-goal-count.ts・試験は test/haaku-goal-count.test.ts。手で 1 回動かす道具 haAku__fill_now を足した（記録は自動と同じ haaku_fill）。設定の追加 0 個。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
