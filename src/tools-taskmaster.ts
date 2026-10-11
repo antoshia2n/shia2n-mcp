@@ -8,6 +8,8 @@ import {
   handleTaskmasterCreateProject,
   handleTaskmasterDeleteProject,
 } from "./taskmaster.js";
+import { getFirestoreToken } from "./taskmaster.js";
+import { readAllTasks, summarizeTasks } from "./taskmaster-census.js";
 
 /**
  * TaskMaster ツールを登録する。
@@ -18,6 +20,21 @@ import {
  *   依頼書：de27238b-8526-4529-9e7c-a26667d506e4
  */
 export function registerTaskmasterTools(server: McpServer, env: Env): void {
+  // v1.9.1：完了したタスクも含めて数だけを返す（haAku のホームの「行動の率」が出せるかを確かめるため）
+  server.tool(
+    "taskmaster__census",
+    "TaskMasterのタスクを完了したものも含めて全部読み、数だけを返す。読むだけ・題名やメモは返さない。置き場（layout：v2 は1本ずつの tm_tasks）・総数・完了の印 true/false の数・アーカイブの数・終わった日（doneAt）が入っている完了の数と、最初と最後の日・月ごとの完了の数・status の値ごとの数・完了したタスクが持つ欄の名前と数を返す。読めなければ止める（0件と区別）。",
+    {},
+    async () => {
+      if (!env.NAOKI_UID || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
+        throw new Error("TaskMaster の読み取り設定がありません（NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY）");
+      }
+      const token = await getFirestoreToken(env);
+      const { layout, items, truncated } = await readAllTasks(token, env.NAOKI_UID);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true, readonly: true, layout, truncated, ...summarizeTasks(items) }, null, 2) }] };
+    }
+  );
+
   server.tool(
     "taskmaster__list_tasks",
     "TaskMasterに登録されているNaokiの未完了タスクとプロジェクト一覧を取得する。archived:false かつ completed:false のみ返す。秘書Claudeが毎朝起動時に呼び出す。戻り値は { tasks: [{id, title, status, priority, deadline, groupId, projectId}], projects: [{id, title, status, endDate}] }。",
