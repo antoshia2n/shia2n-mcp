@@ -15,7 +15,7 @@ type Http = typeof fetch;
 
 function fullName(uid:string,key:string):string {
   if(!/^[A-Za-z0-9_-]{4,180}$/.test(uid) ||
-    !/^os_(?:roadmap_v1|strategy_records_v1|weekly_commits_v1_\d{4}-\d{2}-\d{2})$/.test(key)) {
+    !/^os_(?:roadmap_v1|strategy_records_v1|initiatives_v1|kpis|weekly_commits_v1_\d{4}-\d{2}-\d{2})$/.test(key)) {
     throw new Error("Firestoreの保存先が許可されたhaAkuの文書ではありません");
   }
   return DB + "/documents/users/" + uid + "/app_data/" + key;

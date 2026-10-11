@@ -39,10 +39,13 @@ export function registerHaakuWriteTools(server: McpServer, env: Env): void {
     "本人確認用の承認申請文書は別途1件作る。approval_urlをhaAkuにログインした本人が開いて承認する。"+
     "更新対象はdata.recordId（戦略）またはdata.id（他）。省略すると新規作成。"+
     "新規IDは種類+request_idから決まり、同じchange set内の参照先として利用できる。"+
-    "week_startは週間コミットのみ、月曜日の日付。現行Web画面と同じ保存欄を用い、別台帳は作らない。",
+    "week_startは週間コミットのみ、月曜日の日付。現行Web画面と同じ保存欄を用い、別台帳は作らない。"+
+    "取り組み（kind:'initiative'・2026年の13の取り組み）は data.initiativeNo（01〜99）で特定し、無ければ新規・あれば改訂（版が1つ増える。改訂には reason が必要。省いた欄は前の版のまま）。"+
+    "欄：initiativeNo・name・stage（整える／時間を作る／構築する）・overview（全体像）・ideals・conditions・kpis・approaches・plans・obstacles（この6つはJSONの文字列で [{\"text\":\"本文\",\"theme\":\"親テーマ（任意）\"}]・40項目まで）・"+
+    "progress（進捗・空可）・linkedMilestoneIds・linkedKpiIds（結ぶマイルストーンとKPIのIDの配列をJSONの文字列で・存在しないIDは断る）・reason。",
     {
       changes_json: z.string().min(2).max(45000).describe(
-        "JSON配列。各要素{kind:'strategy|phase|milestone|weekly',request_id:'重複しない10〜70文字のID',data:{...},week_start?:'YYYY-MM-DD'}。"+
+        "JSON配列。各要素{kind:'strategy|phase|milestone|weekly|initiative',request_id:'重複しない10〜70文字のID',data:{...},week_start?:'YYYY-MM-DD'}。"+
         "最大12件。未知の欄や型は拒否。例："+CHANGE_EXAMPLE
       ),
     },
@@ -86,7 +89,7 @@ export function registerHaakuWriteTools(server: McpServer, env: Env): void {
   );
   server.tool(
     "haAku__get_management_write_audit",
-    "AIがhaAkuの戦略・フェーズ・マイルストーン・週間コミットへ承認付きで保存した記録を取得する。"+
+    "AIがhaAkuの戦略・取り組み・フェーズ・マイルストーン・週間コミットへ承認付きで保存した記録を取得する。"+
     "確認した対象ID・操作時刻・改訂理由と件数を返す読み取り専用の診断口。"+
     "週間コミットはweek_start（月曜日）を指定したときだけ、その週の履歴を含める。"+
     "未登録と取得失敗を区別する。ブラウザから手作業で変更したものはAIの更新件数へ含めない。",
@@ -98,7 +101,7 @@ export function registerHaakuWriteTools(server: McpServer, env: Env): void {
     async args => {
       if(args.week_start)assertWeekStart(args.week_start);
       const uid=uidFor(env),token=await getFirestoreToken(env);
-      const keys=["os_roadmap_v1","os_strategy_records_v1",
+      const keys=["os_roadmap_v1","os_strategy_records_v1","os_initiatives_v1",
         ...(args.week_start?["os_weekly_commits_v1_"+args.week_start]:[])];
       const snap=await readSnapshot(fetch,token,uid,keys);
       return asMcpTextResult(managementWriteAudit(snap.store,args.week_start));

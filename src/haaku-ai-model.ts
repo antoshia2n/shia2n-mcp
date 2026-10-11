@@ -1,6 +1,7 @@
 // haAkuの現行Web UIの保存形式を尊重するMCP用モデル。
 // 1件でも無効なら変更全体を拒否。元データの配列・未知フィールドは削除しない。
 import { type Change, newTargetId, validDate, assertWeekStart, writeKeys, canonical } from "./haaku-ai-changes.js";
+import { writeInitiative } from "./haaku-initiatives.js";
 
 type Obj = Record<string, unknown>;
 type Item = Record<string, unknown>;
@@ -316,6 +317,14 @@ function writeWeekly(state:Stored,op:Change,at:string):StepView{
   return {kind:"weekly",action:old?"update":"create",id,
     title:fields.title,before:old?{...old}:null,after:{...candidate}};
 }
+// v1.9.0：取り組み。マイルストーンは同じ変更の束で先に作ったものも結べる（state の今の値を渡す）。KPI は読むだけ
+function writeInitiativeStep(state:Stored,op:Change,at:string):StepView{
+  const road=roadmap(state.os_roadmap_v1);
+  const rawKpis=state.os_kpis??null;
+  if(rawKpis!==null&&!Array.isArray(rawKpis))throw new Error("KPIの保存形式が不正です。変更を停止しました");
+  const kpis=rawKpis===null?[]:list(rawKpis,"KPI");
+  return writeInitiative(state,op,at,road.milestones as Item[],kpis);
+}
 export function buildManagementChangePlan(
   operations:Change[], stored:Stored, at:string,
 ):ChangePlan {
@@ -324,6 +333,7 @@ export function buildManagementChangePlan(
   // 全ての入力を検証してから、変更された文書の値を組み立てる。まだ外部書き込みは行わない。
   for(const op of operations){
     const row=op.kind==="strategy" ? writeStrategy(state,op,at) :
+      op.kind==="initiative" ? writeInitiativeStep(state,op,at) :
       op.kind==="phase" ? writePhase(state,op,at) :
       op.kind==="milestone" ? writeMilestone(state,op,at) : writeWeekly(state,op,at);
     steps.push(row);

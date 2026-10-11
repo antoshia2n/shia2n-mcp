@@ -1,6 +1,6 @@
 // haAku MCP: one human-approved change set, composed of up to 12 safe edits.
 // Neither MCP tool accepts an arbitrary Firestore document path or field name.
-export type ChangeKind = "strategy" | "phase" | "milestone" | "weekly";
+export type ChangeKind = "strategy" | "phase" | "milestone" | "weekly" | "initiative";
 export type Change = {
   kind: ChangeKind;
   request_id: string;
@@ -16,8 +16,11 @@ const FIELDS: Record<ChangeKind, readonly string[]> = {
     "owner", "projectId", "phaseId", "notionUrl", "dependsOn", "evidence"],
   weekly: ["id", "title", "criterion", "milestoneId", "status",
     "evidence", "note", "changeReason"],
+  // v1.9.0：取り組み（13 の取り組み）。一覧の欄と結びの欄は JSON の文字列で受ける（中身は haaku-initiatives.ts で検める）
+  initiative: ["initiativeNo", "name", "stage", "overview", "ideals", "conditions", "kpis",
+    "approaches", "plans", "obstacles", "progress", "linkedMilestoneIds", "linkedKpiIds", "reason"],
 };
-const KIND: ChangeKind[] = ["strategy", "phase", "milestone", "weekly"];
+const KIND: ChangeKind[] = ["strategy", "phase", "milestone", "weekly", "initiative"];
 const ID = /^[A-Za-z0-9_-]{10,70}$/;
 const REF = /^[A-Za-z0-9_-]{1,180}$/;
 
@@ -32,6 +35,7 @@ export function assertWeekStart(value: string): void {
   }
 }
 export function newTargetId(kind: ChangeKind, requestId: string): string {
+  if (kind === "initiative") throw new Error("取り組みのIDは番号から決まります（initiative_番号）");
   return (kind === "strategy" ? "strategy_" : kind === "weekly" ? "weekly_" :
     kind === "milestone" ? "milestone_" : "phase_") + requestId;
 }
@@ -89,6 +93,8 @@ export function neededKeys(ops: Change[]): string[] {
   for (const op of ops) {
     if (op.kind === "strategy") keys.add("os_strategy_records_v1");
     if (op.kind === "weekly") keys.add("os_weekly_commits_v1_" + op.week_start);
+    // 取り組みは結ぶ先（マイルストーン・KPI）を確かめるため、KPI の文書も読む（書かない）
+    if (op.kind === "initiative") { keys.add("os_initiatives_v1"); keys.add("os_kpis"); }
   }
   return [...keys].sort();
 }
@@ -98,6 +104,7 @@ export function writeKeys(ops: Change[]): string[] {
     if (op.kind === "strategy") keys.add("os_strategy_records_v1");
     if (op.kind === "phase" || op.kind === "milestone") keys.add("os_roadmap_v1");
     if (op.kind === "weekly") keys.add("os_weekly_commits_v1_" + op.week_start);
+    if (op.kind === "initiative") keys.add("os_initiatives_v1");
   }
   return [...keys].sort();
 }

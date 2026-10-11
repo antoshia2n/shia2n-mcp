@@ -2,6 +2,7 @@
 // 0 records (configured) is distinct from no source document (not configured).
 import { assertWeekStart } from "./haaku-ai-changes.js";
 import type { Stored } from "./haaku-ai-model.js";
+import { initiativeEvents } from "./haaku-initiatives.js";
 
 type Dict=Record<string,unknown>;
 const asObject=(raw:unknown,label:string):Dict=>{
@@ -60,10 +61,11 @@ export function managementWriteAudit(stored:Stored,weekStart?:string){
   const strategies=strategyEvents(stored.os_strategy_records_v1??null);
   const weekly=weekStart?weekEvents(stored["os_weekly_commits_v1_"+weekStart]??null,weekStart):
     {state:"not_requested",items:[]};
-  const events=[...roadmap.items,...strategies.items,...weekly.items].sort((a,b)=>b.at.localeCompare(a.at));
+  const initiatives=initiativeEvents(stored.os_initiatives_v1??null);
+  const events=[...roadmap.items,...strategies.items,...initiatives.items,...weekly.items].sort((a,b)=>b.at.localeCompare(a.at));
   return{ok:true,readonly:true,
-    state:{roadmap:roadmap.state,strategies:strategies.state,weekly:weekly.state},
-    counts:{roadmap:roadmap.items.length,strategies:strategies.items.length,weekly:weekly.items.length,total:events.length},
+    state:{roadmap:roadmap.state,strategies:strategies.state,initiatives:initiatives.state,weekly:weekly.state},
+    counts:{roadmap:roadmap.items.length,strategies:strategies.items.length,initiatives:initiatives.items.length,weekly:weekly.items.length,total:events.length},
     latest:events.slice(0,30),
     truncated:events.length>30,
     note:"週次履歴はweek_startで指定した週だけ取得します。ブラウザからの手動変更はAI操作として集計しません。",
