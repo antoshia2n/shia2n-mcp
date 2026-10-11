@@ -517,6 +517,7 @@
  * v1.8.0（2026-10-11 開発部）：把握くんの目標欄 2 本の夜の書き込み（JST 03:30・haaku_fill）の数え方を替えた（統括の判断）。着金＝当月の確定のうち X広告収益・メンシプ・しあらぼ新規・しあらぼ継続の合計（CW案件を外す）、しあらぼ＝売上管理の当月の契約の行のうちしあらぼ新規・継続の人数（しあらぼ管理の生徒数から替える）。当月は日本の時刻で決める。数え方は src/haaku-goal-count.ts・試験は test/haaku-goal-count.test.ts。手で 1 回動かす道具 haAku__fill_now を足した（記録は自動と同じ haaku_fill）。設定の追加 0 個。
  * v1.9.0（2026-10-11 開発部）：haAku に「取り組み」（2026 年の 13 の取り組み）を足した（依頼 https://www.notion.so/3f69c6c1c43981078ffddb4e003925ee）。置き場は戦略とは別の文書 os_initiatives_v1（統括 20:05 の判断）。書き込みは haAku__preview_management_changes / apply_management_changes の kind initiative（既存の承認の流れのまま・番号で特定・改訂のたびに版が上がり 2 版目から理由が要る）。結ぶマイルストーンと KPI は取り組みの側に ID で持つ（画面も書く文書に新しい欄を足さないため）。読む道具 haAku__get_initiatives（現在の版・過去の版と理由・逆引き）。書き込みの記録に取り組みを足した。中身は src/haaku-initiatives.ts・試験は test/haaku-initiatives.test.ts。設定の追加 0 個。
  * v1.9.1（2026-10-11 開発部）：taskmaster__census を足した（読むだけ・数だけ）。完了したタスクも含めて全部読み、完了の印と終わった日（doneAt）が残っているかを返す。haAku のホームの依頼 https://www.notion.so/3f69c6c1c43981b8bb09fa162e38da9b の手順 1 を実物で確かめるため。読み方は src/taskmaster-census.ts（あとでホームの計算も使う）・試験は test/taskmaster-census.test.ts。設定の追加 0 個。
+ * v1.10.0（2026-10-12 開発部）：haAku のホーム（依頼 https://www.notion.so/3f69c6c1c43981b8bb09fa162e38da9b）。タスク → ステップの結びを haAku の側（os_task_links_v1）に持ち、承認なしで書く haAku__link_tasks（外した結びも記録）。読む道具 haAku__get_home（次はこれ・ここが詰まり・ステップと取り組みの行動と成果の率・期限の数）。毎週日曜 JST 23:30 に率を os_progress_weekly_v1 へ残す（記録 haaku_weekly・手で 1 回 haAku__snapshot_progress_now）。計算は src/haaku-home.ts・読み書きは src/haaku-home-store.ts・試験は test/haaku-home.test.ts。設定の追加 0 個。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
@@ -555,6 +556,8 @@ import { handleGateResolve, handleGateAttempts, handleGateDiag } from "./gate.js
 import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
+import { snapshotWeekly } from "./haaku-home-store.js";
+import { getFirestoreToken } from "./taskmaster.js";
 import { handleShiaraboMtgSync } from "./cron-shiarabo-mtg.js";
 import { handleConsultManagerIntake, handleConsultManagerIntakeHttp } from "./cron-consult-manager-intake.js";
 import { runBackupSlot } from "./cron-backup.js";
@@ -977,6 +980,18 @@ export default {
         tasks.push(
           runAndRecord(env, "haaku_fill", async () => {
             return await handleHaakuFill(env);
+          })
+        );
+      }
+
+      // 2026-10-12：haAku のホームの率を毎週残す（日曜の UTC 14:30 = JST 23:30 のみ発火）
+      // 依頼書：https://www.notion.so/3f69c6c1c43981b8bb09fa162e38da9b（要件 4・あとで分析に使う）
+      // 既存の 0,30 の枠に相乗りする。日曜の 23:30 は控え・Zeus・夜の書き込みのどれとも重ならない。
+      if (utcMinute === 30 && utcHour === 14 && scheduledDate.getUTCDay() === 0) {
+        tasks.push(
+          runAndRecord(env, "haaku_weekly", async () => {
+            if (!env.NAOKI_UID) throw new Error("NAOKI_UID がありません");
+            return await snapshotWeekly({ token: await getFirestoreToken(env), uid: env.NAOKI_UID });
           })
         );
       }
