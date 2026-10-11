@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import { registerHaakuPlanTools } from "./tools-haaku-plan.js";
+import { registerHaakuWriteTools } from "./tools-haaku-write.js";
 import type { Env } from "./index.js";
 import { getFirestoreToken, fsGet, fsPatch, toFVal, fromVal, type FVal, type FSDoc } from "./taskmaster.js";
 
@@ -400,6 +401,8 @@ function yesterdayJst(): string {
 export function registerHaakuTools(server: McpServer, env: Env): void {
   // Phase 3: 読み取り専用の経営文脈。既存のKPI・日報の口は変えない。
   registerHaakuPlanTools(server, env);
+  // New human-approved management write path. Existing KPI & daily APIs unchanged.
+  registerHaakuWriteTools(server, env);
 
   // ─── 1. haAku__get_kpi_progress ───────────────────────────────────────────
   server.tool(
