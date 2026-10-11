@@ -516,6 +516,7 @@
  * v1.7.0（2026-10-11 開発部）：github__open_pr を直した。① 上げたファイルごとに sha256 とバイト数を返す（手元の sha256sum と比べ、枝を取り直さずに一致を確かめるため）② add_to_branch: true で既にある claude/ の枝にコミットを 1 つ積み、開いているプルリクを返す（出したあとの直しを同じプルリクに足し、Merge を 1 回で済ませるため・強制の書き換えはしない）。計算は src/github-core.ts・試験は test/github-core.test.ts。設定の追加 0 個。
  * v1.8.0（2026-10-11 開発部）：把握くんの目標欄 2 本の夜の書き込み（JST 03:30・haaku_fill）の数え方を替えた（統括の判断）。着金＝当月の確定のうち X広告収益・メンシプ・しあらぼ新規・しあらぼ継続の合計（CW案件を外す）、しあらぼ＝売上管理の当月の契約の行のうちしあらぼ新規・継続の人数（しあらぼ管理の生徒数から替える）。当月は日本の時刻で決める。数え方は src/haaku-goal-count.ts・試験は test/haaku-goal-count.test.ts。手で 1 回動かす道具 haAku__fill_now を足した（記録は自動と同じ haaku_fill）。設定の追加 0 個。
  * v1.9.0（2026-10-11 開発部）：haAku に「取り組み」（2026 年の 13 の取り組み）を足した（依頼 https://www.notion.so/3f69c6c1c43981078ffddb4e003925ee）。置き場は戦略とは別の文書 os_initiatives_v1（統括 20:05 の判断）。書き込みは haAku__preview_management_changes / apply_management_changes の kind initiative（既存の承認の流れのまま・番号で特定・改訂のたびに版が上がり 2 版目から理由が要る）。結ぶマイルストーンと KPI は取り組みの側に ID で持つ（画面も書く文書に新しい欄を足さないため）。読む道具 haAku__get_initiatives（現在の版・過去の版と理由・逆引き）。書き込みの記録に取り組みを足した。中身は src/haaku-initiatives.ts・試験は test/haaku-initiatives.test.ts。設定の追加 0 個。
+ * v1.9.1（2026-10-11 開発部）：taskmaster__census を足した（読むだけ・数だけ）。完了したタスクも含めて全部読み、完了の印と終わった日（doneAt）が残っているかを返す。haAku のホームの依頼 https://www.notion.so/3f69c6c1c43981b8bb09fa162e38da9b の手順 1 を実物で確かめるため。読み方は src/taskmaster-census.ts（あとでホームの計算も使う）・試験は test/taskmaster-census.test.ts。設定の追加 0 個。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
