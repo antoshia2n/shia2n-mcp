@@ -206,6 +206,47 @@ export function writeInitiative(
   };
 }
 
+/**
+ * v1.11.0：マイルストーンを消すとき、それを結んでいる取り組みから外す（取り組みごとに版を 1 つ上げる）。
+ * 結んでいる取り組みが無ければ何もしない（文書も書き換えない）。milestones は消す前の一覧（承認の画面で名前を出すため）
+ */
+export function unlinkMilestone(
+  state: Record<string, unknown>, milestoneId: string, milestoneTitle: string,
+  requestId: string, reason: string, at: string, milestones: Item[], kpis: Item[],
+): InitiativeStepView[] {
+  const raw = state[INITIATIVES_KEY];
+  if (raw === null || raw === undefined) return [];
+  const doc = initiativeStore(raw);
+  const records = doc.records as Item[];
+  const views: InitiativeStepView[] = [];
+  const next = records.map(r => {
+    const revisions = r.revisions as Obj[];
+    const previous = revisions.at(-1) as Obj;
+    const linked = (previous.linkedMilestoneIds as string[] | undefined) ?? [];
+    if (!linked.includes(milestoneId)) return r;
+    const no = str(r.initiativeNo);
+    const revId = "ai_revision_" + requestId + "_" + no;
+    if (revisions.some(rev => rev.id === revId)) throw new Error("同じ操作IDが取り組みの版に既に存在します");
+    const { id: _i, number: _n, savedAt: _s, requestId: _q, source: _o, reason: _r, ...content } = previous;
+    const why = ("マイルストーン「" + milestoneTitle + "」（" + milestoneId + "）を消したため結びを外す：" + reason).slice(0, 600);
+    const revision: Obj = {
+      id: revId, number: revisions.length + 1, savedAt: at,
+      requestId, source: "approved_mcp_change", reason: why,
+      ...content,
+      linkedMilestoneIds: linked.filter(id => id !== milestoneId),
+    };
+    views.push({ kind: "initiative", action: "update", id: str(r.id), title: no + " " + str(previous.name),
+      before: display(previous, milestones, kpis), after: display(revision, milestones, kpis) as Obj });
+    return { ...r, revisions: [...revisions, revision] };
+  });
+  if (!views.length) return [];
+  doc.records = next;
+  doc.updatedAt = at;
+  if (bytes(doc) > 700000) throw new Error("取り組みの保存容量が上限に達しました");
+  state[INITIATIVES_KEY] = doc;
+  return views;
+}
+
 /** 読む道具の中身。13 件の現在の版と結び、逆引き（マイルストーン・KPI → 取り組みの番号）を返す */
 export function buildInitiativesView(
   rawStore: unknown, milestones: Item[], kpis: Item[], opts: { initiativeNo?: string; includeHistory?: boolean } = {},

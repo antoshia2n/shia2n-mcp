@@ -1,13 +1,14 @@
 // haAkuの現行Web UIの保存形式を尊重するMCP用モデル。
 // 1件でも無効なら変更全体を拒否。元データの配列・未知フィールドは削除しない。
 import { type Change, newTargetId, validDate, assertWeekStart, writeKeys, canonical } from "./haaku-ai-changes.js";
-import { writeInitiative } from "./haaku-initiatives.js";
+import { writeInitiative, unlinkMilestone } from "./haaku-initiatives.js";
+import { depsOf, parseDepIds, ancestorsOf } from "./haaku-deps.js";
 
 type Obj = Record<string, unknown>;
 type Item = Record<string, unknown>;
 export type Stored = Record<string, unknown | null>;
 export type StepView = {
-  kind: Change["kind"]; action: "create" | "update";
+  kind: Change["kind"]; action: "create" | "update" | "delete";
   id: string; title: string; before: Obj | null; after: Obj;
 };
 export type ChangePlan = { next: Stored; changed: string[]; steps: StepView[] };
@@ -68,6 +69,10 @@ function roadmap(value: unknown): Obj {
   if (new Set(milestones.map(v=>v.id)).size !== milestones.length ||
       milestones.some(v=>!str(v.id)||!MILESTONE_STATUS.includes(str(v.status)))) {
     throw new Error("マイルストーンのID・状態が不正です");
+  }
+  if (milestones.some(v=>v.dependsOnIds!==undefined &&
+      (!Array.isArray(v.dependsOnIds)||v.dependsOnIds.some(x=>typeof x!=="string")))) {
+    throw new Error("マイルストーンの前のマス（dependsOnIds）が文字列の配列ではありません");
   }
   if (out.aiChanges !== undefined &&
       (!Array.isArray(out.aiChanges) || out.aiChanges.length > MAX_HISTORY)) {
@@ -247,19 +252,33 @@ function writeMilestone(state:Stored,op:Change,at:string):StepView{
     str(m.projectId)===fields.projectId && str(m.phaseId)===fields.phaseId)) {
     throw new Error("同一の対象とフェーズに同名の成果物があります");
   }
+  // v1.11.0：前のマスは配列（dependsOnIds）が正。dependsOn には 1 つ目を入れる（いまの haAku 本体の画面が読むため）
+  const oldDeps=depsOf(old).ids;
+  let deps:string[];
+  if(op.data.dependsOnIds!==undefined){
+    deps=parseDepIds(op.data.dependsOnIds);
+    if(op.data.dependsOn!==undefined&&str(op.data.dependsOn)!==(deps[0]??"")){
+      throw new Error("dependsOn と dependsOnIds の 1 つ目が違います。dependsOnIds だけを渡してください");
+    }
+  }else if(op.data.dependsOn!==undefined){
+    deps=str(op.data.dependsOn)?[str(op.data.dependsOn)]:[];
+  }else deps=oldDeps;
+  fields.dependsOn=deps[0]??"";
   const map=new Map(milestones.map(m=>[m.id,m]));
-  const visited=new Set([id]);let dep=fields.dependsOn;
-  while(dep){
-    if(visited.has(dep))throw new Error("成果物の前提関係が循環しています");
-    const parent=map.get(dep);
-    if(!parent)throw new Error("前提マイルストーンが存在しません");
-    visited.add(dep);dep=str(parent.dependsOn);
+  for(const dep of deps){
+    if(dep===id)throw new Error("成果物の前提関係が循環しています（自分を前にしています）");
+    if(!map.has(dep))throw new Error("前提マイルストーンが存在しません："+dep);
   }
-  if(fields.status==="done"&&fields.dependsOn&&map.get(fields.dependsOn)?.status!=="done") {
+  const graph=new Map(milestones.map(m=>[str(m.id),depsOf(m).ids]));
+  graph.set(id,deps);
+  try{ancestorsOf(graph,id);}
+  catch{throw new Error("成果物の前提関係が循環しています");}
+  if(fields.status==="done"&&deps.some(dep=>map.get(dep)?.status!=="done")) {
     throw new Error("前提マイルストーンが未達成です");
   }
-  if(old&&Object.keys(fields).every(k=>str(old[k])===fields[k]))throw new Error("成果物の内容が変わっていません");
-  const candidate:Item={...old,id,...fields,
+  if(old&&Object.keys(fields).every(k=>str(old[k])===fields[k])&&
+    JSON.stringify(oldDeps)===JSON.stringify(deps))throw new Error("成果物の内容が変わっていません");
+  const candidate:Item={...old,id,...fields,dependsOnIds:deps,
     createdAt:old?.createdAt??at,updatedAt:at,
     doneAt:fields.status==="done" ? (old?.status==="done"&&old.doneAt?old.doneAt:at) : ""};
   const result:StepView={kind:"milestone",action:old?"update":"create",id,
@@ -269,6 +288,48 @@ function writeMilestone(state:Stored,op:Change,at:string):StepView{
   if(bytes(road)>700000)throw new Error("ロードマップの保存容量が上限に達しました");
   state.os_roadmap_v1=road;
   return result;
+}
+
+// v1.11.0：承認つきでマイルストーンを消す。消す前の中身はロードマップの aiChanges に残す（before に全部・after に消した時刻と理由）
+function deleteMilestone(state:Stored,op:Change,at:string):StepView[]{
+  const road=roadmap(state.os_roadmap_v1), milestones=road.milestones as Item[];
+  const id=str(op.data.id);
+  const reason=limit(op.data.reason,"消す理由",600);
+  if(!id)throw new Error("消すマイルストーンの data.id が必要です");
+  if(!reason)throw new Error("マイルストーンを消すには理由（data.reason）が必要です");
+  const old=milestones.find(m=>m.id===id);
+  if(!old)throw new Error("消すマイルストーンが見つかりません："+id);
+  const after=milestones.filter(m=>depsOf(m).ids.includes(id));
+  if(after.length)throw new Error("ほかのマイルストーンの前になっているため消せません："+
+    after.map(m=>str(m.title)+"（"+str(m.id)+"）").join("、"));
+  const rawLinks=state.os_task_links_v1??null;
+  if(rawLinks!==null){
+    const links=(rawLinks as Obj)?.links;
+    if(!rawLinks||typeof rawLinks!=="object"||!Array.isArray(links)){
+      throw new Error("タスクの結び（os_task_links_v1）の形が読めません。消さずに止めました");
+    }
+    const n=(links as Item[]).filter(l=>str(l?.milestoneId)===id).length;
+    if(n)throw new Error("タスクが "+n+" 件結ばれているため消せません。先に haAku__link_tasks で外してください");
+  }
+  const rawStrategy=state.os_strategy_records_v1??null;
+  if(rawStrategy!==null){
+    const used=(strategyStore(rawStrategy).records as Item[]).filter(r=>
+      str(((r.revisions as Obj[]).at(-1))?.milestoneId)===id);
+    if(used.length)throw new Error("戦略が参照しているため消せません："+used.map(r=>str(r.id)).join("、"));
+  }
+  if(str(road.focusMilestoneId)===id)throw new Error("重点のマイルストーンに選ばれているため消せません");
+  const rawKpis=state.os_kpis??null;
+  if(rawKpis!==null&&!Array.isArray(rawKpis))throw new Error("KPIの保存形式が不正です。変更を停止しました");
+  const kpis=rawKpis===null?[]:list(rawKpis,"KPI");
+  const title=str(old.title);
+  const initiativeViews=unlinkMilestone(state,id,title,op.request_id,reason,at,milestones,kpis);
+  const result:StepView={kind:"milestone",action:"delete",id,title,
+    before:{...old},after:{deletedAt:at,reason}};
+  road.milestones=milestones.filter(m=>m.id!==id);
+  changesetAudit(road,op,result,at);
+  if(bytes(road)>700000)throw new Error("ロードマップの保存容量が上限に達しました");
+  state.os_roadmap_v1=road;
+  return [result,...initiativeViews];
 }
 
 function writeWeekly(state:Stored,op:Change,at:string):StepView{
@@ -332,13 +393,17 @@ export function buildManagementChangePlan(
   const state=copy(stored),steps:StepView[]=[];
   // 全ての入力を検証してから、変更された文書の値を組み立てる。まだ外部書き込みは行わない。
   for(const op of operations){
+    if(op.kind==="milestone_delete"){steps.push(...deleteMilestone(state,op,at));continue;}
     const row=op.kind==="strategy" ? writeStrategy(state,op,at) :
       op.kind==="initiative" ? writeInitiativeStep(state,op,at) :
       op.kind==="phase" ? writePhase(state,op,at) :
       op.kind==="milestone" ? writeMilestone(state,op,at) : writeWeekly(state,op,at);
     steps.push(row);
   }
-  const changed=writeKeys(operations);
+  // 中身が変わらなかった文書は書かない（消すときに結びを外す取り組みが 0 件だった場合など）。
+  // ほかの種類は変わらなければ断るので、この絞り込みで書く先が減ることはない
+  const changed=writeKeys(operations).filter(key=>
+    state[key]===undefined||canonical(state[key])!==canonical(stored[key]??null));
   for(const key of changed){
     if(state[key]===undefined||bytes(state[key])>700000)throw new Error("保存容量または状態が不正です："+key);
   }

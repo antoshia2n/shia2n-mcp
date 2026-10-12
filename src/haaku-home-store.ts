@@ -103,7 +103,8 @@ type Ctx = { token: string; uid: string };
 
 async function loadSteps({ token, uid }: Ctx): Promise<Step[]> {
   const road = parseHaakuRoadmap((await readValue(token, uid, "os_roadmap_v1")).value);
-  return (road?.milestones ?? []).map(m => ({ id: m.id, title: m.title, status: m.status, dueDate: m.dueDate, dependsOn: m.dependsOn }));
+  return (road?.milestones ?? []).map(m => ({ id: m.id, title: m.title, status: m.status, dueDate: m.dueDate,
+    dependsOn: m.dependsOn, dependsOnIds: m.dependsOnIds, dependsMismatch: m.dependsMismatch }));
 }
 
 async function loadTasks({ token, uid }: Ctx): Promise<Task[]> {

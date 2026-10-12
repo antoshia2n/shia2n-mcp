@@ -24,7 +24,9 @@ function roadmapEvents(raw:unknown):{state:string;items:Log[]}{
   const all=state.aiChanges===undefined?[]:asArray(state.aiChanges,"ロードマップAI変更履歴");
   return{state:"ready",items:all.filter(x=>x.source==="approved_mcp_change").map(x=>({
     request_id:text(x.requestId),kind:text(x.kind),target_id:text(x.targetId),
-    at:text(x.at),title:text((x.after as Dict|undefined)?.title),reason:text(x.action),
+    // v1.11.0：消した行は after に名前が無いので before の名前を出す
+    at:text(x.at),title:text((x.after as Dict|undefined)?.title)||text((x.before as Dict|undefined)?.title),
+    reason:text(x.action),
   }))};
 }
 function strategyEvents(raw:unknown):{state:string;items:Log[]}{
