@@ -21,7 +21,9 @@ const FIELDS: Record<ChangeKind, readonly string[]> = {
     "evidence", "note", "changeReason"],
   // v1.9.0：取り組み（13 の取り組み）。一覧の欄と結びの欄は JSON の文字列で受ける（中身は haaku-initiatives.ts で検める）
   initiative: ["initiativeNo", "name", "stage", "overview", "ideals", "conditions", "kpis",
-    "approaches", "plans", "obstacles", "progress", "linkedMilestoneIds", "linkedKpiIds", "reason"],
+    "approaches", "plans", "obstacles", "progress", "linkedMilestoneIds", "linkedKpiIds", "reason",
+    // v1.12.0：組にする TaskMaster のプロジェクトの id（空・null で外す）
+    "taskmasterProjectId"],
   // v1.11.0：消すマイルストーンの ID と理由（どちらも必須）
   milestone_delete: ["id", "reason"],
 };
@@ -71,7 +73,9 @@ export function parseChanges(input: string): Change[] {
     if (!op.data || typeof op.data !== "object" || Array.isArray(op.data)) {
       throw new Error("変更" + (i + 1) + "のdataはオブジェクトにしてください");
     }
-    const data = op.data as Record<string, unknown>;
+    const data = { ...(op.data as Record<string, unknown>) };
+    // v1.12.0：取り組みの taskmasterProjectId だけは null も受ける（空文字と同じ「外す」に直す）
+    if (kind === "initiative" && data.taskmasterProjectId === null) data.taskmasterProjectId = "";
     if (Object.keys(data).some(key => !FIELDS[kind].includes(key)) ||
         Object.values(data).some(value => typeof value !== "string")) {
       throw new Error("変更" + (i + 1) + "に許可されていない欄・値の型があります");
@@ -101,6 +105,10 @@ export function neededKeys(ops: Change[]): string[] {
     if (op.kind === "weekly") keys.add("os_weekly_commits_v1_" + op.week_start);
     // 取り組みは結ぶ先（マイルストーン・KPI）を確かめるため、KPI の文書も読む（書かない）
     if (op.kind === "initiative") { keys.add("os_initiatives_v1"); keys.add("os_kpis"); }
+    // v1.12.0：プロジェクトを付けるときだけ TaskMaster のプロジェクト一覧も読む（書かない）
+    if (op.kind === "initiative" && typeof op.data.taskmasterProjectId === "string" && op.data.taskmasterProjectId.trim()) {
+      keys.add("projects");
+    }
     // 消すときは、結ばれたタスク・戦略・取り組みを確かめるため読む（書くのはロードマップと取り組みだけ）
     if (op.kind === "milestone_delete") {
       keys.add("os_initiatives_v1"); keys.add("os_kpis");
