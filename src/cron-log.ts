@@ -52,6 +52,9 @@ export const KNOWN_JOBS = [
   "consult_intake",
   // 2026-10-12 追加：haAku のホームの率（取り組みとステップの行動と成果）を毎週日曜の夜に残す処理（JST 23:30）。
   "haaku_weekly",
+  // 2026-10-13 追加：haAku のマスの期限を、結んだ TaskMaster のタスクの期限へ写す処理（30 分ごと・結んだ直後・手で 1 回）。
+  // 依頼書：https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941
+  "haaku_deadline",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];

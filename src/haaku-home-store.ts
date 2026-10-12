@@ -36,7 +36,7 @@ export function jstToday(now = new Date()): string {
   return new Date(now.getTime() + 9 * 3600000).toISOString().slice(0, 10);
 }
 
-async function readValue(token: string, uid: string, key: string): Promise<{ value: unknown | null; version: string | null }> {
+export async function readValue(token: string, uid: string, key: string): Promise<{ value: unknown | null; version: string | null }> {
   const doc = (await fsGetOrNull(token, `users/${uid}/app_data/${key}`)) as (FSDoc & { updateTime?: string }) | null;
   if (!doc) return { value: null, version: null };
   if (!doc.fields || !("value" in doc.fields)) throw new Error(key + " に value 欄がありません。空とみなさず止めました");
@@ -44,7 +44,7 @@ async function readValue(token: string, uid: string, key: string): Promise<{ val
 }
 
 /** 読んだ版を条件にして value 欄だけを書く。版が変わっていれば Firestore が断る */
-async function writeValue(token: string, uid: string, key: string, value: unknown, version: string | null): Promise<void> {
+export async function writeValue(token: string, uid: string, key: string, value: unknown, version: string | null): Promise<void> {
   const cond = version ? `currentDocument.updateTime=${encodeURIComponent(version)}` : "currentDocument.exists=false";
   const res = await fetch(`${FIRESTORE_BASE}/users/${uid}/app_data/${key}?updateMask.fieldPaths=value&${cond}`, {
     method: "PATCH",
