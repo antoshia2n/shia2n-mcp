@@ -4,6 +4,8 @@
  * 取得不能と未登録を同一視しないため、入力の null は「文書が404」専用。
  */
 
+import { depsOf } from "./haaku-deps.js";
+
 type ObjectRow = Record<string, unknown>;
 
 export type MilestoneState = "todo" | "doing" | "review" | "blocked" | "done";
@@ -19,6 +21,9 @@ export interface HaakuMilestone {
   projectId: string;
   notionUrl: string;
   dependsOn: string;
+  /** v1.11.0：前のマスの並び（haaku-deps.ts の depsOf で読んだもの）。dependsOn は 1 つ目 */
+  dependsOnIds: string[];
+  dependsMismatch: boolean;
   evidence: string;
 }
 
@@ -105,6 +110,11 @@ export function parseHaakuRoadmap(input: unknown): HaakuRoadmap | null {
     }
     const dueDate = optionalText(r.dueDate, "期限");
     if (dueDate) validAsOfDate(dueDate);
+    if (r.dependsOnIds !== undefined &&
+        (!Array.isArray(r.dependsOnIds) || r.dependsOnIds.some(v => typeof v !== "string"))) {
+      throw new Error("マイルストーン「" + title + "」の前のマス（dependsOnIds）が文字列の配列ではありません");
+    }
+    const deps = depsOf({ dependsOn: optionalText(r.dependsOn, "依存関係"), dependsOnIds: r.dependsOnIds });
     return {
       id, title,
       criterion: optionalText(r.criterion, "合格条件"),
@@ -114,6 +124,8 @@ export function parseHaakuRoadmap(input: unknown): HaakuRoadmap | null {
       projectId: optionalText(r.projectId, "プロジェクトID"),
       notionUrl: optionalText(r.notionUrl, "関連資料"),
       dependsOn: optionalText(r.dependsOn, "依存関係"),
+      dependsOnIds: deps.ids,
+      dependsMismatch: deps.mismatch,
       evidence: optionalText(r.evidence, "証拠"),
     };
   });
@@ -191,7 +203,8 @@ function makeMilestoneView(item: HaakuMilestone, day: string) {
     id: item.id, title: item.title, status: item.status,
     criterion: item.criterion, due_date: item.dueDate || null,
     area: item.area || null, owner: item.owner || null,
-    project_id: item.projectId || null, depends_on: item.dependsOn || null,
+    project_id: item.projectId || null, depends_on: item.dependsOnIds[0] ?? null,
+    depends_on_ids: item.dependsOnIds,
     source_url: item.notionUrl || null,
     evidence: item.evidence || null,
     overdue: !!item.dueDate && item.dueDate < day && item.status !== "done",

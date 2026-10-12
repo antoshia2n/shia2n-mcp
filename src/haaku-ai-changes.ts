@@ -1,6 +1,7 @@
 // haAku MCP: one human-approved change set, composed of up to 12 safe edits.
 // Neither MCP tool accepts an arbitrary Firestore document path or field name.
-export type ChangeKind = "strategy" | "phase" | "milestone" | "weekly" | "initiative";
+// v1.11.0：milestone_delete（承認つきでマイルストーンを消す）を足した
+export type ChangeKind = "strategy" | "phase" | "milestone" | "weekly" | "initiative" | "milestone_delete";
 export type Change = {
   kind: ChangeKind;
   request_id: string;
@@ -13,14 +14,18 @@ const FIELDS: Record<ChangeKind, readonly string[]> = {
     "sourceUrl", "milestoneId", "horizon", "parentRecordId", "reason"],
   phase: ["id", "title", "purpose", "projectId", "startDate", "dueDate"],
   milestone: ["id", "title", "criterion", "dueDate", "status", "area",
-    "owner", "projectId", "phaseId", "notionUrl", "dependsOn", "evidence"],
+    "owner", "projectId", "phaseId", "notionUrl", "dependsOn", "evidence",
+    // v1.11.0：前のマスを複数（JSON の文字列で ["id", …]）。dependsOn には 1 つ目が入る
+    "dependsOnIds"],
   weekly: ["id", "title", "criterion", "milestoneId", "status",
     "evidence", "note", "changeReason"],
   // v1.9.0：取り組み（13 の取り組み）。一覧の欄と結びの欄は JSON の文字列で受ける（中身は haaku-initiatives.ts で検める）
   initiative: ["initiativeNo", "name", "stage", "overview", "ideals", "conditions", "kpis",
     "approaches", "plans", "obstacles", "progress", "linkedMilestoneIds", "linkedKpiIds", "reason"],
+  // v1.11.0：消すマイルストーンの ID と理由（どちらも必須）
+  milestone_delete: ["id", "reason"],
 };
-const KIND: ChangeKind[] = ["strategy", "phase", "milestone", "weekly", "initiative"];
+const KIND: ChangeKind[] = ["strategy", "phase", "milestone", "weekly", "initiative", "milestone_delete"];
 const ID = /^[A-Za-z0-9_-]{10,70}$/;
 const REF = /^[A-Za-z0-9_-]{1,180}$/;
 
@@ -36,6 +41,7 @@ export function assertWeekStart(value: string): void {
 }
 export function newTargetId(kind: ChangeKind, requestId: string): string {
   if (kind === "initiative") throw new Error("取り組みのIDは番号から決まります（initiative_番号）");
+  if (kind === "milestone_delete") throw new Error("消すマイルストーンは data.id で指定してください");
   return (kind === "strategy" ? "strategy_" : kind === "weekly" ? "weekly_" :
     kind === "milestone" ? "milestone_" : "phase_") + requestId;
 }
@@ -95,6 +101,11 @@ export function neededKeys(ops: Change[]): string[] {
     if (op.kind === "weekly") keys.add("os_weekly_commits_v1_" + op.week_start);
     // 取り組みは結ぶ先（マイルストーン・KPI）を確かめるため、KPI の文書も読む（書かない）
     if (op.kind === "initiative") { keys.add("os_initiatives_v1"); keys.add("os_kpis"); }
+    // 消すときは、結ばれたタスク・戦略・取り組みを確かめるため読む（書くのはロードマップと取り組みだけ）
+    if (op.kind === "milestone_delete") {
+      keys.add("os_initiatives_v1"); keys.add("os_kpis");
+      keys.add("os_task_links_v1"); keys.add("os_strategy_records_v1");
+    }
   }
   return [...keys].sort();
 }
@@ -105,6 +116,8 @@ export function writeKeys(ops: Change[]): string[] {
     if (op.kind === "phase" || op.kind === "milestone") keys.add("os_roadmap_v1");
     if (op.kind === "weekly") keys.add("os_weekly_commits_v1_" + op.week_start);
     if (op.kind === "initiative") keys.add("os_initiatives_v1");
+    // 取り組みの文書は結びを外すときだけ変わる。変わらなければ buildManagementChangePlan が書く先から外す
+    if (op.kind === "milestone_delete") { keys.add("os_roadmap_v1"); keys.add("os_initiatives_v1"); }
   }
   return [...keys].sort();
 }

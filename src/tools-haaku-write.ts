@@ -14,7 +14,8 @@ import { issueHumanApproval } from "./haaku-human-approval.js";
  * 2. apply: only after the Firebase-authenticated owner approves in the browser
  *
  * MCP permission/authentication remains with existing shia2n-mcp gateway.
- * We never expose a generic Firestore path or destructive delete action.
+ * We never expose a generic Firestore path. The only delete is kind "milestone_delete" (v1.11.0),
+ * which goes through the same preview -> browser approval -> apply flow and keeps the deleted content in aiChanges.
  */
 function uidFor(env: Env): string {
   if (!env.NAOKI_UID || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
@@ -42,10 +43,13 @@ export function registerHaakuWriteTools(server: McpServer, env: Env): void {
     "week_startは週間コミットのみ、月曜日の日付。現行Web画面と同じ保存欄を用い、別台帳は作らない。"+
     "取り組み（kind:'initiative'・2026年の13の取り組み）は data.initiativeNo（01〜99）で特定し、無ければ新規・あれば改訂（版が1つ増える。改訂には reason が必要。省いた欄は前の版のまま）。"+
     "欄：initiativeNo・name・stage（整える／時間を作る／構築する）・overview（全体像）・ideals・conditions・kpis・approaches・plans・obstacles（この6つはJSONの文字列で [{\"text\":\"本文\",\"theme\":\"親テーマ（任意）\"}]・40項目まで）・"+
-    "progress（進捗・空可）・linkedMilestoneIds・linkedKpiIds（結ぶマイルストーンとKPIのIDの配列をJSONの文字列で・存在しないIDは断る）・reason。",
+    "progress（進捗・空可）・linkedMilestoneIds・linkedKpiIds（結ぶマイルストーンとKPIのIDの配列をJSONの文字列で・存在しないIDは断る）・reason。"+
+    "マイルストーンの前は data.dependsOnIds（前のマイルストーンIDの配列をJSONの文字列で・0〜10件・存在しないID・自分・循環・重複は断る）で複数持てる。古い dependsOn には配列の1つ目が自動で入る（両方渡して1つ目が違えば断る）。"+
+    "マイルストーンを消すときは kind:'milestone_delete'・data:{id,reason}（理由は必須）。ほかのマイルストーンの前になっているもの・タスクが結ばれているもの・戦略が参照しているもの・重点に選ばれているものは断る。"+
+    "結んでいる取り組みからは自動で外し、その取り組みの版を1つ上げる。消す前の中身はロードマップの書き込み記録（aiChanges）に残る。",
     {
       changes_json: z.string().min(2).max(45000).describe(
-        "JSON配列。各要素{kind:'strategy|phase|milestone|weekly|initiative',request_id:'重複しない10〜70文字のID',data:{...},week_start?:'YYYY-MM-DD'}。"+
+        "JSON配列。各要素{kind:'strategy|phase|milestone|weekly|initiative|milestone_delete',request_id:'重複しない10〜70文字のID',data:{...},week_start?:'YYYY-MM-DD'}。"+
         "最大12件。未知の欄や型は拒否。例："+CHANGE_EXAMPLE
       ),
     },
@@ -67,7 +71,7 @@ export function registerHaakuWriteTools(server: McpServer, env: Env): void {
     "チャット上の承認・AIから渡された真偽値では承認にならない。"+
     "プレビューから変更案やデータが変わった場合、または30分を超えた場合は拒否。"+
     "Firestore read-write transactionで全変更を一括保存し、保存直後に再取得して一致確認。"+
-    "削除・未確認の達成・戦略の自動確定はしない。通信失敗時は二重実行せず状況確認。"+
+    "削除は kind:milestone_delete を本人が承認したときだけ。未確認の達成・戦略の自動確定はしない。通信失敗時は二重実行せず状況確認。"+
     "承認申請は業務データの一括トランザクションと同時に消費し、再利用できない。",
     {
       changes_json: z.string().min(2).max(45000).describe(
