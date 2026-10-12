@@ -520,6 +520,7 @@
  * v1.10.0（2026-10-12 開発部）：haAku のホーム（依頼 https://www.notion.so/3f69c6c1c43981b8bb09fa162e38da9b）。タスク → ステップの結びを haAku の側（os_task_links_v1）に持ち、承認なしで書く haAku__link_tasks（外した結びも記録）。読む道具 haAku__get_home（次はこれ・ここが詰まり・ステップと取り組みの行動と成果の率・期限の数）。毎週日曜 JST 23:30 に率を os_progress_weekly_v1 へ残す（記録 haaku_weekly・手で 1 回 haAku__snapshot_progress_now）。計算は src/haaku-home.ts・読み書きは src/haaku-home-store.ts・試験は test/haaku-home.test.ts。設定の追加 0 個。
  * v1.11.0（2026-10-12 開発部）：haAku のマイルストーンに「前を複数」と「承認つきの削除」を足した（依頼 https://www.notion.so/3f79c6c1c43981aba338e41655cd109d）。前の並びは新しい欄 dependsOnIds（配列）に持ち、古い dependsOn には 1 つ目を入れ続ける（haAku 本体の画面が読み続けるため）。読み方は src/haaku-deps.ts の 1 か所。get_home は前へたどれるマスが全部 100％ のときだけ動ける・後ろを止めている数は 1 マス 1 回。preview／apply に kind milestone_delete（id と理由）を足し、ほかの前・結ばれたタスク・戦略の参照・重点は断る。結んでいる取り組みから外して版を 1 つ上げ、消す前の中身はロードマップの aiChanges に残す。試験は test/haaku-deps.test.ts。設定の追加 0 個。
  * v1.12.0（2026-10-12 開発部）：haAku の取り組みの版に欄 taskmasterProjectId（組にする TaskMaster のプロジェクトの id・空可）を足した（依頼 https://www.notion.so/3f79c6c1c43981cba656d5738e6735c4）。書くのは haAku__preview_management_changes → 本人の承認 → apply の kind initiative だけ（省くと前の版のまま・空文字か null で外す）。TaskMaster に無い id・status が active でないもの・ほかの取り組みの現在の版と重なるもの（束を当て終えた形で確かめる）は断る。付けるときだけ app_data/projects を読む（書かない）。haAku__get_initiatives が taskmaster_project_id・taskmaster_project_name・project_links を返す。試験は test/haaku-initiative-project.test.ts。設定の追加 0 個。
+ * v1.13.0（2026-10-13 開発部）：haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す（依頼 https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941）。決まりは 4 つ：空か前回写した日のままのタスクだけ写す・Naoki が入れた日は上書きしない・マスの期限が空になったら写した日のままのものだけ空に戻す・結びを外したら期限は触らず写した記録だけ消す。写した記録は haAku の側（os_task_deadline_sync_v1）に持ち、TaskMaster には deadline の 1 欄だけを読んだ版を条件に書く（値が変わらなければ書かない）。結んだタスクだけを id で読む（30 分ごとに全部読むと無料枠を超えるため）。動く時は haAku__link_tasks の直後・30 分ごと（0,30 の枠）・手で呼ぶ haAku__sync_task_deadlines（dry_run で見るだけ）。記録は haaku_deadline。中身は src/haaku-deadline-sync.ts・試験は test/haaku-deadline-sync.test.ts。設定の追加 0 個。
  */
 import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
@@ -559,6 +560,7 @@ import { runAndRecord, recordSkipped } from "./cron-log.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
 import { snapshotWeekly } from "./haaku-home-store.js";
+import { syncTaskDeadlines } from "./haaku-deadline-sync.js";
 import { getFirestoreToken } from "./taskmaster.js";
 import { handleShiaraboMtgSync } from "./cron-shiarabo-mtg.js";
 import { handleConsultManagerIntake, handleConsultManagerIntakeHttp } from "./cron-consult-manager-intake.js";
@@ -997,6 +999,16 @@ export default {
           })
         );
       }
+
+      // 2026-10-13（v1.13.0）：haAku のマスの期限を、結んだ TaskMaster のタスクの期限へ写す（30 分ごと・毎回）
+      // 依頼書：https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941
+      // ガントのドラッグで変わったマスの期限を拾うため。読むのは結んだタスクだけ（id で読む）・値が変わらなければ書かない
+      tasks.push(
+        runAndRecord(env, "haaku_deadline", async () => {
+          if (!env.NAOKI_UID) throw new Error("NAOKI_UID がありません");
+          return await syncTaskDeadlines({ token: await getFirestoreToken(env), uid: env.NAOKI_UID });
+        })
+      );
 
       // 2026-09-13：UTAGE の個別相談予約者をコンサルマネージャーへ取り込む
       // （UTC 23:00 = JST 08:00 のみ発火）。既存の 30 分ごとの枠に相乗りする。

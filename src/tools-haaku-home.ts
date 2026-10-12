@@ -4,6 +4,7 @@
  *   haAku__get_home            … 読むだけ。次はこれ・ここが詰まり・ステップと取り組みの行動と成果の率・期限の数
  *   haAku__link_tasks          … タスクをステップに結ぶ・付け替える・外す（承認なし・外したものも記録に残す）
  *   haAku__snapshot_progress_now … 毎週日曜の夜の記録（os_progress_weekly_v1）を手で 1 回残す
+ *   haAku__sync_task_deadlines … v1.13.0：マスの期限を、結んだ TaskMaster のタスクの期限へ写す（見るだけの形あり）
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -12,6 +13,16 @@ import type { Env } from "./index.js";
 import { getFirestoreToken } from "./taskmaster.js";
 import { buildHome, linkTasks, snapshotWeekly, jstToday } from "./haaku-home-store.js";
 import { runAndRecord, readAllRuns } from "./cron-log.js";
+import { syncTaskDeadlines } from "./haaku-deadline-sync.js";
+
+/** v1.13.0：期限を写して、実行の記録（haaku_deadline）に残す。失敗しても投げずに中身を返す */
+async function syncAndRecord(env: Env): Promise<{ recorded: unknown; thrown: string | null }> {
+  let thrown: string | null = null;
+  try { await runAndRecord(env, "haaku_deadline", async () => syncTaskDeadlines(await ctxOf(env))); }
+  catch (e) { thrown = e instanceof Error ? e.message : String(e); }
+  const runs = await readAllRuns(env);
+  return { recorded: runs.haaku_deadline?.[0] ?? null, thrown };
+}
 
 async function ctxOf(env: Env) {
   if (!env.NAOKI_UID || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
@@ -33,15 +44,32 @@ export function registerHaakuHomeTools(server: McpServer, env: Env): void {
 
   server.tool(
     "haAku__link_tasks",
-    "TaskMasterのタスクを haAku のステップ（マイルストーン）に結ぶ・付け替える・外す。書く道具・承認なし。1タスクは0〜1ステップ。milestone_id を null にすると外す。外した・付け替えたものも記録（history）に残す。結びは haAku の側（os_task_links_v1）に持ち、TaskMaster のタスクは書き換えない。存在しないタスク・ステップは断る。1回1〜100件。返り値: { ok, results: [{task_id, from, to, changed}], links_total, history_total }",
+    "TaskMasterのタスクを haAku のステップ（マイルストーン）に結ぶ・付け替える・外す。書く道具・承認なし。1タスクは0〜1ステップ。milestone_id を null にすると外す。外した・付け替えたものも記録（history）に残す。結びは haAku の側（os_task_links_v1）に持つ。"+
+    "結んだあと続けてマスの期限をタスクの期限（deadline）へ写す（haAku__sync_task_deadlines と同じ決まり：空か前回写した日のままのタスクだけ・Naoki が入れた日は上書きしない・外したタスクは期限を触らず写した記録だけ消す）。存在しないタスク・ステップは断る。1回1〜100件。返り値: { ok, results: [{task_id, from, to, changed}], links_total, history_total, deadlines: { recorded, thrown } }",
     {
       links: z.array(z.object({
         task_id: z.string().describe("TaskMaster のタスクの id（taskmaster__list_tasks の id）"),
         milestone_id: z.string().nullable().describe("haAku のステップ（マイルストーン）の id。null で外す"),
       })).min(1).max(100),
     },
-    async args => asMcpTextResult(await linkTasks(await ctxOf(env),
-      args.links.map(l => ({ taskId: l.task_id, milestoneId: l.milestone_id }))))
+    async args => {
+      const linked = await linkTasks(await ctxOf(env), args.links.map(l => ({ taskId: l.task_id, milestoneId: l.milestone_id })));
+      // v1.13.0：結んだ直後に期限を写す。写すのに失敗しても結びは書けているので、中身を返して止めない
+      return asMcpTextResult({ ...linked, deadlines: await syncAndRecord(env) });
+    }
+  );
+
+  server.tool(
+    "haAku__sync_task_deadlines",
+    "haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す。30分ごとに自動で動くものを手で1回動かす道具。"+
+    "写すのは、結んだ未完了・未アーカイブのタスクのうち期限が空か、期限が前回 haAku が写した日のままのものだけ。期限が入っていて前回写した日と違うものは Naoki の日として上書きしない。"+
+    "マスの期限が空になったら、前回写した日のままのタスクだけ空に戻す。結びを外したタスクは期限を触らず、写した記録だけ消す。書くのは deadline の1欄だけで、値が変わらないときは書かない。"+
+    "dry_run: true なら何も書かずに、写す・空に戻す予定と Naoki の日の一覧を返す（見るだけ）。dry_run を省くと書いて、記録 haaku_deadline（GET /diag の last_runs・munikis__get_context の recent_runs）に件数を残す。",
+    { dry_run: z.boolean().optional().describe("true で見るだけ（書かない・記録に残さない）") },
+    async args => {
+      if (args.dry_run) return asMcpTextResult(await syncTaskDeadlines(await ctxOf(env), { dryRun: true }));
+      return asMcpTextResult(await syncAndRecord(env));
+    }
   );
 
   server.tool(
