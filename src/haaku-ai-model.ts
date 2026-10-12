@@ -1,7 +1,7 @@
 // haAkuの現行Web UIの保存形式を尊重するMCP用モデル。
 // 1件でも無効なら変更全体を拒否。元データの配列・未知フィールドは削除しない。
 import { type Change, newTargetId, validDate, assertWeekStart, writeKeys, canonical } from "./haaku-ai-changes.js";
-import { writeInitiative, unlinkMilestone } from "./haaku-initiatives.js";
+import { writeInitiative, unlinkMilestone, projectList, assertUniqueProjects } from "./haaku-initiatives.js";
 import { depsOf, parseDepIds, ancestorsOf } from "./haaku-deps.js";
 
 type Obj = Record<string, unknown>;
@@ -384,7 +384,9 @@ function writeInitiativeStep(state:Stored,op:Change,at:string):StepView{
   const rawKpis=state.os_kpis??null;
   if(rawKpis!==null&&!Array.isArray(rawKpis))throw new Error("KPIの保存形式が不正です。変更を停止しました");
   const kpis=rawKpis===null?[]:list(rawKpis,"KPI");
-  return writeInitiative(state,op,at,road.milestones as Item[],kpis);
+  // v1.12.0：TaskMaster のプロジェクト一覧は、プロジェクトを付ける変更があるときだけ読んである（neededKeys）。読むだけ
+  const projects=projectList(state.projects??null);
+  return writeInitiative(state,op,at,road.milestones as Item[],kpis,projects);
 }
 export function buildManagementChangePlan(
   operations:Change[], stored:Stored, at:string,
@@ -399,6 +401,10 @@ export function buildManagementChangePlan(
       op.kind==="phase" ? writePhase(state,op,at) :
       op.kind==="milestone" ? writeMilestone(state,op,at) : writeWeekly(state,op,at);
     steps.push(row);
+  }
+  // v1.12.0：1 つのプロジェクトは 1 つの取り組みにだけ。束を当て終えた形で確かめる（同じ束での付け替えを通すため）
+  if(operations.some(op=>op.kind==="initiative")){
+    assertUniqueProjects(state.os_initiatives_v1??null,projectList(state.projects??null)??[]);
   }
   // 中身が変わらなかった文書は書かない（消すときに結びを外す取り組みが 0 件だった場合など）。
   // ほかの種類は変わらなければ断るので、この絞り込みで書く先が減ることはない

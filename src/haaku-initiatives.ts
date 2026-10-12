@@ -8,7 +8,9 @@
  *   { schemaVersion: 1, records: [{ id: "initiative_01", initiativeNo: "01", revisions: [版, …] }], updatedAt }
  *   版：{ id, number, savedAt, requestId, source, reason, name, stage, overview,
  *         ideals, conditions, kpis, approaches, plans, obstacles（どれも [{ text, theme }]・theme は空を許す）,
- *         progress, linkedMilestoneIds, linkedKpiIds }
+ *         progress, linkedMilestoneIds, linkedKpiIds, taskmasterProjectId }
+ *   taskmasterProjectId（v1.12.0）：組にする TaskMaster のプロジェクト（users/{uid}/app_data/projects の id）。空なら組なし。
+ *     1 つのプロジェクトは 1 つの取り組みにだけ（束を当て終えた形で確かめる）。付けるときはプロジェクトが在って status が active のこと
  *
  * 書き込みは戦略と同じ承認の流れ（preview → haAku の画面で本人が承認 → apply）だけ。
  * 改訂のたびに版が 1 つ増え、2 版目からは理由が要る。中身が同じなら断る。
@@ -118,23 +120,69 @@ function linksText(ids: unknown, rows: Item[]): string {
 }
 
 /** 承認の画面で読める形（一覧は 1 行ずつの文字、結びは名前つき）に直す。保存する中身は配列のまま */
-function display(rev: Obj | null, milestones: Item[], kpis: Item[]): Obj | null {
+function display(rev: Obj | null, milestones: Item[], kpis: Item[], projects: Item[] = []): Obj | null {
   if (!rev) return null;
   const out: Obj = { ...rev };
   for (const f of LIST_FIELDS) out[f] = entriesText(rev[f]);
   out.linkedMilestoneIds = linksText(rev.linkedMilestoneIds, milestones);
   out.linkedKpiIds = linksText(rev.linkedKpiIds, kpis);
+  // v1.12.0：承認の画面では「名前（id）」で見せる。古い版で欄が無ければ空として扱う（空同士なら差分に出ない）
+  const pid = str(rev.taskmasterProjectId);
+  out.taskmasterProjectId = pid ? linksText([pid], projects) : "";
   return out;
+}
+
+/** v1.12.0：TaskMaster のプロジェクト一覧（app_data/projects の value）を配列として読む。無ければ null */
+export function projectList(raw: unknown): Item[] | null {
+  if (raw === null || raw === undefined) return null;
+  if (!Array.isArray(raw) || raw.some(p => !p || typeof p !== "object" || Array.isArray(p))) {
+    throw new Error("TaskMaster のプロジェクト一覧の形が読めません。変更を停止しました");
+  }
+  return raw as Item[];
+}
+
+/** v1.12.0：付けるプロジェクトを確かめる（在る・進行中）。外すとき（空）は確かめない */
+function checkProject(id: string, projects: Item[] | null): void {
+  if (!id) return;
+  if (!REF.test(id)) throw new Error("taskmasterProjectId の形が不正です：" + id);
+  if (projects === null) throw new Error("TaskMaster のプロジェクト一覧が読めません（文書が無い）。付けずに止めました");
+  const p = projects.find(x => str(x.id) === id);
+  if (!p) throw new Error("TaskMaster に無いプロジェクトです：" + id);
+  if (str(p.status) !== "active") {
+    throw new Error("進行中でないプロジェクトです：" + str(p.title) + "（" + id + "・status " + (str(p.status) || "空") + "）");
+  }
+}
+
+/**
+ * v1.12.0：束を当て終えた形で、1 つのプロジェクトが 2 つ以上の取り組みの現在の版に付いていないかを確かめる。
+ * buildManagementChangePlan が束の最後に 1 回だけ呼ぶ（同じ束で A から外して B に付ける付け替えを通すため）
+ */
+export function assertUniqueProjects(raw: unknown, projects: Item[] = []): void {
+  if (raw === null || raw === undefined) return;
+  const doc = initiativeStore(raw);
+  const owner = new Map<string, string[]>();
+  for (const r of doc.records as Item[]) {
+    const pid = str(((r.revisions as Obj[]).at(-1) as Obj).taskmasterProjectId);
+    if (pid) (owner.get(pid) ?? owner.set(pid, []).get(pid)!).push(str(r.initiativeNo));
+  }
+  const dup = [...owner].filter(([, nos]) => nos.length > 1);
+  if (dup.length) {
+    throw new Error("1 つのプロジェクトは 1 つの取り組みにだけ付けられます：" + dup.map(([pid, nos]) =>
+      linksText([pid], projects) + " ← 取り組み " + nos.join("・")).join("／"));
+  }
 }
 
 function sameContent(a: Obj, b: Obj): boolean {
   const keys = ["name", "stage", "overview", "progress", ...LIST_FIELDS, "linkedMilestoneIds", "linkedKpiIds"];
-  return keys.every(k => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null));
+  // v1.12.0：taskmasterProjectId は欄が無い古い版と空を同じとみなす
+  return keys.every(k => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null)) &&
+    str(a.taskmasterProjectId) === str(b.taskmasterProjectId);
 }
 
 /** 取り組み 1 件を新規または改訂する（state を書き換える）。マイルストーンと KPI は読むだけ */
 export function writeInitiative(
   state: Record<string, unknown>, op: Change, at: string, milestones: Item[], kpis: Item[],
+  projects: Item[] | null = null,
 ): InitiativeStepView {
   const doc = initiativeStore(state[INITIATIVES_KEY]);
   const records = doc.records as Item[];
@@ -163,6 +211,13 @@ export function writeInitiative(
     parseIds(op.data.linkedMilestoneIds, "結ぶマイルストーン") : (previous?.linkedMilestoneIds ?? []);
   next.linkedKpiIds = op.data.linkedKpiIds !== undefined ?
     parseIds(op.data.linkedKpiIds, "結ぶ KPI") : (previous?.linkedKpiIds ?? []);
+  // v1.12.0：指定が無ければ前の版の値を引き継ぐ。指定があるときだけ確かめる（在る・進行中）。重なりは束の最後に見る
+  if (op.data.taskmasterProjectId !== undefined) {
+    next.taskmasterProjectId = str(op.data.taskmasterProjectId);
+    checkProject(str(next.taskmasterProjectId), projects);
+  } else {
+    next.taskmasterProjectId = str(previous?.taskmasterProjectId);
+  }
 
   if (!next.name) throw new Error("取り組みの名前が必要です");
   if (!(STAGES as readonly string[]).includes(str(next.stage))) {
@@ -202,7 +257,7 @@ export function writeInitiative(
   return {
     kind: "initiative", action: current ? "update" : "create", id,
     title: no + " " + str(next.name),
-    before: display(previous, milestones, kpis), after: display(revision, milestones, kpis) as Obj,
+    before: display(previous, milestones, kpis, projects ?? []), after: display(revision, milestones, kpis, projects ?? []) as Obj,
   };
 }
 
@@ -250,6 +305,7 @@ export function unlinkMilestone(
 /** 読む道具の中身。13 件の現在の版と結び、逆引き（マイルストーン・KPI → 取り組みの番号）を返す */
 export function buildInitiativesView(
   rawStore: unknown, milestones: Item[], kpis: Item[], opts: { initiativeNo?: string; includeHistory?: boolean } = {},
+  projects: Item[] = [],
 ) {
   if (rawStore === null) {
     return { ok: true, readonly: true, state: "not_configured", count: 0, initiatives: [],
@@ -274,6 +330,17 @@ export function buildInitiativesView(
     ideals: rev.ideals, conditions: rev.conditions, kpis: rev.kpis,
     approaches: rev.approaches, plans: rev.plans, obstacles: rev.obstacles, progress: rev.progress,
   });
+  // v1.12.0：組にした TaskMaster のプロジェクト（id と名前。名前は見つからなければ null）
+  const project = (rev: Obj) => {
+    const pid = str(rev.taskmasterProjectId);
+    const p = pid ? projects.find(x => str(x.id) === pid) : undefined;
+    return { taskmaster_project_id: pid || null, taskmaster_project_name: p ? (str(p.title) || null) : null };
+  };
+  const projectLinks: Record<string, string[]> = {};
+  for (const r of doc.records as Item[]) {
+    const pid = str(((r.revisions as Obj[]).at(-1) as Obj).taskmasterProjectId);
+    if (pid) (projectLinks[pid] ??= []).push(str(r.initiativeNo));
+  }
   const initiatives = rows.map(r => {
     const revs = r.revisions as Obj[];
     const last = revs.at(-1) as Obj;
@@ -281,6 +348,7 @@ export function buildInitiativesView(
       initiative_no: r.initiativeNo, id: r.id,
       version: last.number, saved_at: last.savedAt, last_reason: last.reason,
       ...content(last),
+      ...project(last),
       linked_milestones: ((last.linkedMilestoneIds as string[] | undefined) ?? []).map(mid => {
         const m = milestones.find(x => x.id === mid);
         return m ? { id: mid, title: m.title, status: m.status, dueDate: m.dueDate ?? "" } : { id: mid, missing: true };
@@ -293,6 +361,7 @@ export function buildInitiativesView(
         history: [...revs].reverse().map(rev => ({
           version: rev.number, saved_at: rev.savedAt, reason: rev.reason, ...content(rev),
           linkedMilestoneIds: rev.linkedMilestoneIds ?? [], linkedKpiIds: rev.linkedKpiIds ?? [],
+          taskmasterProjectId: str(rev.taskmasterProjectId) || null,
         })),
       } : {}),
     };
@@ -303,6 +372,7 @@ export function buildInitiativesView(
     initiatives,
     milestone_links: milestoneLinks,
     kpi_links: kpiLinks,
+    project_links: projectLinks,
     note: "KPI の今月の実績は haAku__get_kpi_progress で読む。過去の版と理由は include_history: true で返す。",
   };
 }
