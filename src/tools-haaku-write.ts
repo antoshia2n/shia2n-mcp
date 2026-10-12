@@ -46,6 +46,8 @@ export function registerHaakuWriteTools(server: McpServer, env: Env): void {
     "progress（進捗・空可）・linkedMilestoneIds・linkedKpiIds（結ぶマイルストーンとKPIのIDの配列をJSONの文字列で・存在しないIDは断る）・reason。"+
     "taskmasterProjectId（組にする TaskMaster のプロジェクトの id・空文字か null で外す・省くと前の版のまま）。TaskMaster に無い id・status が active でないプロジェクトは断る。1 つのプロジェクトは 1 つの取り組みにだけで、束を当て終えた形で確かめる（同じ束で A から外して B に付けられる）。"+
     "マイルストーンの前は data.dependsOnIds（前のマイルストーンIDの配列をJSONの文字列で・0〜10件・存在しないID・自分・循環・重複は断る）で複数持てる。古い dependsOn には配列の1つ目が自動で入る（両方渡して1つ目が違えば断る）。"+
+    "マイルストーンのメモは data.notes（文章・5000文字まで・空文字で消す）、リンクは data.links（[{\"title\":\"題名\",\"url\":\"https://…\"}] のJSONの文字列・0〜20件・httpsだけ・同じurlは1回・\"[]\"か空文字で全部外す）。渡さなければ今の値のまま。"+
+    "着手日 startDate は haAku の画面で決める（AIからは書かない）。AIが期限 dueDate を着手日より前にする変更は断る。"+
     "マイルストーンを消すときは kind:'milestone_delete'・data:{id,reason}（理由は必須）。ほかのマイルストーンの前になっているもの・タスクが結ばれているもの・戦略が参照しているもの・重点に選ばれているものは断る。"+
     "結んでいる取り組みからは自動で外し、その取り組みの版を1つ上げる。消す前の中身はロードマップの書き込み記録（aiChanges）に残る。",
     {

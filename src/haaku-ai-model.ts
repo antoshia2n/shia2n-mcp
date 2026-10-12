@@ -227,6 +227,30 @@ function writePhase(state: Stored, op: Change, at: string): StepView {
   return result;
 }
 
+// v1.14.0：マスのリンク。JSON の文字列で [{"title":"…","url":"https://…"}, …]（0〜20 件・題名は 200 文字まで・空可・https だけ・同じ URL は 1 回）
+export function parseMilestoneLinks(raw:unknown):{title:string;url:string}[]{
+  const text=str(raw);
+  if(!text)return [];
+  let v:unknown;
+  try{v=JSON.parse(text);}catch{throw new Error("links は [{\"title\":\"…\",\"url\":\"https://…\"}] の JSON の文字列で渡してください");}
+  if(!Array.isArray(v))throw new Error("links は配列にしてください");
+  if(v.length>20)throw new Error("links は 20 件までです");
+  const seen=new Set<string>();
+  return v.map((x,i)=>{
+    if(!x||typeof x!=="object"||Array.isArray(x)||Object.keys(x).some(k=>k!=="title"&&k!=="url")){
+      throw new Error("links の "+(i+1)+" 件目は {title, url} だけにしてください");
+    }
+    const o=x as Obj;
+    if(o.title!==undefined&&typeof o.title!=="string")throw new Error("links の "+(i+1)+" 件目の title は文字列にしてください");
+    const title=limit(o.title,"links の "+(i+1)+" 件目の title",200);
+    const url=limit(o.url,"links の "+(i+1)+" 件目の url",600);
+    if(!validUrl(url))throw new Error("links の "+(i+1)+" 件目の url は https で始まる住所にしてください");
+    if(seen.has(url))throw new Error("links に同じ url が 2 回あります："+url);
+    seen.add(url);
+    return {title,url};
+  });
+}
+
 function writeMilestone(state:Stored,op:Change,at:string):StepView{
   const road=roadmap(state.os_roadmap_v1), milestones=road.milestones as Item[];
   const phases=road.phases as Item[], id=str(op.data.id)||newTargetId("milestone",op.request_id);
@@ -276,9 +300,19 @@ function writeMilestone(state:Stored,op:Change,at:string):StepView{
   if(fields.status==="done"&&deps.some(dep=>map.get(dep)?.status!=="done")) {
     throw new Error("前提マイルストーンが未達成です");
   }
+  // v1.14.0：着手日（startDate）は画面が書く。AI が期限を動かすときだけ、着手日より前の期限を断る
+  const start=str(old?.startDate);
+  if(op.data.dueDate!==undefined&&fields.dueDate&&validDate(start)&&fields.dueDate<start){
+    throw new Error("期限（"+fields.dueDate+"）がこのマスの着手日（"+start+"）より前です。着手日は haAku の画面で直してください");
+  }
+  // v1.14.0：メモとリンク。渡したときだけ書き換える（渡さなければ今の値のまま）
+  const extra:Item={};
+  if(op.data.notes!==undefined)extra.notes=limit(op.data.notes,"メモ（notes）",5000);
+  if(op.data.links!==undefined)extra.links=parseMilestoneLinks(op.data.links);
+  const extraSame=Object.keys(extra).every(k=>JSON.stringify(k==="notes"?str(old?.notes):(old?.links??[]))===JSON.stringify(extra[k]));
   if(old&&Object.keys(fields).every(k=>str(old[k])===fields[k])&&
-    JSON.stringify(oldDeps)===JSON.stringify(deps))throw new Error("成果物の内容が変わっていません");
-  const candidate:Item={...old,id,...fields,dependsOnIds:deps,
+    JSON.stringify(oldDeps)===JSON.stringify(deps)&&extraSame)throw new Error("成果物の内容が変わっていません");
+  const candidate:Item={...old,id,...fields,dependsOnIds:deps,...extra,
     createdAt:old?.createdAt??at,updatedAt:at,
     doneAt:fields.status==="done" ? (old?.status==="done"&&old.doneAt?old.doneAt:at) : ""};
   const result:StepView={kind:"milestone",action:old?"update":"create",id,
