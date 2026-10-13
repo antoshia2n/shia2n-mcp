@@ -25,6 +25,28 @@ export interface HaakuMilestone {
   dependsOnIds: string[];
   dependsMismatch: boolean;
   evidence: string;
+  /** v1.14.0：着手日（YYYY-MM-DD・空可）。日付として読めない値なら空にして startDateBad を立てる（写す側はそのマスに触らない） */
+  startDate: string;
+  startDateBad: boolean;
+  /** v1.14.0：メモ（文章）とリンク（{ title, url } の並び）。形が違う項目は読まずに linksBad に数える */
+  notes: string;
+  links: { title: string; url: string }[];
+  linksBad: number;
+}
+
+/** v1.14.0：マスの links を読む。形が違う項目は落として数だけ返す（ロードマップ全体を止めない） */
+export function milestoneLinksOf(raw: unknown): { links: { title: string; url: string }[]; bad: number } {
+  if (raw === undefined || raw === null) return { links: [], bad: 0 };
+  if (!Array.isArray(raw)) return { links: [], bad: 1 };
+  const links: { title: string; url: string }[] = [];
+  let bad = 0;
+  for (const x of raw) {
+    const o = x as Record<string, unknown>;
+    if (o && typeof o === "object" && !Array.isArray(o) && typeof o.url === "string" && o.url &&
+        (o.title === undefined || typeof o.title === "string")) links.push({ title: (o.title as string | undefined) ?? "", url: o.url });
+    else bad++;
+  }
+  return { links, bad };
 }
 
 export interface HaakuRoadmap {
@@ -94,6 +116,13 @@ export function validAsOfDate(day: string): string {
   return day;
 }
 
+/** v1.14.0：着手日は画面が書く新しい欄。読めない値でロードマップ全体を止めず、そのマスだけ印を立てる */
+function startOf(raw: unknown): { startDate: string; startDateBad: boolean } {
+  if (raw === undefined || raw === null || raw === "") return { startDate: "", startDateBad: false };
+  if (typeof raw === "string") { try { return { startDate: validAsOfDate(raw), startDateBad: false }; } catch { /* 下へ */ } }
+  return { startDate: "", startDateBad: true };
+}
+
 export function parseHaakuRoadmap(input: unknown): HaakuRoadmap | null {
   if (input === null) return null;
   const raw = objectOf(input, "ロードマップ");
@@ -127,6 +156,9 @@ export function parseHaakuRoadmap(input: unknown): HaakuRoadmap | null {
       dependsOnIds: deps.ids,
       dependsMismatch: deps.mismatch,
       evidence: optionalText(r.evidence, "証拠"),
+      ...startOf(r.startDate),
+      notes: typeof r.notes === "string" ? r.notes : "",
+      ...(() => { const l = milestoneLinksOf(r.links); return { links: l.links, linksBad: l.bad }; })(),
     };
   });
   if (new Set(milestones.map(x => x.id)).size !== milestones.length) {
@@ -207,6 +239,11 @@ function makeMilestoneView(item: HaakuMilestone, day: string) {
     depends_on_ids: item.dependsOnIds,
     source_url: item.notionUrl || null,
     evidence: item.evidence || null,
+    start_date: item.startDate || null,
+    notes: item.notes || null,
+    links: item.links,
+    ...(item.startDateBad ? { start_date_unreadable: true } : {}),
+    ...(item.linksBad ? { links_unreadable: item.linksBad } : {}),
     overdue: !!item.dueDate && item.dueDate < day && item.status !== "done",
   };
 }

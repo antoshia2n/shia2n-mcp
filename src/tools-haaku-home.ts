@@ -5,6 +5,7 @@
  *   haAku__link_tasks          … タスクをステップに結ぶ・付け替える・外す（承認なし・外したものも記録に残す）
  *   haAku__snapshot_progress_now … 毎週日曜の夜の記録（os_progress_weekly_v1）を手で 1 回残す
  *   haAku__sync_task_deadlines … v1.13.0：マスの期限を、結んだ TaskMaster のタスクの期限へ写す（見るだけの形あり）
+ *                                 v1.14.0：着手日（startDate）も同じ決まりで写す
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -61,10 +62,10 @@ export function registerHaakuHomeTools(server: McpServer, env: Env): void {
 
   server.tool(
     "haAku__sync_task_deadlines",
-    "haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す。30分ごとに自動で動くものを手で1回動かす道具。"+
+    "haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す。v1.14.0 からマスの着手日（startDate）もタスクの startDate へ同じ決まりで写す（期限と着手日は別々に照らす）。30分ごとに自動で動くものを手で1回動かす道具。"+
     "写すのは、結んだ未完了・未アーカイブのタスクのうち期限が空か、期限が前回 haAku が写した日のままのものだけ。期限が入っていて前回写した日と違うものは Naoki の日として上書きしない。"+
-    "マスの期限が空になったら、前回写した日のままのタスクだけ空に戻す。結びを外したタスクは期限を触らず、写した記録だけ消す。書くのは deadline の1欄だけで、値が変わらないときは書かない。"+
-    "dry_run: true なら何も書かずに、写す・空に戻す予定と Naoki の日の一覧を返す（見るだけ）。dry_run を省くと書いて、記録 haaku_deadline（GET /diag の last_runs・munikis__get_context の recent_runs）に件数を残す。",
+    "マスの期限が空になったら、前回写した日のままのタスクだけ空に戻す。結びを外したタスクは期限を触らず、写した記録だけ消す。書くのは deadline と startDate の2欄だけで、1つのタスクには1回にまとめて書き、値が変わらないときは書かない。マスの着手日が日付として読めないときは、そのマスの着手日には触らない。"+
+    "dry_run: true なら何も書かずに、写す・空に戻す予定と Naoki の日の一覧を返す（見るだけ・着手日は start_writes と naoki_start_dates）。dry_run を省くと書いて、記録 haaku_deadline（GET /diag の last_runs・munikis__get_context の recent_runs）に件数を残す。",
     { dry_run: z.boolean().optional().describe("true で見るだけ（書かない・記録に残さない）") },
     async args => {
       if (args.dry_run) return asMcpTextResult(await syncTaskDeadlines(await ctxOf(env), { dryRun: true }));

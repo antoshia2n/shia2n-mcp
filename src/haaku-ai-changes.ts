@@ -16,7 +16,9 @@ const FIELDS: Record<ChangeKind, readonly string[]> = {
   milestone: ["id", "title", "criterion", "dueDate", "status", "area",
     "owner", "projectId", "phaseId", "notionUrl", "dependsOn", "evidence",
     // v1.11.0：前のマスを複数（JSON の文字列で ["id", …]）。dependsOn には 1 つ目が入る
-    "dependsOnIds"],
+    "dependsOnIds",
+    // v1.14.0：メモ（文章）とリンク（JSON の文字列で [{"title","url"}, …]）。着手日 startDate は画面が書く（AI からは書かない）
+    "notes", "links"],
   weekly: ["id", "title", "criterion", "milestoneId", "status",
     "evidence", "note", "changeReason"],
   // v1.9.0：取り組み（13 の取り組み）。一覧の欄と結びの欄は JSON の文字列で受ける（中身は haaku-initiatives.ts で検める）
