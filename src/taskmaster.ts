@@ -231,6 +231,11 @@ async function patchTask(token: string, uid: string, id: string, fields: Item): 
   await fsPatch(token, `users/${uid}/tm_tasks/${encodeURIComponent(id)}`, f, Object.keys(fields));
 }
 
+// v1.15.0：日本時間のいまの時刻（終わった時刻 completedAt に使う）
+export function tokyoNowIso(now = new Date()): string {
+  return new Date(now.getTime() + 9 * 3600000).toISOString().slice(0, 19) + "+09:00";
+}
+
 // 日本時間の今日（終わった日 doneAt に使う）
 function tokyoToday(): string {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -492,6 +497,10 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
     if (body.status !== undefined) {
       fields.completed = body.status === "done";
       fields.doneAt = body.status === "done" ? tokyoToday() : "";
+      // v1.15.0：終わった時刻（日本時間の ISO・例 2026-10-13T20:55:12+09:00）。すでに完了で時刻があるときは前の時刻を残す
+      const cur = docToItem(current);
+      if (body.status !== "done") fields.completedAt = "";
+      else if (!(cur.completed === true && typeof cur.completedAt === "string" && cur.completedAt)) fields.completedAt = tokyoNowIso();
     }
     try { await patchTask(token, uid, body.task_id, fields); }
     catch (e) { return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 }); }

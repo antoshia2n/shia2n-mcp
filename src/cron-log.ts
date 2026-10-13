@@ -55,6 +55,9 @@ export const KNOWN_JOBS = [
   // 2026-10-13 追加：haAku のマスの期限を、結んだ TaskMaster のタスクの期限へ写す処理（30 分ごと・結んだ直後・手で 1 回）。
   // 依頼書：https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941
   "haaku_deadline",
+  // 2026-10-13 追加：その日の記録（日報・こなしたこと・残ったこと・予定・記録くん）を毎日 JST 0 時台に前の日の分だけ組む処理。
+  // 依頼書：https://www.notion.so/3f89c6c1c43981308c9dc4e780af3f0d
+  "haaku_day_record",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];

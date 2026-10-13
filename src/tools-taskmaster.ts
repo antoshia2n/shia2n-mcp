@@ -73,7 +73,7 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
 
   server.tool(
     "taskmaster__update_task",
-    "TaskMasterのタスクを更新する。期限変更・ステータス変更・廃案（archived: true）に使う。指定したフィールドのみ上書きし、未指定フィールドは既存値を保持する。戻り値は { ok: true, task: {id, title, status, priority, deadline, groupId, projectId} } または { error: 'task not found' }。",
+    "TaskMasterのタスクを更新する。期限変更・ステータス変更・廃案（archived: true）に使う。指定したフィールドのみ上書きし、未指定フィールドは既存値を保持する。status を done にすると完了の印 completed・終わった日 doneAt・終わった時刻 completedAt（日本時間の ISO・v1.15.0）もそろえる（done 以外にすると空に戻す）。戻り値は { ok: true, task: {id, title, status, priority, deadline, groupId, projectId} } または { error: 'task not found' }。",
     {
       task_id: z.string().describe("更新対象のタスクID（必須。taskmaster__list_tasks の id フィールド）"),
       title: z.string().optional().describe("新しいタスク名。省略時は変更なし"),

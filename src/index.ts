@@ -520,6 +520,7 @@
  * v1.10.0（2026-10-12 開発部）：haAku のホーム（依頼 https://www.notion.so/3f69c6c1c43981b8bb09fa162e38da9b）。タスク → ステップの結びを haAku の側（os_task_links_v1）に持ち、承認なしで書く haAku__link_tasks（外した結びも記録）。読む道具 haAku__get_home（次はこれ・ここが詰まり・ステップと取り組みの行動と成果の率・期限の数）。毎週日曜 JST 23:30 に率を os_progress_weekly_v1 へ残す（記録 haaku_weekly・手で 1 回 haAku__snapshot_progress_now）。計算は src/haaku-home.ts・読み書きは src/haaku-home-store.ts・試験は test/haaku-home.test.ts。設定の追加 0 個。
  * v1.11.0（2026-10-12 開発部）：haAku のマイルストーンに「前を複数」と「承認つきの削除」を足した（依頼 https://www.notion.so/3f79c6c1c43981aba338e41655cd109d）。前の並びは新しい欄 dependsOnIds（配列）に持ち、古い dependsOn には 1 つ目を入れ続ける（haAku 本体の画面が読み続けるため）。読み方は src/haaku-deps.ts の 1 か所。get_home は前へたどれるマスが全部 100％ のときだけ動ける・後ろを止めている数は 1 マス 1 回。preview／apply に kind milestone_delete（id と理由）を足し、ほかの前・結ばれたタスク・戦略の参照・重点は断る。結んでいる取り組みから外して版を 1 つ上げ、消す前の中身はロードマップの aiChanges に残す。試験は test/haaku-deps.test.ts。設定の追加 0 個。
  * v1.12.0（2026-10-12 開発部）：haAku の取り組みの版に欄 taskmasterProjectId（組にする TaskMaster のプロジェクトの id・空可）を足した（依頼 https://www.notion.so/3f79c6c1c43981cba656d5738e6735c4）。書くのは haAku__preview_management_changes → 本人の承認 → apply の kind initiative だけ（省くと前の版のまま・空文字か null で外す）。TaskMaster に無い id・status が active でないもの・ほかの取り組みの現在の版と重なるもの（束を当て終えた形で確かめる）は断る。付けるときだけ app_data/projects を読む（書かない）。haAku__get_initiatives が taskmaster_project_id・taskmaster_project_name・project_links を返す。試験は test/haaku-initiative-project.test.ts。設定の追加 0 個。
+ * v1.15.0（2026-10-13 開発部）：その日の記録（依頼 https://www.notion.so/3f89c6c1c43981308c9dc4e780af3f0d）。1 日 1 件を haAku の側 app_data/os_day_record_v1_YYYY-MM-DD に組む：日報（4 欄と KPI）・こなしたこと（doneAt がその日のタスク・プロジェクトとマスつき）・残ったこと（着手日か期限がその日以前でその日の終わりに未完了）・予定（os_calendar_private_v1 の非公開アドレスから、その日に重なる予定だけを届いた順に読む・src/ical-day.ts）・記録くん（Supabase の daily_logs と rule_checks を読むだけ・欄の名前は表の定義から毎回決める・src/kiroku-read.ts）。毎日 JST 0 時（UTC 15:00・失敗したときだけ 15:30 にもう一度）に前の日の分を組む（記録 haaku_day_record）。道具 haAku__get_day_records・haAku__build_day_record・kiroku__get_logs。taskmaster__update_task で完了にしたとき、終わった時刻を新しい欄 completedAt（日本時間の ISO）にも残す。設定の追加 0 個。
  * v1.14.0（2026-10-13 開発部）：haAku のマスの着手日（startDate）を、結んだ TaskMaster のタスクの startDate へ写す（期限の写し 1.13.0 と同じ 4 つの決まり・記録は os_task_deadline_sync_v1 の starts に別に持つ・1 タスクへの書き込みは期限と合わせて 1 回）。承認の流れの kind milestone に notes（文章）と links（[{title,url}]）を足した。着手日は画面が書き、AI が期限を着手日より前にする変更は断る。get_management_overview のマスに start_date・notes・links。欄の名前は統括の 1 枚（https://www.notion.so/3f79c6c1c43981b6bdffde986b9e0c04）で決めたもの。設定の追加 0 個。
  * v1.13.0（2026-10-13 開発部）：haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す（依頼 https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941）。決まりは 4 つ：空か前回写した日のままのタスクだけ写す・Naoki が入れた日は上書きしない・マスの期限が空になったら写した日のままのものだけ空に戻す・結びを外したら期限は触らず写した記録だけ消す。写した記録は haAku の側（os_task_deadline_sync_v1）に持ち、TaskMaster には deadline の 1 欄だけを読んだ版を条件に書く（値が変わらなければ書かない）。結んだタスクだけを id で読む（30 分ごとに全部読むと無料枠を超えるため）。動く時は haAku__link_tasks の直後・30 分ごと（0,30 の枠）・手で呼ぶ haAku__sync_task_deadlines（dry_run で見るだけ）。記録は haaku_deadline。中身は src/haaku-deadline-sync.ts・試験は test/haaku-deadline-sync.test.ts。設定の追加 0 個。
  */
@@ -557,11 +558,12 @@ import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleGateResolve, handleGateAttempts, handleGateDiag } from "./gate.js";
-import { runAndRecord, recordSkipped } from "./cron-log.js";
+import { runAndRecord, recordSkipped, readAllRuns } from "./cron-log.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
 import { snapshotWeekly } from "./haaku-home-store.js";
 import { syncTaskDeadlines } from "./haaku-deadline-sync.js";
+import { buildDayRecord, yesterdayJst } from "./haaku-day-record.js";
 import { getFirestoreToken } from "./taskmaster.js";
 import { handleShiaraboMtgSync } from "./cron-shiarabo-mtg.js";
 import { handleConsultManagerIntake, handleConsultManagerIntakeHttp } from "./cron-consult-manager-intake.js";
@@ -999,6 +1001,23 @@ export default {
             return await snapshotWeekly({ token: await getFirestoreToken(env), uid: env.NAOKI_UID });
           })
         );
+      }
+
+      // 2026-10-13（v1.15.0）：その日の記録を、毎日 JST 0 時台に前の日の分だけ組む（UTC 15:00）
+      // 依頼書：https://www.notion.so/3f89c6c1c43981308c9dc4e780af3f0d
+      // 15:30 は、15:00 の回が今日うまく終わっていないときだけもう一度組む（毎日 1 回を守るため）
+      if (utcHour === 15 && (utcMinute === 0 || utcMinute === 30)) {
+        tasks.push((async () => {
+          if (utcMinute === 30) {
+            const last = (await readAllRuns(env)).haaku_day_record?.[0];
+            const since = new Date(Date.UTC(scheduledDate.getUTCFullYear(), scheduledDate.getUTCMonth(), scheduledDate.getUTCDate(), 15, 0)).toISOString();
+            if (last && last.status === "success" && last.at >= since) return;
+          }
+          await runAndRecord(env, "haaku_day_record", async () => {
+            const r = await buildDayRecord(env, yesterdayJst(scheduledDate));
+            return { count: r.counts.done, detail: r.detail };
+          });
+        })());
       }
 
       // 2026-10-13（v1.13.0）：haAku のマスの期限を、結んだ TaskMaster のタスクの期限へ写す（30 分ごと・毎回）。v1.14.0 から着手日も同じ回で写す

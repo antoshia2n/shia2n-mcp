@@ -4,6 +4,7 @@ import { asMcpTextResult } from "./app-client.js";
 import { registerHaakuPlanTools } from "./tools-haaku-plan.js";
 import { registerHaakuWriteTools } from "./tools-haaku-write.js";
 import { registerHaakuHomeTools } from "./tools-haaku-home.js";
+import { registerHaakuDayTools } from "./tools-haaku-day.js";
 import type { Env } from "./index.js";
 import { getFirestoreToken, fsGet, fsPatch, toFVal, fromVal, type FVal, type FSDoc } from "./taskmaster.js";
 
@@ -405,6 +406,8 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
   // New human-approved management write path. Existing KPI & daily APIs unchanged.
   registerHaakuWriteTools(server, env);
   registerHaakuHomeTools(server, env);
+  // v1.15.0：その日の記録（haAku__get_day_records・haAku__build_day_record・kiroku__get_logs）
+  registerHaakuDayTools(server, env);
 
   // ─── 1. haAku__get_kpi_progress ───────────────────────────────────────────
   server.tool(
