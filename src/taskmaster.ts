@@ -15,7 +15,7 @@ import { Env } from "./index.js";
 
 const FIREBASE_PROJECT_ID = "gen-lang-client-0371348401";
 const FIREBASE_DB_ID = "ai-studio-622b9a97-52df-425a-85c6-1a2670c54e0a";
-const FIRESTORE_BASE =
+export const FIRESTORE_BASE =
   `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}` +
   `/databases/${FIREBASE_DB_ID}/documents`;
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -181,7 +181,7 @@ export async function fsPatch(
 //   移している途中（value.migrating）は書き込みを断る（移した後の写しから漏れないようにするため）
 // ─────────────────────────────────────────────
 
-type Layout = "v1" | "v2" | "migrating";
+export type Layout = "v1" | "v2" | "migrating";
 
 export async function fsGetOrNull(token: string, path: string): Promise<FSDoc | null> {
   const res = await fetch(`${FIRESTORE_BASE}/${path}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -208,7 +208,7 @@ function docToItem(d: FSDoc): Item {
 }
 
 // 1 本ずつの置き場を条件で引く（equality 1 つだけ）
-async function queryTasks(token: string, uid: string, field: string, value: FVal): Promise<Item[]> {
+export async function queryTasks(token: string, uid: string, field: string, value: FVal): Promise<Item[]> {
   const res = await fetch(`${FIRESTORE_BASE}/users/${uid}:runQuery`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -374,7 +374,7 @@ export async function handleTaskmasterTasks(_req: Request, env: Env): Promise<Re
 // POST /taskmaster/tasks — タスク新規追加
 // ─────────────────────────────────────────────
 
-type AddTaskInput = {
+export type AddTaskInput = {
   title: string;
   status?: string;
   priority?: string;
@@ -382,6 +382,27 @@ type AddTaskInput = {
   groupId?: string | null;
   projectId?: string | null;
 };
+
+// v1.16.0：新しいタスクの形はここ 1 か所で作る（taskmaster__add_task と LINE タスク秘書が同じ形で書くため）
+export function buildNewTask(body: AddTaskInput, now = new Date()): Item {
+  return {
+    id:        crypto.randomUUID(),
+    title:     body.title.trim(),
+    status:    body.status ?? "todo",
+    priority:  body.priority ?? "medium",
+    deadline:  body.deadline ?? null,
+    groupId:   body.groupId ?? null,
+    projectId: body.projectId ?? null,
+    archived:  false,
+    completed: false,
+    createdAt: now.toISOString().slice(0, 10),
+  };
+}
+
+// v1.16.0：1 本ずつの置き場（v2）へ書く文書の中身。メモ以外の空の欄は add_task と同じ
+export function newTaskDocFields(task: Item, notes = ""): Item {
+  return { ...task, doneAt: "", subtasks: [], notes, links: [] };
+}
 
 export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<Response> {
   const uid = env.NAOKI_UID;
@@ -411,24 +432,13 @@ export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<R
   catch (e) { return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 }); }
   if (layout === "migrating") return Response.json(MIGRATING, { status: 503 });
 
-  // 新規タスクオブジェクト
-  const newTask: Item = {
-    id:        crypto.randomUUID(),
-    title:     body.title.trim(),
-    status:    body.status ?? "todo",
-    priority:  body.priority ?? "medium",
-    deadline:  body.deadline ?? null,
-    groupId:   body.groupId ?? null,
-    projectId: body.projectId ?? null,
-    archived:  false,
-    completed: false,
-    createdAt: new Date().toISOString().slice(0, 10),
-  };
+  // 新規タスクオブジェクト（v1.16.0：形は buildNewTask の 1 か所）
+  const newTask = buildNewTask(body);
 
   try {
     if (layout === "v2") {
       // 1 本の文書を足すだけ（ほかのタスクは読まない・書かない）
-      await patchTask(token, uid, newTask.id as string, { ...newTask, doneAt: "", subtasks: [], notes: "", links: [] });
+      await patchTask(token, uid, newTask.id as string, newTaskDocFields(newTask));
     } else {
       const existingItems = expandValue(await fsGet(token, `users/${uid}/app_data/tasks`));
       await fsPatch(token, `users/${uid}/app_data/tasks`, { value: toFVal([...existingItems, newTask]) }, ["value"]);

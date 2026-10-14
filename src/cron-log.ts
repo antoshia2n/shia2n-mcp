@@ -58,6 +58,8 @@ export const KNOWN_JOBS = [
   // 2026-10-13 追加：その日の記録（日報・こなしたこと・残ったこと・予定・記録くん）を毎日 JST 0 時台に前の日の分だけ組む処理。
   // 依頼書：https://www.notion.so/3f89c6c1c43981308c9dc4e780af3f0d
   "haaku_day_record",
+  // 2026-10-14 追加（v1.16.0）：LINE タスク秘書の後片付け（毎日 JST 1:00）
+  "line_inbox_cleanup",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];
