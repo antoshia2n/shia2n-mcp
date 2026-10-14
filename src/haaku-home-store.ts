@@ -11,9 +11,17 @@
  *   os_progress_weekly_v1 … 毎週日曜の夜に、取り組みとステップの行動と成果の率を残す。{ schemaVersion: 1, weeks: [{ weekStart, savedAt, initiatives, steps }] }
  *
  * 書くときは読んだ版（updateTime）を条件に付ける。間に別の書き込みが入っていたら書かずに止める（上書きで消さないため）。
+ *
+ * v1.17.0（2026-10-14 開発部）：TaskMaster の画面から結ぶ（依頼 https://www.notion.so/3f99c6c1c43981a3898fdd4d436535fa）
+ *   ・結ぶ処理は linkTasks の 1 本のまま。道具 haAku__link_tasks と、TaskMaster の画面の受け口（haaku-task-link-http.ts）の両方がこれを呼ぶ
+ *   ・「そのタスクがあるか」は、名指しされたタスクだけを id で読んで確かめる（全部は読まない・無料枠のため）
+ *   ・記録（history）の行に by を足せるようにした（"taskmaster" … TaskMaster の画面から）。by の無い行は今までどおり（道具から）
+ *   ・readLinkOptions：TaskMaster の選び欄に出すもの（結び・マイルストーン・取り組みとプロジェクトの組）を 3 文書だけ読んで返す
  */
 import { fromVal, toFVal, fsGetOrNull, type FSDoc, type FVal } from "./taskmaster.js";
 import { readAllTasks } from "./taskmaster-census.js";
+import { readLayout } from "./taskmaster.js";
+import { readTasksById } from "./taskmaster-by-id.js";
 import { parseHaakuRoadmap } from "./haaku-plan-summary.js";
 import { initiativeStore, INITIATIVES_KEY } from "./haaku-initiatives.js";
 import { computeHome, type Link, type Step, type Task, type Initiative, type KpiMonth } from "./haaku-home.js";
@@ -29,7 +37,9 @@ const REF = /^[A-Za-z0-9_-]{1,180}$/;
 
 type Obj = Record<string, unknown>;
 type LinkRow = { taskId: string; milestoneId: string; at: string };
-type HistoryRow = { at: string; taskId: string; from: string | null; to: string | null };
+type HistoryRow = { at: string; taskId: string; from: string | null; to: string | null; by?: LinkSource };
+/** v1.17.0：どこから結んだか。省くと道具（AI）から */
+export type LinkSource = "taskmaster";
 export type LinksStore = { schemaVersion: 1; links: LinkRow[]; history: HistoryRow[]; updatedAt?: string };
 
 export function jstToday(now = new Date()): string {
@@ -76,7 +86,7 @@ export function parseLinksStore(value: unknown): LinksStore {
 /** 結ぶ・付け替える・外す（milestoneId が null）。1 タスクは 0〜1 ステップ。外したものも history に残す */
 export function applyLinkChanges(
   store: LinksStore, changes: { taskId: string; milestoneId: string | null }[], at: string,
-  knownTasks: Set<string>, knownSteps: Set<string>,
+  knownTasks: Set<string>, knownSteps: Set<string>, by?: LinkSource,
 ): { store: LinksStore; results: { task_id: string; from: string | null; to: string | null; changed: boolean }[] } {
   if (!changes.length || changes.length > 100) throw new Error("結びの変更は 1 回に 1〜100 件です");
   if (new Set(changes.map(c => c.taskId)).size !== changes.length) throw new Error("同じタスクが 2 回入っています");
@@ -92,7 +102,7 @@ export function applyLinkChanges(
     if (from === c.milestoneId) { results.push({ task_id: c.taskId, from, to: c.milestoneId, changed: false }); continue; }
     if (i >= 0) links.splice(i, 1);
     if (c.milestoneId !== null) links.push({ taskId: c.taskId, milestoneId: c.milestoneId, at });
-    history.push({ at, taskId: c.taskId, from, to: c.milestoneId });
+    history.push(by ? { at, taskId: c.taskId, from, to: c.milestoneId, by } : { at, taskId: c.taskId, from, to: c.milestoneId });
     results.push({ task_id: c.taskId, from, to: c.milestoneId, changed: true });
   }
   if (history.length > MAX_HISTORY) throw new Error("結びの記録が上限（" + MAX_HISTORY + " 件）です。消さずに開発部へ");
@@ -165,10 +175,20 @@ export async function buildHome(ctx: Ctx, today = jstToday()) {
   };
 }
 
-export async function linkTasks(ctx: Ctx, changes: { taskId: string; milestoneId: string | null }[], at = new Date().toISOString()) {
-  const [steps, tasks, linksDoc] = await Promise.all([loadSteps(ctx), loadTasks(ctx), readValue(ctx.token, ctx.uid, LINKS_KEY)]);
+/** v1.17.0：名指しされたタスクがあるかだけを確かめる（id で読む）。置き場が古い形（v1）のときだけ今までどおり全部読む */
+async function existingTaskIds(ctx: Ctx, ids: string[]): Promise<Set<string>> {
+  const layout = await readLayout(ctx.token, ctx.uid);
+  if (layout === "migrating") throw new Error("TaskMaster の置き場を移している途中です。少しおいてもう一度呼んでください");
+  if (layout !== "v2") return new Set((await loadTasks(ctx)).map(t => t.id));
+  const safe = ids.filter(id => REF.test(id)); // 形の悪い id は読まずに applyLinkChanges で断る
+  const found = safe.length ? await readTasksById(ctx, safe) : new Map();
+  return new Set([...found].filter(([, t]) => t.exists).map(([id]) => id));
+}
+
+export async function linkTasks(ctx: Ctx, changes: { taskId: string; milestoneId: string | null }[], at = new Date().toISOString(), by?: LinkSource) {
+  const [steps, known, linksDoc] = await Promise.all([loadSteps(ctx), existingTaskIds(ctx, changes.map(c => c.taskId)), readValue(ctx.token, ctx.uid, LINKS_KEY)]);
   const store = parseLinksStore(linksDoc.value);
-  const { store: next, results } = applyLinkChanges(store, changes, at, new Set(tasks.map(t => t.id)), new Set(steps.map(s => s.id)));
+  const { store: next, results } = applyLinkChanges(store, changes, at, known, new Set(steps.map(s => s.id)), by);
   if (results.some(r => r.changed)) await writeValue(ctx.token, ctx.uid, LINKS_KEY, next, linksDoc.version);
   const after = parseLinksStore((await readValue(ctx.token, ctx.uid, LINKS_KEY)).value);
   for (const r of results) {
@@ -176,6 +196,30 @@ export async function linkTasks(ctx: Ctx, changes: { taskId: string; milestoneId
     if (now !== r.to) throw new Error("書いたあとの読み直しで結びが合いません：" + r.task_id);
   }
   return { ok: true, results, links_total: after.links.length, history_total: after.history.length };
+}
+
+/**
+ * v1.17.0：TaskMaster の選び欄に出すもの。読むのは 3 文書だけ（ロードマップ・結び・取り組み）。タスクは読まない
+ *   milestones … 全部（完了も・札に名前を出すため）。選び欄に出すのは TaskMaster 側で status が done でないものだけ
+ *   initiatives … 取り組みごとに、組にした TaskMaster のプロジェクト（無ければ空）と結んだマイルストーン
+ */
+export async function readLinkOptions(ctx: Ctx) {
+  const [steps, linksDoc, initDoc] = await Promise.all([
+    loadSteps(ctx), readValue(ctx.token, ctx.uid, LINKS_KEY), readValue(ctx.token, ctx.uid, INITIATIVES_KEY),
+  ]);
+  const store = parseLinksStore(linksDoc.value);
+  const initiatives = (initiativeStore(initDoc.value).records as Obj[]).map(r => {
+    const last = (r.revisions as Obj[]).at(-1) as Obj;
+    return { no: String(r.initiativeNo), name: String(last.name ?? ""),
+      project_id: typeof last.taskmasterProjectId === "string" ? last.taskmasterProjectId : "",
+      milestone_ids: Array.isArray(last.linkedMilestoneIds) ? (last.linkedMilestoneIds as unknown[]).map(String) : [] };
+  });
+  return {
+    ok: true,
+    links: store.links.map(l => ({ task_id: l.taskId, milestone_id: l.milestoneId })),
+    milestones: steps.map(s => ({ id: s.id, title: s.title, status: s.status, due_date: s.dueDate })),
+    initiatives,
+  };
 }
 
 /** 毎週日曜の夜（JST 23:30）に、その週の率を残す。同じ週は上書き */
