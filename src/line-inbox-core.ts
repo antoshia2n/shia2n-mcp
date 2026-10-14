@@ -30,8 +30,9 @@ export const EVENT_DAYS = 2;
 export const PAIR_MINUTES = 10;
 export const MEMO_MINUTES = 5;
 export const SOURCE_MAX = 2000;
-/** v1.16.1：登録先のグループ（TaskMaster の app_data/groups の題名） */
-export const SIDE_GROUP_TITLE = "サイドクエスト";
+/** v1.16.1：登録先のグループ（TaskMaster の app_data/groups の題名）。v1.16.3：Naoki の実物の名前は「Side Quest」（10/14） */
+export const SIDE_GROUP_TITLE = "Side Quest";
+export const SIDE_GROUP_TITLES = ["Side Quest", "サイドクエスト"];
 
 // ── 署名（LINE の決まり：生の本文にチャネルシークレットで HMAC-SHA256 を取り、base64 で x-line-signature と照らす）──
 export async function validSignature(body: string, signature: string | null, secret: string | undefined): Promise<boolean> {
@@ -244,7 +245,7 @@ export function bubble(c: CardItem): Obj {
   const lines: Obj[] = [
     { type: "text", text: c.title, weight: "bold", wrap: true },
     { type: "text", text: `依頼者：${c.requester || "不明（メモを足すで追記）"}`, size: "xs", wrap: true, color: c.requester ? "#666666" : "#c0392b" },
-    { type: "text", text: `期限：登録した日（サイドクエスト）${c.deadline ? "／先方の期限 " + c.deadline : ""}／優先：${PRIORITY[c.priority] ?? "中"}`, size: "xs", wrap: true, color: "#666666" },
+    { type: "text", text: `期限：登録した日（Side Quest）${c.deadline ? "／先方の期限 " + c.deadline : ""}／優先：${PRIORITY[c.priority] ?? "中"}`, size: "xs", wrap: true, color: "#666666" },
     { type: "text", text: `登録先：${c.projectName ?? "選んでください"}`, size: "xs", wrap: true, color: c.projectName ? "#666666" : "#c0392b" },
   ];
   if (c.similar) lines.push({ type: "text", text: `似たタスクあり：${c.similar.slice(0, 60)}`, size: "xs", wrap: true, color: "#c0392b" });
@@ -288,7 +289,7 @@ export function projectPicker(id: string, options: ProjectOption[]): Obj {
 
 export const HELP = [
   "使い方：他のグループやオープンチャットの発言を長押し →「転送」→ このグループ。画面の写真でも送れます。",
-  "届いた候補ごとに「登録／メモを足す／登録先を変える／破棄」を押します。押した分だけ TaskMaster のサイドクエスト（期限は登録した日）に入ります。",
+  "届いた候補ごとに「登録／メモを足す／登録先を変える／破棄」を押します。押した分だけ TaskMaster の Side Quest（期限は登録した日）に入ります。",
   "「メモを足す」を押したあと 5 分以内に送った文が、その候補のメモになります（誰からの依頼か など）。",
   "候補は 7 日で消えます。結ぶのをやめるときは「/disconnect」と送ります。",
 ].join("\n");
@@ -307,10 +308,16 @@ export function taskNotes(c: { notes?: string; requester?: string; theirDeadline
 }
 
 /** v1.16.1：TaskMaster のグループの一覧（app_data/groups の value）から、題名で id を引く */
-export function groupIdByTitle(groups: unknown, title: string): string | null {
+export function groupIdByTitle(groups: unknown, title: string | string[]): string | null {
   if (!Array.isArray(groups)) return null;
-  const g = (groups as Obj[]).find(x => str(x.title) === title) ?? (groups as Obj[]).find(x => str(x.title).includes(title));
-  return g ? str(g.id) || null : null;
+  // v1.16.3：大文字小文字・空白の違いは同じとみなす（Side Quest / sidequest / Side  Quest）
+  const norm = (s: string) => s.toLowerCase().replace(/[\s　]+/g, "");
+  const list = (groups as Obj[]).filter(x => x && typeof x === "object");
+  for (const t of (Array.isArray(title) ? title : [title]).map(norm)) {
+    const g = list.find(x => norm(str(x.title)) === t) ?? list.find(x => norm(str(x.title)).includes(t));
+    if (g && str(g.id)) return str(g.id);
+  }
+  return null;
 }
 
 export function jstToday(now = new Date()): string {
