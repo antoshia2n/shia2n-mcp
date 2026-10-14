@@ -525,6 +525,7 @@
  * v1.16.1（2026-10-14 開発部）：LINE タスク秘書の直し（Naoki の実機 1 件目 14:02）。登録したタスクの期限は登録した日・グループは TaskMaster の「サイドクエスト」（app_data/groups の題名で引く）。依頼の中の締め切りは「先方の期限」としてメモへ。AI が依頼者（requester）も取り出す。カードに「メモを足す」（押してから 5 分以内の次の 1 通がその候補のメモ・登録済みならタスクのメモも書き直す）。転送された原文を候補に持ち、登録したタスクのメモに残す（Naoki の判断で 1.16.0 の「原文は残さない」を変えた。候補そのものは 7 日で消す）。
  * v1.16.2（2026-10-14 開発部）：LINE タスク秘書の点検（Naoki「秘書チャットまでは行けたけど、タスクマスターに入らない」）。受け取り 1 件ごとの道筋（決めた扱い・ボタン・候補の状態・置き場・サイドクエスト・書き込みの結果・返事）と失敗を line_inbox_log に残し（2 日で消す。LINE の番号は残さず一致したかだけ）、line_inbox__status に直近 10 件と候補 5 件・メモの待ちを出す。途中で失敗したら黙らずに「うまくいきませんでした（理由）」と返す。
  * v1.16.3（2026-10-14 開発部）：LINE タスク秘書の登録先の時間帯を、Naoki の実物の名前「Side Quest」で引く（「サイドクエスト」も受ける。大文字小文字・空白の違いは同じとみなす）。1.16.1〜1.16.2 は名前が合わず時間帯が「なし」で入っていた。line_inbox__status の side_group は見つかった時間帯の id と名前を返す。
+ * v1.17.0（2026-10-14 開発部）：TaskMaster のタスクに「マイルストーン」の選び欄（依頼 https://www.notion.so/3f99c6c1c43981a3898fdd4d436535fa）。受け口 GET/POST /haaku/task-links（haaku-task-link-http.ts・TaskMaster の住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。書くのは道具 haAku__link_tasks と同じ 1 本（tools-haaku-home.ts の linkAndCopyDeadlines：結ぶ → 続けて期限と着手日を写す）。記録の行に by: "taskmaster" を足せるようにした。linkTasks の「そのタスクがあるか」は名指しのタスクだけを id で読む形にした（それまでは 1 回ごとに全部・2026-10-14 実測 1,801 件を読んでいた）。id で読む口は taskmaster-by-id.ts へ移して期限の写しと共有。設定の追加 0 個。
  * v1.14.0（2026-10-13 開発部）：haAku のマスの着手日（startDate）を、結んだ TaskMaster のタスクの startDate へ写す（期限の写し 1.13.0 と同じ 4 つの決まり・記録は os_task_deadline_sync_v1 の starts に別に持つ・1 タスクへの書き込みは期限と合わせて 1 回）。承認の流れの kind milestone に notes（文章）と links（[{title,url}]）を足した。着手日は画面が書き、AI が期限を着手日より前にする変更は断る。get_management_overview のマスに start_date・notes・links。欄の名前は統括の 1 枚（https://www.notion.so/3f79c6c1c43981b6bdffde986b9e0c04）で決めたもの。設定の追加 0 個。
  * v1.13.0（2026-10-13 開発部）：haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す（依頼 https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941）。決まりは 4 つ：空か前回写した日のままのタスクだけ写す・Naoki が入れた日は上書きしない・マスの期限が空になったら写した日のままのものだけ空に戻す・結びを外したら期限は触らず写した記録だけ消す。写した記録は haAku の側（os_task_deadline_sync_v1）に持ち、TaskMaster には deadline の 1 欄だけを読んだ版を条件に書く（値が変わらなければ書かない）。結んだタスクだけを id で読む（30 分ごとに全部読むと無料枠を超えるため）。動く時は haAku__link_tasks の直後・30 分ごと（0,30 の枠）・手で呼ぶ haAku__sync_task_deadlines（dry_run で見るだけ）。記録は haaku_deadline。中身は src/haaku-deadline-sync.ts・試験は test/haaku-deadline-sync.test.ts。設定の追加 0 個。
  */
@@ -546,6 +547,7 @@ import { registerRuminDocTools } from "./tools-rumin-doc.js";
 import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { handleHaakuHumanApproval } from "./haaku-human-approval.js";
+import { handleHaakuTaskLinks, TASK_LINKS_PATH } from "./haaku-task-link-http.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
 import { registerManabuSeminarTools, putSeminar, type PutSeminarArgs } from "./tools-manabu-seminar.js";
@@ -790,6 +792,10 @@ export default {
     // Handle OPTIONS here as well: strict origin rather than the gateway-wide CORS '*'.
     if (url.pathname.startsWith("/haaku/approvals/")) {
       return handleHaakuHumanApproval(request, env);
+    }
+    // v1.17.0：TaskMaster の画面からマイルストーンに結ぶ受け口（Firebase のログインで守る・TaskMaster の住所だけ）
+    if (url.pathname === TASK_LINKS_PATH) {
+      return handleHaakuTaskLinks(request, env);
     }
 
     if (request.method === "OPTIONS") {

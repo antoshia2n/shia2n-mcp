@@ -28,10 +28,13 @@
  *   タスクは全部読まず、結んだタスクだけを id で読む（documents:batchGet）。30 分ごとに動くため
  *   値が変わらないときは書かない。書くときは読んだ版（updateTime）を条件にし、間に Naoki が触っていたら書かない
  */
-import { toFVal, readLayout, fromVal, type FSDoc, type FVal } from "./taskmaster.js";
+import { toFVal, readLayout } from "./taskmaster.js";
 import { parseHaakuRoadmap } from "./haaku-plan-summary.js";
 import { readValue, writeValue, parseLinksStore, LINKS_KEY } from "./haaku-home-store.js";
 import { canonical } from "./haaku-ai-changes.js";
+// v1.17.0：id で読む口は taskmaster-by-id.ts へ移した（結ぶ処理 linkTasks も同じ口を使うため）
+import { readTasksById, type TaskNow } from "./taskmaster-by-id.js";
+export type { TaskNow };
 
 const DB = "projects/gen-lang-client-0371348401/databases/ai-studio-622b9a97-52df-425a-85c6-1a2670c54e0a";
 const API = "https://firestore.googleapis.com/v1/" + DB + "/documents";
@@ -41,8 +44,6 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 type Ctx = { token: string; uid: string };
 export type Copy = { milestoneId: string; date: string; before: string | null; beforeMissing?: boolean; at: string };
 export type SyncStore = { schemaVersion: 1; copies: Record<string, Copy>; starts?: Record<string, Copy>; updatedAt?: string };
-export type TaskNow = { exists: boolean; deadline: unknown; hasDeadline: boolean; startDate?: unknown; hasStartDate?: boolean;
-  completed: boolean; archived: boolean; updateTime: string };
 export type Field = "deadline" | "startDate";
 export type Write = { taskId: string; field?: Field; kind: "copy" | "clear"; from: string; to: string; value: string | null; remove: boolean; milestoneId: string };
 export type Counts = { copied: number; naoki: number; cleared: number; unchanged: number; dropped: number; closed: number; no_due: number; missing: number };
@@ -169,34 +170,6 @@ export function groupWrites(writes: Write[]): { taskId: string; writes: Write[] 
   const by = new Map<string, Write[]>();
   for (const w of writes) by.set(w.taskId, [...(by.get(w.taskId) ?? []), w]);
   return [...by].map(([taskId, ws]) => ({ taskId, writes: ws.sort((a, b) => (a.field === "startDate" ? 1 : 0) - (b.field === "startDate" ? 1 : 0)) }));
-}
-
-/** 結んだタスクだけを id で読む（全部は読まない） */
-async function readTasksById(ctx: Ctx, ids: string[]): Promise<Map<string, TaskNow>> {
-  const out = new Map<string, TaskNow>();
-  for (let i = 0; i < ids.length; i += 100) {
-    const chunk = ids.slice(i, i + 100);
-    const res = await fetch(API + ":batchGet", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + ctx.token, "Content-Type": "application/json" },
-      body: JSON.stringify({ documents: chunk.map(id => DB + "/documents/users/" + ctx.uid + "/tm_tasks/" + encodeURIComponent(id)) }),
-    });
-    if (!res.ok) throw new Error("TaskMaster のタスクを読めませんでした（" + res.status + "）。書いていません");
-    const rows = (await res.json()) as { found?: FSDoc & { updateTime?: string }; missing?: string }[];
-    for (const r of rows) {
-      if (r.found) {
-        const id = decodeURIComponent(r.found.name.split("/").pop() || "");
-        const f = r.found.fields ?? {};
-        const v = (k: string) => (k in f ? fromVal(f[k] as FVal) : undefined);
-        out.set(id, { exists: true, deadline: v("deadline"), hasDeadline: "deadline" in f,
-          startDate: v("startDate"), hasStartDate: "startDate" in f,
-          completed: v("completed") === true, archived: v("archived") === true, updateTime: r.found.updateTime ?? "" });
-      } else if (r.missing) {
-        out.set(decodeURIComponent(r.missing.split("/").pop() || ""), { exists: false, deadline: undefined, hasDeadline: false, hasStartDate: false, completed: false, archived: false, updateTime: "" });
-      }
-    }
-  }
-  return out;
 }
 
 /**

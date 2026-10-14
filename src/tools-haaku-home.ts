@@ -12,7 +12,7 @@ import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { getFirestoreToken } from "./taskmaster.js";
-import { buildHome, linkTasks, snapshotWeekly, jstToday } from "./haaku-home-store.js";
+import { buildHome, linkTasks, snapshotWeekly, jstToday, type LinkSource } from "./haaku-home-store.js";
 import { runAndRecord, readAllRuns } from "./cron-log.js";
 import { syncTaskDeadlines } from "./haaku-deadline-sync.js";
 
@@ -25,7 +25,16 @@ async function syncAndRecord(env: Env): Promise<{ recorded: unknown; thrown: str
   return { recorded: runs.haaku_deadline?.[0] ?? null, thrown };
 }
 
-async function ctxOf(env: Env) {
+/**
+ * v1.17.0：結ぶ → 続けて期限を写す、の 1 本。道具 haAku__link_tasks と TaskMaster の画面の受け口（haaku-task-link-http.ts）が同じものを呼ぶ
+ * 写すのに失敗しても結びは書けているので、中身を返して止めない
+ */
+export async function linkAndCopyDeadlines(env: Env, changes: { taskId: string; milestoneId: string | null }[], by?: LinkSource) {
+  const linked = await linkTasks(await ctxOf(env), changes, new Date().toISOString(), by);
+  return { ...linked, deadlines: await syncAndRecord(env) };
+}
+
+export async function ctxOf(env: Env) {
   if (!env.NAOKI_UID || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
     throw new Error("haAku の読み書き設定がありません（NAOKI_UID / FIREBASE_SA_EMAIL / FIREBASE_SA_PRIVATE_KEY）");
   }
@@ -54,9 +63,8 @@ export function registerHaakuHomeTools(server: McpServer, env: Env): void {
       })).min(1).max(100),
     },
     async args => {
-      const linked = await linkTasks(await ctxOf(env), args.links.map(l => ({ taskId: l.task_id, milestoneId: l.milestone_id })));
-      // v1.13.0：結んだ直後に期限を写す。写すのに失敗しても結びは書けているので、中身を返して止めない
-      return asMcpTextResult({ ...linked, deadlines: await syncAndRecord(env) });
+      // v1.13.0：結んだ直後に期限を写す。v1.17.0：TaskMaster の画面と同じ 1 本（linkAndCopyDeadlines）を通す
+      return asMcpTextResult(await linkAndCopyDeadlines(env, args.links.map(l => ({ taskId: l.task_id, milestoneId: l.milestone_id }))));
     }
   );
 
