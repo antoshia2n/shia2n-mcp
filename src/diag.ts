@@ -153,6 +153,9 @@ const ENV_KEYS: (keyof Env)[] = [
   "RUMIN_PLAN_SHEET_ID",
   // 2026-10-05：開発部がプルリクを作る鍵。無いと github__open_pr が止まる。値は出さず有無だけ返す。
   "GITHUB_TOKEN",
+  // 2026-10-14（v1.16.0）：LINE タスク秘書の鍵 2 つ。無いと /line/webhook は 503（眠った状態）。値は出さず有無だけ返す。
+  "LINE_CHANNEL_SECRET",
+  "LINE_CHANNEL_ACCESS_TOKEN",
   // 2026-10-10：db__impact が非公開のリポジトリを読むだけの鍵。無ければ GITHUB_TOKEN で試す。値は出さず有無だけ返す。
   "GITHUB_READ_TOKEN",
 ];
