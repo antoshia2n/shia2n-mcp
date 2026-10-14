@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import {
   decide, parseAction, projectOptions, cleanTasks, similarTitle, cardsMessage, validSignature, parseAiJson, systemPrompt,
 } from "../src/line-inbox-core.js";
-import { handleLineWebhook, pairLineInbox, cleanupLineInbox, unpairLineInbox } from "../src/line-inbox.js";
+import { handleLineWebhook, pairLineInbox, cleanupLineInbox, unpairLineInbox, lineInboxStatus } from "../src/line-inbox.js";
 import { buildNewTask, newTaskDocFields } from "../src/taskmaster.js";
 
 const G = "C" + "a".repeat(32), G2 = "C" + "b".repeat(32);
@@ -117,6 +117,7 @@ function world() {
   const line: { path: string; body: V | undefined }[] = [];
   const ai: V[] = [];
   let aiAnswer: unknown = { response: { tasks: [] } };
+  let failTaskWrite = false;
   const fetchFake = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     const url = String(input);
     const body = init.body && String(init.body).startsWith("{") ? JSON.parse(String(init.body)) : undefined;
@@ -125,6 +126,7 @@ function world() {
     if (url.startsWith("https://api.line.me/v2/bot/")) { line.push({ path: url.slice(27), body }); return j({}); }
     if (url === `${BASE}:commit`) {
       const writes = body.writes as V[];
+      if (failTaskWrite && writes.some(x => String((x.update as V | undefined)?.name ?? "").includes("/tm_tasks/"))) return j({ error: { status: "INTERNAL" } }, 500);
       for (const w of writes) {
         const name = String((w.update as V | undefined)?.name ?? w.delete);
         const cur = w.currentDocument as V | undefined;
@@ -146,16 +148,20 @@ function world() {
     if (rq) {
       const q = body.structuredQuery as V;
       const coll = ((q.from as V[])[0] as V).collectionId;
-      const f = (q.where as V).fieldFilter as { field: { fieldPath: string }; op: string; value: V };
+      const f = (q.where as V | undefined)?.fieldFilter as { field: { fieldPath: string }; op: string; value: V } | undefined;
       const prefix = `${ROOT}/users/${rq[1]}/${coll}/`;
-      const rows = [...docs.entries()].filter(([n]) => n.startsWith(prefix) && !n.slice(prefix.length).includes("/"))
+      let rows = [...docs.entries()].filter(([n]) => n.startsWith(prefix) && !n.slice(prefix.length).includes("/"))
         .filter(([, d]) => {
+          if (!f) return true;
           const x = d.fields[f.field.fieldPath];
           if (!x) return false;
           const a = dec(x), b = dec(f.value);
           return f.op === "EQUAL" ? a === b : f.op === "LESS_THAN" ? String(a) < String(b) : false;
         })
         .map(([name, d]) => ({ document: { name, fields: d.fields, updateTime: d.updateTime } }));
+      const ob = (q.orderBy as { field: { fieldPath: string } }[] | undefined)?.[0]?.field.fieldPath;
+      if (ob) rows = rows.filter(r => r.document.fields[ob]).sort((a, b) => String(dec(b.document.fields[ob])).localeCompare(String(dec(a.document.fields[ob]))));
+      if (typeof q.limit === "number") rows = rows.slice(0, q.limit);
       return j(rows.length ? rows : [{ readTime: "x" }]);
     }
     if (url.startsWith(BASE + "/")) {
@@ -164,7 +170,7 @@ function world() {
     }
     throw new Error("想定外の通信 " + url);
   };
-  return { docs, put, get, line, ai, fetchFake, setAnswer: (a: unknown) => { aiAnswer = a; }, aiRun: async (_m: string, input: V) => { ai.push(input); return aiAnswer; } };
+  return { docs, put, get, line, ai, fetchFake, setAnswer: (a: unknown) => { aiAnswer = a; }, setFailTaskWrite: (b: boolean) => { failTaskWrite = b; }, aiRun: async (_m: string, input: V) => { ai.push(input); return aiAnswer; } };
 }
 
 async function pemKey(): Promise<string> {
@@ -292,8 +298,24 @@ test("通し：結ぶ → 転送 → 候補 → 登録先を変える → 登録
     assert.equal(lastText(), "登録先を選んでください");
     await send([pb(`a=setp&id=${id2}&p=0`)]);
     assert.equal(w.get(`users/naoki/line_inbox_candidates/${id2}`)!.projectId, "pA");
+    // v1.16.2：書き込みが壊れたら黙らずに返す・記録に残す・候補は待ちのまま
+    w.setFailTaskWrite(true);
+    await send([pb(`a=save&id=${id2}`)]);
+    assert.match(lastText(), /^うまくいきませんでした。もう一度押すか、送り直してください。\n（理由：Error: Firestore commit failed: 500 INTERNAL）$/);
+    assert.equal(w.get(`users/naoki/line_inbox_candidates/${id2}`)!.status, "pending");
+    w.setFailTaskWrite(false);
     await send([pb(`a=save&id=${id2}`)]);
     assert.equal(lastText(), "TaskMaster に入れました：請求書を送る（経営）");
+    // 点検：直近の受け取りの道筋と候補が line_inbox__status に出る
+    const st = await lineInboxStatus(env) as { layout: string; recent_events: { steps: string; error?: string; same_user: boolean | null }[]; recent_candidates: { title: string; status: string }[] };
+    assert.equal(st.layout, "v2");
+    assert.equal(st.recent_events.length, 10);
+    assert.ok(st.recent_events.some(x => x.steps === "decide:owner > action:save > status:pending > layout:v2 > side_group:found > save:ok > reply:TaskMaster に入れました：請求書を送る（経営）"), JSON.stringify(st.recent_events));
+    assert.ok(st.recent_events.some(x => /Firestore commit failed/.test(x.error ?? "")));
+    const logs = [...w.docs.entries()].filter(([n]) => n.includes("/line_inbox_log/")).map(([, d]) => d.fields);
+    assert.ok(logs.some(f => f.same_user?.booleanValue === false && f.steps?.stringValue === "decide:ignore" && f.type?.stringValue === "postback"), "他人のボタンは ignore と残る");
+    assert.ok(!JSON.stringify(logs).includes(U2), "LINE の番号そのものは残さない");
+    assert.equal(st.recent_candidates.length, 2);
 
     // 外す（/disconnect）→ 結びが消えて退出
     await send([msg({ message: { type: "text", id: "d1", text: "/disconnect" }, webhookEventId: "d1" })]);
@@ -309,6 +331,8 @@ test("通し：結ぶ → 転送 → 候補 → 登録先を変える → 登録
     assert.equal(w.get("users/naoki/line_inbox_events/evt_old"), null);
     assert.ok(w.get(`users/naoki/line_inbox_candidates/${id1}`), "新しい候補は残す");
     assert.match(r.detail, /候補 1・受け取りの印 1/);
+    w.put("users/naoki/line_inbox_log/log_old", { createdAt: "2026-01-01T00:00:00.000Z" });
+    assert.match((await cleanupLineInbox(env)).detail, /記録 1 を消した/);
   } finally {
     globalThis.fetch = realFetch;
   }
