@@ -23,7 +23,7 @@ import {
 import {
   validSignature, decide, pairCode, parseAction, projectOptions, parseAiJson, cleanTasks, systemPrompt,
   TASKS_SCHEMA, similarTitle, cardsMessage, projectPicker, HELP, taskNotes, jstToday, sha32,
-  CANDIDATE_DAYS, EVENT_DAYS, PAIR_MINUTES, MEMO_MINUTES, SOURCE_MAX, SIDE_GROUP_TITLE, groupIdByTitle,
+  CANDIDATE_DAYS, EVENT_DAYS, PAIR_MINUTES, MEMO_MINUTES, SOURCE_MAX, SIDE_GROUP_TITLES, groupIdByTitle,
   type Obj, type Owner, type ProjectOption, type CardItem,
 } from "./line-inbox-core.js";
 
@@ -419,8 +419,8 @@ async function handleAction(env: Env, token: string, uid: string, groupId: strin
   const layout = await readLayout(token, uid);
   trace.push("layout:" + layout);
   if (layout !== "v2") return await say([text("TaskMaster の置き場が新しい形ではないため、登録を止めました。")]);
-  // v1.16.1（Naoki 10/14）：期限は登録した日・グループはサイドクエスト・メモに依頼者と原文
-  const sideGroupId = groupIdByTitle(await readValue(token, uid, "groups"), SIDE_GROUP_TITLE);
+  // v1.16.1（Naoki 10/14）：期限は登録した日・グループは Side Quest（v1.16.3 で実物の名前に合わせた）・メモに依頼者と原文
+  const sideGroupId = groupIdByTitle(await readValue(token, uid, "groups"), SIDE_GROUP_TITLES);
   trace.push("side_group:" + (sideGroupId ? "found" : "none"));
   const task = buildNewTask({ title, priority: str(c.priority) || "medium", deadline: jstToday(), projectId, groupId: sideGroupId });
   const r = await commit(token, [
@@ -466,6 +466,12 @@ export async function cleanupLineInbox(env: Env): Promise<{ count: number; detai
 }
 
 // ── Claude から呼ぶ（道具）──
+/** v1.16.3：見つかった登録先の時間帯（id と名前）。見つからなければ null */
+const sideGroupOf = (groups: unknown) => {
+  const id = groupIdByTitle(groups, SIDE_GROUP_TITLES);
+  const g = id && Array.isArray(groups) ? (groups as Obj[]).find(x => str(x?.id) === id) : null;
+  return g ? { id, title: str(g.title) } : null;
+};
 const tail = (s: string) => (s ? "…" + s.slice(-4) : "");
 
 export async function pairLineInbox(env: Env, code: string): Promise<Obj> {
@@ -520,7 +526,7 @@ export async function lineInboxStatus(env: Env): Promise<Obj> {
     recent_events: logs.map(x => ({ at: x.createdAt, type: x.type, message: x.message || undefined, has_user: x.has_user, same_group: x.same_group, same_user: x.same_user, steps: x.steps, error: x.error || undefined })),
     recent_candidates: cands.map(x => ({ at: x.createdAt, title: str(x.title).slice(0, 30), status: x.status, has_project: !!str(x.projectId), task: str(x.taskId) ? tail(str(x.taskId)) : null })),
     ok: true, configured, ai_binding: !!env.AI, model: LINE_AI_MODEL,
-    side_group: groupIdByTitle(groups, SIDE_GROUP_TITLE) ? SIDE_GROUP_TITLE : null,
+    side_group: sideGroupOf(groups),
     paired: !!owner, paired_at: owner?.pairedAt ?? null, group: owner ? tail(owner.groupId) : null,
     projects: options.map(o => o.name),
     note: configured ? "受け口は https://shia2n-mcp.gameister1.workers.dev/line/webhook" : "LINE_CHANNEL_SECRET と LINE_CHANNEL_ACCESS_TOKEN が入るまで受け口は 503 を返す（眠った状態）",
