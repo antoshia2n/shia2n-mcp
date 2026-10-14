@@ -11,6 +11,7 @@
  *     line_inbox/memo_wait         「メモを足す」を押した候補（5 分）
  *     line_inbox_candidates/{li_…} 候補（7 日で消す。v1.16.1 から転送された原文も持ち、登録したタスクのメモに残す）
  *     line_inbox_events/{evt_…}    同じ受け取りを 2 度処理しないための印（2 日で消す）
+ *     line_inbox_log/{log_…}       v1.16.2：受け取り 1 件ごとの道筋と失敗（2 日で消す・点検用）
  *   返事はすべて reply（LINE の決まりで通数に数えない）。reply が失敗したときだけ push を 1 通
  *   タスクの書き込みは taskmaster__add_task と同じ形（buildNewTask / newTaskDocFields）
  */
@@ -43,6 +44,7 @@ const p = {
   pairing: (uid: string, code: string) => `users/${uid}/line_inbox_pairing/${code}`,
   candidate: (uid: string, id: string) => `users/${uid}/line_inbox_candidates/${id}`,
   event: (uid: string, id: string) => `users/${uid}/line_inbox_events/${id}`,
+  log: (uid: string, id: string) => `users/${uid}/line_inbox_log/${id}`,
   task: (uid: string, id: string) => `users/${uid}/tm_tasks/${encodeURIComponent(id)}`,
 };
 const fullName = (path: string) => `${DOC_ROOT}/${path}`;
@@ -108,6 +110,21 @@ async function loadOptions(token: string, uid: string): Promise<ProjectOption[]>
 async function openTitles(token: string, uid: string, projectId: string): Promise<string[]> {
   const rows = await queryTasks(token, uid, "projectId", { stringValue: projectId });
   return rows.filter(t => t.completed !== true && t.archived !== true).map(t => str(t.title)).filter(Boolean);
+}
+
+/** v1.16.2：createdAt の新しい順に n 件（点検用） */
+async function latest(token: string, uid: string, collection: string, n: number): Promise<Obj[]> {
+  const res = await fetch(`${FIRESTORE_BASE}/users/${uid}:runQuery`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ structuredQuery: {
+      from: [{ collectionId: collection }],
+      orderBy: [{ field: { fieldPath: "createdAt" }, direction: "DESCENDING" }],
+      limit: n,
+    } }),
+  });
+  if (!res.ok) throw new Error(`Firestore runQuery ${collection} failed: ${res.status}`);
+  return ((await res.json()) as { document?: Doc }[]).filter(r => r.document).map(r => read(r.document as Doc));
 }
 
 /** 日時の欄が cutoff より前の文書を消す（1 回 300 件まで） */
@@ -223,14 +240,51 @@ export async function handleLineWebhook(request: Request, env: Env, ctx: Executi
       const uid = env.NAOKI_UID as string;
       const token = await getFirestoreToken(env);
       const owner = await readOwner(token, uid);
-      await Promise.all(events.map(e => handleEvent(env, token, uid, owner, e).catch(err => console.error("[line_inbox] event", String(err)))));
+      await Promise.all(events.map(e => runEvent(env, token, uid, owner, e)));
     })().catch(err => console.error("[line_inbox] webhook", String(err))));
   }
   return new Response("ok");
 }
 
-async function handleEvent(env: Env, token: string, uid: string, owner: Owner | null, event: Obj): Promise<void> {
+/**
+ * v1.16.2：1 件ずつ動かし、通った道と失敗を line_inbox_log に残す（2 日で消す）。
+ * 失敗したら、Naoki の発言・ボタンのときだけ「うまくいきませんでした」と返す（黙って終わらせない）
+ */
+async function runEvent(env: Env, token: string, uid: string, owner: Owner | null, event: Obj): Promise<void> {
+  const trace: string[] = [];
+  let error = "";
+  try {
+    await handleEvent(env, token, uid, owner, event, trace);
+  } catch (err) {
+    error = String(err).slice(0, 300);
+    console.error("[line_inbox] event", error);
+    const d = decide(event, owner);
+    if (d.kind === "owner") {
+      await answer(env, d.replyToken, d.groupId, [text(`うまくいきませんでした。もう一度押すか、送り直してください。\n（理由：${error.slice(0, 150)}）`)]).catch(() => {});
+    }
+  }
+  await logEvent(token, uid, owner, event, trace, error).catch(err => console.error("[line_inbox] log", String(err)));
+}
+
+/** 受け取った 1 件の記録。LINE の番号そのものは残さない（一致したかだけ） */
+async function logEvent(token: string, uid: string, owner: Owner | null, event: Obj, trace: string[], error: string): Promise<void> {
+  const src = (event.source ?? {}) as Obj;
+  const msg = (event.message ?? {}) as Obj;
+  const now = Date.now();
+  const id = `log_${now}_${Math.random().toString(36).slice(2, 8)}`;
+  await commit(token, [createW(p.log(uid, id), {
+    createdAt: new Date(now).toISOString(),
+    type: str(event.type), message: str(msg.type), source: str(src.type),
+    has_user: !!str(src.userId),
+    same_group: owner ? str(src.groupId) === owner.groupId : null,
+    same_user: owner ? str(src.userId) === owner.userId : null,
+    steps: trace.join(" > ").slice(0, 500), error,
+  })]);
+}
+
+async function handleEvent(env: Env, token: string, uid: string, owner: Owner | null, event: Obj, trace: string[] = []): Promise<void> {
   const d = decide(event, owner);
+  trace.push("decide:" + d.kind);
   if (d.kind === "ignore") return;
   if (d.kind === "leave") return await leave(env, d.target, d.id);
   if (d.kind === "unpaired_hint") {
@@ -252,8 +306,12 @@ async function handleEvent(env: Env, token: string, uid: string, owner: Owner | 
     return;
   }
   // ここから先は「結んだグループ」かつ「Naoki の番号」のときだけ
-  const say = (messages: Obj[]) => answer(env, d.replyToken, d.groupId, messages);
-  if (event.type === "postback") return await handleAction(env, token, uid, d.groupId, (event.postback as Obj | undefined)?.data, say);
+  const say = (messages: Obj[]) => {
+    const m = messages[0] ?? {};
+    trace.push("reply:" + (m.type === "text" ? str(m.text).slice(0, 40) : str(m.altText).slice(0, 40) || str(m.type)));
+    return answer(env, d.replyToken, d.groupId, messages);
+  };
+  if (event.type === "postback") return await handleAction(env, token, uid, d.groupId, (event.postback as Obj | undefined)?.data, say, trace);
   const msg = (event.message ?? {}) as Obj;
   const t = str(msg.text);
   if (msg.type === "text" && t === "/disconnect") {
@@ -270,6 +328,7 @@ async function handleEvent(env: Env, token: string, uid: string, owner: Owner | 
     const w = read(wait);
     if (wait && str(w.candidateId) && Date.parse(str(w.until)) > Date.now()) {
       if (await commit(token, [{ ...deleteW(wait.name), currentDocument: wait.updateTime ? { updateTime: wait.updateTime } : { exists: true } }]) === "ok") {
+        trace.push("memo");
         return await addMemo(token, uid, str(w.candidateId), t, say);
       }
     }
@@ -292,6 +351,7 @@ async function handleEvent(env: Env, token: string, uid: string, owner: Owner | 
       ? "時間内に読み終わりませんでした。短く分けて、もう一度送ってください。"
       : "読み取りに失敗しました。もう一度送ってください。")]);
   }
+  trace.push("extract:" + tasks.length);
   if (!tasks.length) return await say([text("自分がやる作業は見つかりませんでした。")]);
 
   const titles = new Map<string, string[]>();
@@ -320,13 +380,15 @@ async function handleEvent(env: Env, token: string, uid: string, owner: Owner | 
   await say([cardsMessage(items)]);
 }
 
-async function handleAction(env: Env, token: string, uid: string, groupId: string, data: unknown, say: (m: Obj[]) => Promise<void>): Promise<void> {
+async function handleAction(env: Env, token: string, uid: string, groupId: string, data: unknown, say: (m: Obj[]) => Promise<void>, trace: string[] = []): Promise<void> {
   const a = parseAction(data);
+  trace.push("action:" + (a ? a.a : "unreadable"));
   if (!a) return;
   const doc = await getDoc(token, p.candidate(uid, a.id));
   if (!doc) return await say([text("候補が見つかりません（候補は 7 日で消えます）。")]);
   const c = read(doc);
-  if (str(c.groupId) !== groupId) return;
+  trace.push("status:" + str(c.status));
+  if (str(c.groupId) !== groupId) { trace.push("other_group"); return; }
   // v1.16.1：メモは登録したあとでも足せる（破棄したものは除く）
   if (a.a === "memo") {
     if (c.status === "discarded") return await say([text("その候補は破棄済みです。")]);
@@ -354,14 +416,18 @@ async function handleAction(env: Env, token: string, uid: string, groupId: strin
   // save
   const projectId = str(c.projectId);
   if (!projectId) return await say([projectPicker(a.id, options)]);
-  if (await readLayout(token, uid) !== "v2") return await say([text("TaskMaster の置き場が新しい形ではないため、登録を止めました。")]);
+  const layout = await readLayout(token, uid);
+  trace.push("layout:" + layout);
+  if (layout !== "v2") return await say([text("TaskMaster の置き場が新しい形ではないため、登録を止めました。")]);
   // v1.16.1（Naoki 10/14）：期限は登録した日・グループはサイドクエスト・メモに依頼者と原文
   const sideGroupId = groupIdByTitle(await readValue(token, uid, "groups"), SIDE_GROUP_TITLE);
+  trace.push("side_group:" + (sideGroupId ? "found" : "none"));
   const task = buildNewTask({ title, priority: str(c.priority) || "medium", deadline: jstToday(), projectId, groupId: sideGroupId });
   const r = await commit(token, [
     updateW(doc, { status: "saved", taskId: task.id, resolvedAt: new Date().toISOString() }),
     createW(p.task(uid, task.id as string), newTaskDocFields(task, notesOf(c))),
   ]);
+  trace.push("save:" + r);
   const name = options.find(o => o.id === projectId)?.name ?? "";
   await say([text(r === "ok" ? `TaskMaster に入れました：${title}（${name}）` : "他の操作と重なりました。TaskMaster を確かめてください。")]);
 }
@@ -395,7 +461,8 @@ export async function cleanupLineInbox(env: Env): Promise<{ count: number; detai
   const cand = await deleteOlder(token, uid, "line_inbox_candidates", "createdAt", iso(now - CANDIDATE_DAYS * 86400000));
   const evt = await deleteOlder(token, uid, "line_inbox_events", "createdAt", iso(now - EVENT_DAYS * 86400000));
   const pair = await deleteOlder(token, uid, "line_inbox_pairing", "expiresAt", iso(now));
-  return { count: cand + evt + pair, detail: `候補 ${cand}・受け取りの印 ${evt}・結ぶ番号 ${pair} を消した` };
+  const log = await deleteOlder(token, uid, "line_inbox_log", "createdAt", iso(now - EVENT_DAYS * 86400000));
+  return { count: cand + evt + pair + log, detail: `候補 ${cand}・受け取りの印 ${evt}・結ぶ番号 ${pair}・記録 ${log} を消した` };
 }
 
 // ── Claude から呼ぶ（道具）──
@@ -440,8 +507,18 @@ export async function lineInboxStatus(env: Env): Promise<Obj> {
   if (!env.NAOKI_UID) throw new Error("NAOKI_UID がありません");
   const uid = env.NAOKI_UID;
   const token = await getFirestoreToken(env);
-  const [owner, options, groups] = await Promise.all([readOwner(token, uid), loadOptions(token, uid), readValue(token, uid, "groups")]);
+  const [owner, options, groups, layout, wait, logs, cands] = await Promise.all([
+    readOwner(token, uid), loadOptions(token, uid), readValue(token, uid, "groups"), readLayout(token, uid),
+    getDoc(token, p.memoWait(uid)), latest(token, uid, "line_inbox_log", 10).catch(() => []), latest(token, uid, "line_inbox_candidates", 5).catch(() => []),
+  ]);
+  const w = read(wait);
+  const memoActive = !!str(w.until) && Date.parse(str(w.until)) > Date.now();
   return {
+    // v1.16.2：直近の受け取り 10 件の道筋と、直近の候補 5 件（題名は 30 字まで）
+    layout,
+    memo_wait: memoActive ? { until: str(w.until) } : null,
+    recent_events: logs.map(x => ({ at: x.createdAt, type: x.type, message: x.message || undefined, has_user: x.has_user, same_group: x.same_group, same_user: x.same_user, steps: x.steps, error: x.error || undefined })),
+    recent_candidates: cands.map(x => ({ at: x.createdAt, title: str(x.title).slice(0, 30), status: x.status, has_project: !!str(x.projectId), task: str(x.taskId) ? tail(str(x.taskId)) : null })),
     ok: true, configured, ai_binding: !!env.AI, model: LINE_AI_MODEL,
     side_group: groupIdByTitle(groups, SIDE_GROUP_TITLE) ? SIDE_GROUP_TITLE : null,
     paired: !!owner, paired_at: owner?.pairedAt ?? null, group: owner ? tail(owner.groupId) : null,
