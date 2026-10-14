@@ -8,7 +8,8 @@
  *   置き場（Firestore・users/{NAOKI_UID} の下）：
  *     line_inbox/owner             結んだグループと Naoki の LINE の番号（1 件）
  *     line_inbox_pairing/{6 桁}     結ぶ番号（10 分）
- *     line_inbox_candidates/{li_…} 候補（原文は持たない・7 日で消す）
+ *     line_inbox/memo_wait         「メモを足す」を押した候補（5 分）
+ *     line_inbox_candidates/{li_…} 候補（7 日で消す。v1.16.1 から転送された原文も持ち、登録したタスクのメモに残す）
  *     line_inbox_events/{evt_…}    同じ受け取りを 2 度処理しないための印（2 日で消す）
  *   返事はすべて reply（LINE の決まりで通数に数えない）。reply が失敗したときだけ push を 1 通
  *   タスクの書き込みは taskmaster__add_task と同じ形（buildNewTask / newTaskDocFields）
@@ -21,7 +22,7 @@ import {
 import {
   validSignature, decide, pairCode, parseAction, projectOptions, parseAiJson, cleanTasks, systemPrompt,
   TASKS_SCHEMA, similarTitle, cardsMessage, projectPicker, HELP, taskNotes, jstToday, sha32,
-  CANDIDATE_DAYS, EVENT_DAYS, PAIR_MINUTES,
+  CANDIDATE_DAYS, EVENT_DAYS, PAIR_MINUTES, MEMO_MINUTES, SOURCE_MAX, SIDE_GROUP_TITLE, groupIdByTitle,
   type Obj, type Owner, type ProjectOption, type CardItem,
 } from "./line-inbox-core.js";
 
@@ -38,6 +39,7 @@ type Write = Obj;
 const DOC_ROOT = FIRESTORE_BASE.replace("https://firestore.googleapis.com/v1/", "");
 const p = {
   owner: (uid: string) => `users/${uid}/line_inbox/owner`,
+  memoWait: (uid: string) => `users/${uid}/line_inbox/memo_wait`,
   pairing: (uid: string, code: string) => `users/${uid}/line_inbox_pairing/${code}`,
   candidate: (uid: string, id: string) => `users/${uid}/line_inbox_candidates/${id}`,
   event: (uid: string, id: string) => `users/${uid}/line_inbox_events/${id}`,
@@ -51,6 +53,16 @@ const read = (d: Doc | null): Obj => {
   return out;
 };
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+/** 保存した候補からカードの中身を作る */
+const cardOf = (id: string, c: Obj, projectName: string | null): CardItem => ({
+  id, title: str(c.title), deadline: str(c.theirDeadline) || null, priority: str(c.priority), notes: str(c.notes),
+  projectName, similar: str(c.similar) || null, requester: str(c.requester), memo: str(c.memo),
+  source: c.image === true ? "（画像）" : str(c.source),
+});
+const notesOf = (c: Obj) => taskNotes({
+  notes: str(c.notes), requester: str(c.requester), theirDeadline: str(c.theirDeadline) || null,
+  memo: str(c.memo), source: str(c.source), image: c.image === true,
+});
 
 // ── Firestore ──
 /** 1 回の commit（全部入るか、何も入らないか）。前提が崩れていたら "conflict" */
@@ -71,6 +83,7 @@ const updateW = (doc: Doc, data: Obj): Write => ({
   currentDocument: doc.updateTime ? { updateTime: doc.updateTime } : { exists: true },
 });
 const deleteW = (name: string): Write => ({ delete: name });
+const setW = (path: string, data: Obj): Write => ({ update: { name: fullName(path), fields: fieldsOf(data) } });
 
 async function getDoc(token: string, path: string): Promise<Doc | null> {
   return await fsGetOrNull(token, path) as Doc | null;
@@ -251,6 +264,16 @@ async function handleEvent(env: Env, token: string, uid: string, owner: Owner | 
     return;
   }
   if (msg.type === "text" && (t === "/help" || t === "/connect")) return await say([text(t === "/connect" ? "このグループは結んであります。\n" + HELP : HELP)]);
+  // v1.16.1：「メモを足す」を押してから 5 分以内の文は、その候補のメモにする（タスクを取り出さない）
+  if (msg.type === "text" && t) {
+    const wait = await getDoc(token, p.memoWait(uid));
+    const w = read(wait);
+    if (wait && str(w.candidateId) && Date.parse(str(w.until)) > Date.now()) {
+      if (await commit(token, [{ ...deleteW(wait.name), currentDocument: wait.updateTime ? { updateTime: wait.updateTime } : { exists: true } }]) === "ok") {
+        return await addMemo(token, uid, str(w.candidateId), t, say);
+      }
+    }
+  }
   if (msg.type !== "text" && msg.type !== "image") return await say([text("文章か画面の写真を送ってください。")]);
   if (msg.type === "text" && (!t || t.length > MAX_TEXT)) return await say([text(`${MAX_TEXT} 文字以内に分けて送ってください。`)]);
 
@@ -284,12 +307,14 @@ async function handleEvent(env: Env, token: string, uid: string, owner: Owner | 
     const id = "li_" + await sha32(eventId + ":" + i);
     const projectName = options.find(o => o.id === x.projectId)?.name ?? null;
     const similar = x.projectId ? similarTitle(x.title, titles.get(x.projectId) ?? []) : null;
-    writes.push(createW(p.candidate(uid, id), {
-      id, title: x.title, deadline: x.deadline, priority: x.priority, notes: x.notes, projectId: x.projectId,
+    const cand = {
+      id, title: x.title, theirDeadline: x.deadline, priority: x.priority, notes: x.notes, projectId: x.projectId,
+      requester: x.requester, memo: "", source: msg.type === "text" ? t.slice(0, SOURCE_MAX) : "", image: msg.type === "image",
       options: opts, similar, status: "pending", groupId: d.groupId, userId: d.userId,
       createdAt: new Date(now).toISOString(), expiresAt: new Date(now + CANDIDATE_DAYS * 86400000).toISOString(),
-    }));
-    items.push({ id, title: x.title, deadline: x.deadline, priority: x.priority, notes: x.notes, projectName, similar });
+    };
+    writes.push(createW(p.candidate(uid, id), cand));
+    items.push(cardOf(id, cand, projectName));
   }
   if (await commit(token, writes) === "conflict") return;
   await say([cardsMessage(items)]);
@@ -302,6 +327,12 @@ async function handleAction(env: Env, token: string, uid: string, groupId: strin
   if (!doc) return await say([text("候補が見つかりません（候補は 7 日で消えます）。")]);
   const c = read(doc);
   if (str(c.groupId) !== groupId) return;
+  // v1.16.1：メモは登録したあとでも足せる（破棄したものは除く）
+  if (a.a === "memo") {
+    if (c.status === "discarded") return await say([text("その候補は破棄済みです。")]);
+    await commit(token, [setW(p.memoWait(uid), { candidateId: a.id, until: new Date(Date.now() + MEMO_MINUTES * 60000).toISOString() })]);
+    return await say([text(`「${str(c.title)}」に足すメモを送ってください（${MEMO_MINUTES} 分以内の次の 1 通。誰からの依頼か など）。`)]);
+  }
   if (c.status !== "pending") return await say([text("この候補は処理済みです。")]);
   if (Date.parse(str(c.expiresAt)) < Date.now()) return await say([text("7 日を過ぎた候補です。もう一度送ってください。")]);
   const options = (Array.isArray(c.options) ? c.options as Obj[] : []).map(o => ({ id: str(o.id), name: str(o.name), hint: "" }));
@@ -318,21 +349,40 @@ async function handleAction(env: Env, token: string, uid: string, groupId: strin
     const similar = similarTitle(title, await openTitles(token, uid, opt.id).catch(() => []));
     const r = await commit(token, [updateW(doc, { projectId: opt.id, similar })]);
     if (r !== "ok") return await say([text("他の操作と重なりました。もう一度押してください。")]);
-    return await say([cardsMessage([{
-      id: a.id, title, deadline: str(c.deadline) || null, priority: str(c.priority), notes: str(c.notes), projectName: opt.name, similar,
-    }])]);
+    return await say([cardsMessage([cardOf(a.id, { ...c, similar }, opt.name)])]);
   }
   // save
   const projectId = str(c.projectId);
   if (!projectId) return await say([projectPicker(a.id, options)]);
   if (await readLayout(token, uid) !== "v2") return await say([text("TaskMaster の置き場が新しい形ではないため、登録を止めました。")]);
-  const task = buildNewTask({ title, priority: str(c.priority) || "medium", deadline: str(c.deadline) || null, projectId });
+  // v1.16.1（Naoki 10/14）：期限は登録した日・グループはサイドクエスト・メモに依頼者と原文
+  const sideGroupId = groupIdByTitle(await readValue(token, uid, "groups"), SIDE_GROUP_TITLE);
+  const task = buildNewTask({ title, priority: str(c.priority) || "medium", deadline: jstToday(), projectId, groupId: sideGroupId });
   const r = await commit(token, [
     updateW(doc, { status: "saved", taskId: task.id, resolvedAt: new Date().toISOString() }),
-    createW(p.task(uid, task.id as string), newTaskDocFields(task, taskNotes(str(c.notes)))),
+    createW(p.task(uid, task.id as string), newTaskDocFields(task, notesOf(c))),
   ]);
   const name = options.find(o => o.id === projectId)?.name ?? "";
   await say([text(r === "ok" ? `TaskMaster に入れました：${title}（${name}）` : "他の操作と重なりました。TaskMaster を確かめてください。")]);
+}
+
+/** v1.16.1：候補にメモを足す。登録済みならタスクのメモも書き直す */
+async function addMemo(token: string, uid: string, id: string, memoText: string, say: (m: Obj[]) => Promise<void>): Promise<void> {
+  const doc = await getDoc(token, p.candidate(uid, id));
+  if (!doc) return await say([text("メモを足す候補が見つかりません（候補は 7 日で消えます）。")]);
+  const c = read(doc);
+  if (c.status === "discarded") return await say([text("その候補は破棄済みです。")]);
+  const memo = [str(c.memo), memoText.slice(0, 500)].filter(Boolean).join("／");
+  const writes: Write[] = [updateW(doc, { memo })];
+  if (c.status === "saved" && str(c.taskId)) {
+    const task = await getDoc(token, p.task(uid, str(c.taskId)));
+    if (task) writes.push(updateW(task, { notes: notesOf({ ...c, memo }) }));
+  }
+  if (await commit(token, writes) !== "ok") return await say([text("他の操作と重なりました。もう一度「メモを足す」を押してください。")]);
+  const options = (Array.isArray(c.options) ? c.options as Obj[] : []);
+  const name = str(options.find(o => str(o.id) === str(c.projectId))?.name) || null;
+  if (c.status === "saved") return await say([text(`TaskMaster のタスクにメモを足しました：${str(c.title)}`)]);
+  return await say([cardsMessage([cardOf(id, { ...c, memo }, name)])]);
 }
 
 // ── 毎日の後片付け（候補 7 日・受け取りの印 2 日・結ぶ番号は期限切れ）──
@@ -390,9 +440,10 @@ export async function lineInboxStatus(env: Env): Promise<Obj> {
   if (!env.NAOKI_UID) throw new Error("NAOKI_UID がありません");
   const uid = env.NAOKI_UID;
   const token = await getFirestoreToken(env);
-  const [owner, options] = await Promise.all([readOwner(token, uid), loadOptions(token, uid)]);
+  const [owner, options, groups] = await Promise.all([readOwner(token, uid), loadOptions(token, uid), readValue(token, uid, "groups")]);
   return {
     ok: true, configured, ai_binding: !!env.AI, model: LINE_AI_MODEL,
+    side_group: groupIdByTitle(groups, SIDE_GROUP_TITLE) ? SIDE_GROUP_TITLE : null,
     paired: !!owner, paired_at: owner?.pairedAt ?? null, group: owner ? tail(owner.groupId) : null,
     projects: options.map(o => o.name),
     note: configured ? "受け口は https://shia2n-mcp.gameister1.workers.dev/line/webhook" : "LINE_CHANNEL_SECRET と LINE_CHANNEL_ACCESS_TOKEN が入るまで受け口は 503 を返す（眠った状態）",
