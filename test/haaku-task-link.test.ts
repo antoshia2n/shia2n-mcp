@@ -1,7 +1,7 @@
 // v1.17.0：TaskMaster の画面からマイルストーンに結ぶ。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyLinkChanges, linkTasks, readLinkOptions, type LinksStore } from "../src/haaku-home-store.js";
+import { applyLinkChanges, linkTasks, readLinkOptions, phaseMonthsOf, type LinksStore } from "../src/haaku-home-store.js";
 import { parseLinkBody, handleHaakuTaskLinks, TASKMASTER_ORIGIN } from "../src/haaku-task-link-http.js";
 import { toFVal } from "../src/taskmaster.js";
 
@@ -115,7 +115,9 @@ test("結ぶ：名指しのタスクだけを id で読む（全部は読まな�
 test("選び欄の中身：結び・マイルストーン（完了も）・取り組みとプロジェクトの組。タスクは読まない", async () => {
   const uid = "uid1";
   const docs: Record<string, unknown> = {
-    "app_data/os_roadmap_v1": roadmap,
+    "app_data/os_roadmap_v1": { ...roadmap,
+      phases: [{ id: "ph10", title: "10月の構築", purpose: "p", order: 0, startDate: "2026-10-01", dueDate: "2026-10-31" }],
+      milestones: [{ ...roadmap.milestones[0], phaseId: "ph10" }, roadmap.milestones[1]] },
     "app_data/os_task_links_v1": { schemaVersion: 1, links: [{ taskId: "t1", milestoneId: "A", at: "x" }], history: [] },
     "app_data/os_initiatives_v1": { schemaVersion: 1, records: [
       { id: "initiative_10", initiativeNo: "10", revisions: [{ name: "古い名前" }, { name: "バズ記事2期構築", taskmasterProjectId: "p10", linkedMilestoneIds: ["A"] }] },
@@ -126,7 +128,7 @@ test("選び欄の中身：結び・マイルストーン（完了も）・取�
   try {
     const o = await readLinkOptions({ token: "tok", uid });
     assert.deepEqual(o.links, [{ task_id: "t1", milestone_id: "A" }]);
-    assert.deepEqual(o.milestones.map(m => [m.id, m.status, m.due_date]), [["A", "todo", "2026-10-18"], ["B", "done", "2026-10-01"]]);
+    assert.deepEqual(o.milestones.map(m => [m.id, m.status, m.due_date, m.phase_month]), [["A", "todo", "2026-10-18", "10月"], ["B", "done", "2026-10-01", ""]]);
     assert.deepEqual(o.initiatives, [
       { no: "10", name: "バズ記事2期構築", project_id: "p10", milestone_ids: ["A"] },
       { no: "12", name: "組なし", project_id: "", milestone_ids: [] },
@@ -134,4 +136,21 @@ test("選び欄の中身：結び・マイルストーン（完了も）・取�
     assert.equal(fs.calls.length, 3, "読むのは 3 文書だけ");
     assert.equal(fs.calls.filter(c => c.url.includes("tm_tasks")).length, 0);
   } finally { fs.restore(); }
+});
+
+test("フェーズの月（v1.18.0）：開始日の月、無ければ期限の月。フェーズが無い・日付が無い・形が違うときは載せない（止めない）", () => {
+  const road = {
+    phases: [
+      { id: "p1", startDate: "2026-10-26", dueDate: "2026-11-08" },
+      { id: "p2", startDate: "", dueDate: "2026-12-20" },
+      { id: "p3", startDate: "", dueDate: "" },
+    ],
+    milestones: [
+      { id: "m1", phaseId: "p1" }, { id: "m2", phaseId: "p2" }, { id: "m3", phaseId: "p3" },
+      { id: "m4" }, { id: "m5", phaseId: "gone" },
+    ],
+  };
+  assert.deepEqual([...phaseMonthsOf(road)], [["m1", "10月"], ["m2", "12月"]]);
+  assert.equal(phaseMonthsOf(null).size, 0);
+  assert.equal(phaseMonthsOf({ milestones: [] }).size, 0, "phases が無い古い形でも止めない");
 });
