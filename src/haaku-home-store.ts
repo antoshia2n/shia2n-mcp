@@ -199,14 +199,39 @@ export async function linkTasks(ctx: Ctx, changes: { taskId: string; milestoneId
 }
 
 /**
+ * v1.18.0：マイルストーンごとの「フェーズの月」（例 "10月"）。TaskMaster の選び欄で候補に添える。
+ * フェーズは os_roadmap_v1 の phases、マイルストーンは phaseId でそれを指す。月はフェーズの開始日、無ければ期限から取る。
+ * フェーズが無い・日付が無いマイルストーンは載せない（画面は期限だけを出す）。読めない形でも止めずに空を返す（選び欄を止めないため）
+ */
+export function phaseMonthsOf(rawRoad: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  const road = rawRoad && typeof rawRoad === "object" ? (rawRoad as Obj) : null;
+  if (!road || !Array.isArray(road.phases) || !Array.isArray(road.milestones)) return out;
+  const monthOf = new Map<string, string>();
+  for (const p of road.phases as Obj[]) {
+    if (!p || typeof p.id !== "string") continue;
+    const d = [p.startDate, p.dueDate].find(v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) as string | undefined;
+    if (d) monthOf.set(p.id, Number(d.slice(5, 7)) + "月");
+  }
+  for (const m of road.milestones as Obj[]) {
+    if (!m || typeof m.id !== "string" || typeof m.phaseId !== "string") continue;
+    const month = monthOf.get(m.phaseId);
+    if (month) out.set(m.id, month);
+  }
+  return out;
+}
+
+/**
  * v1.17.0：TaskMaster の選び欄に出すもの。読むのは 3 文書だけ（ロードマップ・結び・取り組み）。タスクは読まない
  *   milestones … 全部（完了も・札に名前を出すため）。選び欄に出すのは TaskMaster 側で status が done でないものだけ
  *   initiatives … 取り組みごとに、組にした TaskMaster のプロジェクト（無ければ空）と結んだマイルストーン
  */
 export async function readLinkOptions(ctx: Ctx) {
-  const [steps, linksDoc, initDoc] = await Promise.all([
-    loadSteps(ctx), readValue(ctx.token, ctx.uid, LINKS_KEY), readValue(ctx.token, ctx.uid, INITIATIVES_KEY),
+  const [roadDoc, linksDoc, initDoc] = await Promise.all([
+    readValue(ctx.token, ctx.uid, "os_roadmap_v1"), readValue(ctx.token, ctx.uid, LINKS_KEY), readValue(ctx.token, ctx.uid, INITIATIVES_KEY),
   ]);
+  const steps = parseHaakuRoadmap(roadDoc.value)?.milestones ?? [];
+  const months = phaseMonthsOf(roadDoc.value);
   const store = parseLinksStore(linksDoc.value);
   const initiatives = (initiativeStore(initDoc.value).records as Obj[]).map(r => {
     const last = (r.revisions as Obj[]).at(-1) as Obj;
@@ -217,7 +242,7 @@ export async function readLinkOptions(ctx: Ctx) {
   return {
     ok: true,
     links: store.links.map(l => ({ task_id: l.taskId, milestone_id: l.milestoneId })),
-    milestones: steps.map(s => ({ id: s.id, title: s.title, status: s.status, due_date: s.dueDate })),
+    milestones: steps.map(s => ({ id: s.id, title: s.title, status: s.status, due_date: s.dueDate, phase_month: months.get(s.id) ?? "" })),
     initiatives,
   };
 }
