@@ -120,3 +120,59 @@ test("日付の境界を厳密にチェックする", () => {
   assert.equal(jan.roadmap.quarter.total, 1);
   assert.equal(jan.roadmap.quarter.percent, 0);
 });
+
+// v1.19.0：フェーズの記録を読む口
+test("フェーズを件数と1件ずつ返し、マイルストーンに phase_id を返す", () => {
+  const road = parseHaakuRoadmap({
+    ...rawRoadmap,
+    phases: [
+      { id: "p11", title: "11月", purpose: "集客導線", startDate: "2026-11-01", dueDate: "2026-11-30", projectId: "", order: 1 },
+      { id: "p10", title: "10月", purpose: "土台", startDate: "2026-10-01", dueDate: "2026-10-31", projectId: "pj1", order: 0 },
+      { id: "p12", title: "12月", purpose: "成約", startDate: "2026/12/01", dueDate: "", order: 2 },
+    ],
+    milestones: [
+      { ...rawRoadmap.milestones[0], phaseId: "p10" },
+      { ...rawRoadmap.milestones[1], phaseId: "p11" },
+      { ...rawRoadmap.milestones[2], phaseId: "gone" },
+      rawRoadmap.milestones[3],
+    ],
+  });
+  const out = buildHaakuManagementOverview(road, null, "2026-10-16");
+  const ph = out.roadmap.phases;
+  assert.equal(ph.state, "ready");
+  assert.equal(ph.count, 3);
+  assert.deepEqual(ph.items.map(p => p.id), ["p10", "p11", "p12"]);
+  assert.deepEqual(ph.items[0], {
+    id: "p10", title: "10月", purpose: "土台", start_date: "2026-10-01", due_date: "2026-10-31",
+    project_id: "pj1", order: 0, milestones_total: 1, milestones_achieved: 1,
+  });
+  assert.equal(ph.items[1].project_id, null);
+  assert.equal(ph.items[2].start_date, null);
+  assert.equal(ph.items[2].dates_unreadable, true);
+  assert.equal(ph.milestones_without_phase, 1);
+  assert.equal(ph.milestones_with_unknown_phase, 1);
+  assert.equal(out.roadmap.quarter.milestones.find(m => m.id === "m1")?.phase_id, "p10");
+  assert.equal(out.roadmap.quarter.milestones.find(m => m.id === "m2")?.phase_id, "p11");
+});
+
+test("フェーズの欄が無ければ0件、ロードマップが未登録なら not_configured", () => {
+  const zero = buildHaakuManagementOverview(parseHaakuRoadmap(rawRoadmap), null, "2026-10-16").roadmap.phases;
+  assert.equal(zero.state, "ready");
+  assert.equal(zero.count, 0);
+  assert.deepEqual(zero.items, []);
+  const empty = buildHaakuManagementOverview(parseHaakuRoadmap({ ...rawRoadmap, phases: [] }), null, "2026-10-16").roadmap.phases;
+  assert.equal(empty.count, 0);
+  const none = buildHaakuManagementOverview(null, null, "2026-10-16").roadmap.phases;
+  assert.equal(none.state, "not_configured");
+  assert.equal(none.count, null);
+});
+
+test("フェーズの形が崩れていたら0件と区別して止める（ほかの道具が使う読みは止めない）", () => {
+  for (const phases of [{ a: 1 }, "x", [{ title: "idなし" }], [{ id: "p", title: "" }], [{ id: "p", title: "A" }, { id: "p", title: "B" }]]) {
+    const road = parseHaakuRoadmap({ ...rawRoadmap, phases });
+    assert.ok(road, "parseHaakuRoadmap は止めない");
+    assert.throws(() => buildHaakuManagementOverview(road, null, "2026-10-16"));
+  }
+  const odd = parseHaakuRoadmap({ ...rawRoadmap, milestones: [{ ...rawRoadmap.milestones[0], phaseId: 5 }] });
+  assert.equal(odd?.milestones[0].phaseId, "");
+});

@@ -32,6 +32,21 @@ export interface HaakuMilestone {
   notes: string;
   links: { title: string; url: string }[];
   linksBad: number;
+  /** v1.19.0：所属フェーズの id（os_roadmap_v1 の phases[].id・空可） */
+  phaseId: string;
+}
+
+/** v1.19.0：フェーズ（os_roadmap_v1 の phases）。書くのは preview／apply の kind phase と haAku の画面 */
+export interface HaakuPhase {
+  id: string;
+  title: string;
+  purpose: string;
+  startDate: string;
+  dueDate: string;
+  /** 日付として読めない値は空にして印を立てる（フェーズ全体は止めない） */
+  datesBad: boolean;
+  projectId: string;
+  order: number | null;
 }
 
 /** v1.14.0：マスの links を読む。形が違う項目は落として数だけ返す（ロードマップ全体を止めない） */
@@ -57,6 +72,11 @@ export interface HaakuRoadmap {
   focusMilestoneId: string;
   updatedAt: string;
   milestones: HaakuMilestone[];
+  /**
+   * v1.19.0：phases の欄そのまま。読むのは buildHaakuManagementOverview の parsePhases だけ。
+   * ここで読むと、フェーズの形が崩れたときに get_home・期限の写し・その日の記録まで止まるため
+   */
+  phasesRaw: unknown;
 }
 
 export interface HaakuStrategyRevision {
@@ -159,6 +179,8 @@ export function parseHaakuRoadmap(input: unknown): HaakuRoadmap | null {
       ...startOf(r.startDate),
       notes: typeof r.notes === "string" ? r.notes : "",
       ...(() => { const l = milestoneLinksOf(r.links); return { links: l.links, linksBad: l.bad }; })(),
+      // v1.19.0：ほかの道具（get_home・期限の写し）も通る所なので、形が違っても止めずに空にする
+      phaseId: typeof r.phaseId === "string" ? r.phaseId : "",
     };
   });
   if (new Set(milestones.map(x => x.id)).size !== milestones.length) {
@@ -172,7 +194,49 @@ export function parseHaakuRoadmap(input: unknown): HaakuRoadmap | null {
     focusMilestoneId: optionalText(raw.focusMilestoneId, "重点ID"),
     updatedAt: optionalText(raw.updatedAt, "更新日時"),
     milestones,
+    phasesRaw: raw.phases,
   };
+}
+
+/** v1.19.0：日付の欄。空は空、読めない値は空にして bad を立てる */
+function phaseDateOf(raw: unknown): { value: string; bad: boolean } {
+  if (raw === undefined || raw === null || raw === "") return { value: "", bad: false };
+  if (typeof raw === "string") { try { return { value: validAsOfDate(raw), bad: false }; } catch { /* 下へ */ } }
+  return { value: "", bad: true };
+}
+
+/**
+ * v1.19.0：フェーズを読む。欄が無い（undefined・null）は 0 件。
+ * 並びでない・id か題名が無い・id が重なる、は 0 件と区別するため止める。
+ */
+export function parsePhases(input: unknown): HaakuPhase[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) throw new Error("フェーズ（os_roadmap_v1 の phases）が並びではありません。0 件とは区別して中断しました");
+  const phases = input.map((x, index) => {
+    const r = objectOf(x, "フェーズ " + (index + 1));
+    const id = requiredText(r.id, "フェーズid");
+    const title = requiredText(r.title, "フェーズ名");
+    const start = phaseDateOf(r.startDate), due = phaseDateOf(r.dueDate);
+    return {
+      id, title,
+      purpose: optionalText(r.purpose, "フェーズ「" + title + "」の目的"),
+      startDate: start.value, dueDate: due.value, datesBad: start.bad || due.bad,
+      projectId: optionalText(r.projectId, "フェーズ「" + title + "」のプロジェクトID"),
+      order: typeof r.order === "number" && Number.isFinite(r.order) ? r.order : null,
+    };
+  });
+  if (new Set(phases.map(x => x.id)).size !== phases.length) throw new Error("フェーズIDが重複しています");
+  return phases;
+}
+
+/** v1.19.0：並び順（order → 開始日 → 期限 → 題名） */
+function sortPhases(items: HaakuPhase[]): HaakuPhase[] {
+  return [...items].sort((a, b) =>
+    (a.order ?? 1e9) - (b.order ?? 1e9) ||
+    (a.startDate || "9999-12-31").localeCompare(b.startDate || "9999-12-31") ||
+    (a.dueDate || "9999-12-31").localeCompare(b.dueDate || "9999-12-31") ||
+    a.title.localeCompare(b.title, "ja")
+  );
 }
 
 export function parseHaakuStrategyStore(input: unknown): HaakuStrategyStore | null {
@@ -242,6 +306,7 @@ function makeMilestoneView(item: HaakuMilestone, day: string) {
     start_date: item.startDate || null,
     notes: item.notes || null,
     links: item.links,
+    phase_id: item.phaseId || null,
     ...(item.startDateBad ? { start_date_unreadable: true } : {}),
     ...(item.linksBad ? { links_unreadable: item.linksBad } : {}),
     overdue: !!item.dueDate && item.dueDate < day && item.status !== "done",
@@ -260,6 +325,8 @@ export function buildHaakuManagementOverview(
     String(year) + "-" + String(firstMonth + index).padStart(2, "0")
   );
   const all = roadmap?.milestones ?? [];
+  // v1.19.0：フェーズの形が崩れていたら、ここで止める（0 件と区別するため）
+  const phases = roadmap ? parsePhases(roadmap.phasesRaw) : [];
   const thisQuarter = all.filter(item => monthKeys.some(key => item.dueDate.startsWith(key)));
   const finished = thisQuarter.filter(item => item.status === "done").length;
   const active = sortUpcoming(all.filter(item => item.status !== "done"));
@@ -307,6 +374,24 @@ export function buildHaakuManagementOverview(
           };
         }),
         milestones: thisQuarter.map(row => makeMilestoneView(row, day)),
+      },
+      phases: {
+        state: roadmap ? "ready" : "not_configured",
+        count: roadmap ? phases.length : null,
+        items: sortPhases(phases).map(p => {
+          const rows = all.filter(m => m.phaseId === p.id);
+          return {
+            id: p.id, title: p.title, purpose: p.purpose || null,
+            start_date: p.startDate || null, due_date: p.dueDate || null,
+            project_id: p.projectId || null, order: p.order,
+            milestones_total: rows.length,
+            milestones_achieved: rows.filter(m => m.status === "done").length,
+            ...(p.datesBad ? { dates_unreadable: true } : {}),
+          };
+        }),
+        milestones_without_phase: roadmap ? all.filter(m => !m.phaseId).length : null,
+        milestones_with_unknown_phase: roadmap
+          ? all.filter(m => m.phaseId && !phases.some(p => p.id === m.phaseId)).length : null,
       },
       next_milestone: chosen ? {
         ...makeMilestoneView(chosen, day),
