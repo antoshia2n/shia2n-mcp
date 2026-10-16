@@ -1,7 +1,7 @@
 // v1.10.0：haAku のホームの計算と結び。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computeHome, findBlocker, stepRows } from "../src/haaku-home.js";
+import { computeHome, findBlocker, stepRows, routineGroupsOf } from "../src/haaku-home.js";
 import { applyLinkChanges, parseLinksStore } from "../src/haaku-home-store.js";
 
 const S = (id: string, dependsOn = "", status = "todo", dueDate = "") => ({ id, title: "マス" + id, status, dueDate, dependsOn });
@@ -85,4 +85,34 @@ test("結び：結ぶ・付け替える・外す。外したものも記録に�
   assert.throws(() => applyLinkChanges(s, [{ taskId: "t9", milestoneId: "A" }], "x", tasks, steps), /タスクがありません/);
   assert.throws(() => applyLinkChanges(s, [{ taskId: "t1", milestoneId: "Z" }], "x", tasks, steps), /ステップ/);
   assert.throws(() => parseLinksStore({ schemaVersion: 1, links: [{ taskId: "a", milestoneId: "A" }, { taskId: "a", milestoneId: "B" }], history: [] }), /重複/);
+});
+
+// v1.20.0：期限の数をルーティンとそれ以外に分ける（ホームの今週の予定と同じ見分け方）
+test("期限の数：ルーティンの時間帯を除いた数を足す。今の欄はそのまま", () => {
+  const R = (id: string, deadline: string, groupId: string) => ({ ...T(id, false, deadline), groupId });
+  const tasks = [R("a", "2026-10-12", "morning"), R("b", "2026-10-12", "work"), R("c", "2026-10-20", "morning"),
+    R("d", "2026-10-21", ""), R("e", "", "morning"), { ...T("f", true, "2026-10-12"), groupId: "morning" }];
+  const routine = { state: "ready" as const, groups: routineGroupsOf([{ id: "morning", title: " Routine " }, { id: "work", title: "Deep Work" }, { title: "routine" }])! };
+  assert.deepEqual(routine.groups, [{ id: "morning", title: " Routine " }]);
+  const home = computeHome({ steps: [], tasks, links: [], initiatives: [], kpis: [], today: "2026-10-12", routine });
+  assert.equal(home.deadlines.open_total, 5);
+  assert.equal(home.deadlines.due_by_today_open, 2);
+  assert.equal(home.deadlines.next_week.count, 2);
+  const ex = home.deadlines.excluding_routine;
+  assert.equal(ex.state, "ready");
+  assert.equal(ex.open_total, 2);
+  assert.equal(ex.due_by_today_open, 1);
+  assert.equal(ex.next_week.count, 1);
+  assert.equal(ex.routine_open, 3);
+});
+
+test("期限の数：時間帯を読めないときは、ルーティンを除いた数を null で返す（推測しない）", () => {
+  const tasks = [T("a", false, "2026-10-12")];
+  const none = computeHome({ steps: [], tasks, links: [], initiatives: [], kpis: [], today: "2026-10-12" }).deadlines.excluding_routine;
+  assert.equal(none.state, "not_configured");
+  assert.equal(none.open_total, null);
+  assert.equal(none.due_by_today_open, null);
+  assert.equal(none.next_week.count, null);
+  assert.equal(routineGroupsOf({ a: 1 }), null);
+  assert.deepEqual(routineGroupsOf([]), []);
 });

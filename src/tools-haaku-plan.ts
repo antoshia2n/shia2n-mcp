@@ -53,6 +53,7 @@ export function registerHaakuPlanTools(server: McpServer, env: Env): void {
     "haAku__get_management_overview",
     "haAkuに本人が記録した北極星、今期マイルストーンの達成数と期限、次に達成する成果物、戦略・計画の現行版を読み取る。"+
     "roadmap.phases にフェーズの記録（os_roadmap_v1 の phases）を件数 count と 1 件ずつ（id・title・purpose・start_date・due_date・project_id・order・結ばれたマイルストーンの数 milestones_total と達成 milestones_achieved）で返す。0 件なら count 0。マイルストーンには所属フェーズ phase_id を返す。"+
+    "next_milestone は本人が選んだマス（explicitly_selected）があればそれ、無ければ今期（期限が今期の月）の未達成から、前のマスが全部達成のものを先に・期限が近い順。今期に無いときだけ状態の順 → 期限で選ぶ。"+
     "値が未登録なら state:not_configured と明示。取得エラー時は停止。AIは情報を参照するだけで、数値・計画・タスクを書き換えない。KGI/KPIの実績値は別の haAku__get_kpi_progress を使う。",
     {
       date: z.string().optional().describe("基準日 YYYY-MM-DD（日本時間）。省略時は今日の日本時間。日付に応じて四半期を決める"),

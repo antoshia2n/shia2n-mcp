@@ -44,7 +44,7 @@ export async function ctxOf(env: Env) {
 export function registerHaakuHomeTools(server: McpServer, env: Env): void {
   server.tool(
     "haAku__get_home",
-    "haAkuのホームに出すものを1回で返す。読むだけ。next（次はこれ：詰まりの道の上で前のマスが全部100％の動けるステップの、未完了の結んだタスクの1件目・期限が近い順。タスクが無ければ state:no_tasks「タスクが結ばれていない」）、blocker（ここが詰まり：後ろの未完了のステップを一番多く止めている未完了のステップ・同数なら期限が近い方）、steps（ステップごとの状態 100%／待ち／動ける／進行中 と行動の率＝結んだタスクの完了÷全部）、initiatives（取り組みごとの行動の率・成果の率＝結んだKPIの今月の率・合図「打ち手を足す」）、deadlines（来週の月〜日に期限が来る未完了の数・今日までの期限で残っている数）。タスク→ステップの結びは haAku__link_tasks で書く。",
+    "haAkuのホームに出すものを1回で返す。読むだけ。next（次はこれ：詰まりの道の上で前のマスが全部100％の動けるステップの、未完了の結んだタスクの1件目・期限が近い順。タスクが無ければ state:no_tasks「タスクが結ばれていない」）、blocker（ここが詰まり：後ろの未完了のステップを一番多く止めている未完了のステップ・同数なら期限が近い方）、steps（ステップごとの状態 100%／待ち／動ける／進行中 と行動の率＝結んだタスクの完了÷全部）、initiatives（取り組みごとの行動の率・成果の率＝結んだKPIの今月の率・合図「打ち手を足す」）、deadlines（来週の月〜日に期限が来る未完了の数・今日までの期限で残っている数。excluding_routine に、ホームの今週の予定と同じくルーティンの時間帯＝TaskMaster の時間帯の題名が routine のタスクを除いた open_total・due_by_today_open・next_week.count と、除いた数 routine_open・見分けに使った時間帯 routine_groups。時間帯を読めないときは state と note を返し数は null）。タスク→ステップの結びは haAku__link_tasks で書く。",
     { date: z.string().optional().describe("基準日 YYYY-MM-DD（日本時間）。省略時は今日") },
     async args => {
       if (args.date && !/^\d{4}-\d{2}-\d{2}$/.test(args.date)) throw new Error("date は YYYY-MM-DD で渡してください");
