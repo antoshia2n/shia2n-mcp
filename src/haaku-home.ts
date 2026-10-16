@@ -25,7 +25,27 @@ import { ancestorsOf } from "./haaku-deps.js";
 
 /** dependsOnIds を省くと dependsOn 1 つ（空なら 0 件）として読む（古い呼び出し・試験のため） */
 export type Step = { id: string; title: string; status: string; dueDate: string; dependsOn: string; dependsOnIds?: string[]; dependsMismatch?: boolean };
-export type Task = { id: string; title: string; completed: boolean; archived: boolean; deadline: string; priority: string };
+export type Task = { id: string; title: string; completed: boolean; archived: boolean; deadline: string; priority: string; groupId?: string };
+
+/**
+ * v1.20.0：ルーティンの見分け方は haAku のホームと同じ（haaku PR #20・2026-10-12）。
+ * TaskMaster の app_data/groups（時間帯）の題名が routine の行の id を、タスクの groupId で引く。
+ * 題名は大文字小文字・空白・全角半角の違いを同じとみなす。groupId を固定の値で決めない。
+ */
+export type RoutineInfo =
+  | { state: "ready"; groups: { id: string; title: string }[] }
+  | { state: "not_configured" | "error"; groups: []; note: string };
+
+export const ROUTINE_TITLE = "routine";
+const normTitle = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[\s　]+/g, "");
+
+/** 時間帯の一覧（app_data/groups の value）から routine の行を拾う。並びでなければ null（読めない） */
+export function routineGroupsOf(groups: unknown): { id: string; title: string }[] | null {
+  if (!Array.isArray(groups)) return null;
+  return (groups as Record<string, unknown>[])
+    .filter(g => g && typeof g === "object" && typeof g.id === "string" && g.id && typeof g.title === "string" && normTitle(g.title) === ROUTINE_TITLE)
+    .map(g => ({ id: g.id as string, title: g.title as string }));
+}
 export type Link = { taskId: string; milestoneId: string };
 export type Initiative = { no: string; name: string; linkedMilestoneIds: string[]; linkedKpiIds: string[] };
 export type KpiMonth = { id: string; title: string; unit: string; monthlyTarget: number; monthlyActual: number; pct: number | null };
@@ -98,8 +118,11 @@ export function findBlocker(stepList: Step[]): { id: string; blocks: number } | 
 
 export function computeHome(input: {
   steps: Step[]; tasks: Task[]; links: Link[]; initiatives: Initiative[]; kpis: KpiMonth[]; today: string;
+  /** v1.20.0：省くと「読んでいない」（ルーティンを除いた数は null） */
+  routine?: RoutineInfo;
 }) {
   const { steps: stepList, tasks, links, initiatives, kpis, today } = input;
+  const routine: RoutineInfo = input.routine ?? { state: "not_configured", groups: [], note: "時間帯を読んでいない" };
   const steps = new Map(stepList.map(s => [s.id, s]));
   const rows = stepRows(stepList, tasks, links);
   const rowById = new Map(rows.map(r => [r.id, r]));
@@ -155,6 +178,10 @@ export function computeHome(input: {
   const nextSun = new Date(t.getTime() + (13 - dow) * 86400000).toISOString().slice(0, 10);
   const openTasks = tasks.filter(x => !x.completed && !x.archived);
   const due = (x: Task) => day(x.deadline);
+  // v1.20.0：ホームの今週の予定と同じ数え方（ルーティンの時間帯のタスクを除く）
+  const routineIds = new Set(routine.groups.map(g => g.id));
+  const plain = openTasks.filter(x => !(x.groupId && routineIds.has(x.groupId)));
+  const ready = routine.state === "ready";
 
   return {
     today,
@@ -168,6 +195,15 @@ export function computeHome(input: {
       due_by_today_open: openTasks.filter(x => due(x) && due(x) <= today).length,
       open_total: openTasks.length,
       unlinked_open: openTasks.filter(x => !links.some(l => l.taskId === x.id)).length,
+      excluding_routine: {
+        state: routine.state,
+        ...(routine.state === "ready" ? {} : { note: routine.note }),
+        routine_groups: routine.groups,
+        next_week: { from: nextMon, to: nextSun, count: ready ? plain.filter(x => due(x) >= nextMon && due(x) <= nextSun).length : null },
+        due_by_today_open: ready ? plain.filter(x => due(x) && due(x) <= today).length : null,
+        open_total: ready ? plain.length : null,
+        routine_open: ready ? openTasks.length - plain.length : null,
+      },
     },
   };
 }

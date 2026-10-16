@@ -24,7 +24,7 @@ import { readLayout } from "./taskmaster.js";
 import { readTasksById } from "./taskmaster-by-id.js";
 import { parseHaakuRoadmap } from "./haaku-plan-summary.js";
 import { initiativeStore, INITIATIVES_KEY } from "./haaku-initiatives.js";
-import { computeHome, type Link, type Step, type Task, type Initiative, type KpiMonth } from "./haaku-home.js";
+import { computeHome, routineGroupsOf, type Link, type Step, type Task, type Initiative, type KpiMonth, type RoutineInfo } from "./haaku-home.js";
 
 const FIRESTORE_BASE =
   "https://firestore.googleapis.com/v1/projects/gen-lang-client-0371348401" +
@@ -123,8 +123,21 @@ async function loadTasks({ token, uid }: Ctx): Promise<Task[]> {
   const s = (v: unknown) => (typeof v === "string" ? v : "");
   return items.map(t => ({
     id: s(t.id), title: s(t.title), completed: t.completed === true, archived: t.archived === true,
-    deadline: s(t.deadline), priority: s(t.priority),
+    deadline: s(t.deadline), priority: s(t.priority), groupId: s(t.groupId),
   }));
+}
+
+/** v1.20.0：TaskMaster の時間帯（app_data/groups）から routine の行を読む。読めなくてもホームは止めない（数は null で返す） */
+async function loadRoutine({ token, uid }: Ctx): Promise<RoutineInfo> {
+  try {
+    const doc = await readValue(token, uid, "groups");
+    if (doc.value === null) return { state: "not_configured", groups: [], note: "TaskMaster の時間帯（app_data/groups）がありません" };
+    const groups = routineGroupsOf(doc.value);
+    if (!groups) return { state: "error", groups: [], note: "TaskMaster の時間帯（app_data/groups）が並びではありません" };
+    return { state: "ready", groups };
+  } catch (e) {
+    return { state: "error", groups: [], note: "TaskMaster の時間帯を読めませんでした：" + String((e as Error)?.message ?? e) };
+  }
 }
 
 async function loadKpis({ token, uid }: Ctx, today: string): Promise<KpiMonth[]> {
@@ -162,11 +175,11 @@ async function loadInitiatives({ token, uid }: Ctx): Promise<Initiative[]> {
 }
 
 export async function buildHome(ctx: Ctx, today = jstToday()) {
-  const [steps, tasks, linksDoc, initiatives, kpis] = await Promise.all([
-    loadSteps(ctx), loadTasks(ctx), readValue(ctx.token, ctx.uid, LINKS_KEY), loadInitiatives(ctx), loadKpis(ctx, today),
+  const [steps, tasks, linksDoc, initiatives, kpis, routine] = await Promise.all([
+    loadSteps(ctx), loadTasks(ctx), readValue(ctx.token, ctx.uid, LINKS_KEY), loadInitiatives(ctx), loadKpis(ctx, today), loadRoutine(ctx),
   ]);
   const store = parseLinksStore(linksDoc.value);
-  const home = computeHome({ steps, tasks, links: store.links as Link[], initiatives, kpis, today });
+  const home = computeHome({ steps, tasks, links: store.links as Link[], initiatives, kpis, today, routine });
   return {
     ok: true, readonly: true, ...home,
     links: { state: linksDoc.value === null ? "not_configured" : "ready", count: store.links.length,

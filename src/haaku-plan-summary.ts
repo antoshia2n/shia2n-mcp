@@ -294,6 +294,23 @@ function sortUpcoming(items: HaakuMilestone[]): HaakuMilestone[] {
   );
 }
 
+/** v1.20.0：前のマス（dependsOnIds）が全部達成か。見つからない前のマスは止めないものとして扱う（haaku-deps と同じ） */
+function predecessorsDone(item: HaakuMilestone, byId: Map<string, HaakuMilestone>): boolean {
+  return item.dependsOnIds.every(id => { const p = byId.get(id); return !p || p.status === "done"; });
+}
+
+/** v1.20.0：今期の未達成から「次に達成するマス」を 1 つ選ぶ。無ければ null */
+export function pickThisQuarter(thisQuarter: HaakuMilestone[], all: HaakuMilestone[]): HaakuMilestone | null {
+  const byId = new Map(all.map(m => [m.id, m]));
+  const open = thisQuarter.filter(m => m.status !== "done");
+  return [...open].sort((a, b) =>
+    Number(!predecessorsDone(a, byId)) - Number(!predecessorsDone(b, byId)) ||
+    a.dueDate.localeCompare(b.dueDate) ||
+    a.title.localeCompare(b.title, "ja") ||
+    a.id.localeCompare(b.id)
+  )[0] ?? null;
+}
+
 function makeMilestoneView(item: HaakuMilestone, day: string) {
   return {
     id: item.id, title: item.title, status: item.status,
@@ -330,7 +347,11 @@ export function buildHaakuManagementOverview(
   const thisQuarter = all.filter(item => monthKeys.some(key => item.dueDate.startsWith(key)));
   const finished = thisQuarter.filter(item => item.status === "done").length;
   const active = sortUpcoming(all.filter(item => item.status !== "done"));
-  const chosen = active.find(item => item.id === roadmap?.focusMilestoneId) || active[0] || null;
+  // v1.20.0：本人が選んだマスがあればそれ。無ければ今期（期限が今期の月）の未達成から、
+  // 前のマスが全部達成のものを先に・期限が近い順で選ぶ。今期に 1 つも無いときだけ、前の選び方（状態の順 → 期限）に戻す
+  const chosen = active.find(item => item.id === roadmap?.focusMilestoneId)
+    || pickThisQuarter(thisQuarter, all)
+    || active[0] || null;
   const current = strategy?.records.map(record => {
     const rev = record.revisions[record.revisions.length - 1];
     return {

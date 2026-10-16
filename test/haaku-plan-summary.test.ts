@@ -176,3 +176,35 @@ test("フェーズの形が崩れていたら0件と区別して止める（ほ�
   const odd = parseHaakuRoadmap({ ...rawRoadmap, milestones: [{ ...rawRoadmap.milestones[0], phaseId: 5 }] });
   assert.equal(odd?.milestones[0].phaseId, "");
 });
+
+// v1.20.0：次に達成するマスは今期の未達成から選ぶ
+test("次に達成するマス：今期の未達成から、前のマスが全部達成のものを先に・期限が近い順", () => {
+  const raw = {
+    ...rawRoadmap, focusMilestoneId: "",
+    milestones: [
+      { id: "far", title: "来年の教材", criterion: "", dueDate: "", status: "doing" },
+      { id: "q1", title: "設計", criterion: "", dueDate: "2026-10-18", status: "todo" },
+      { id: "q2", title: "構築", criterion: "", dueDate: "2026-10-17", status: "todo", dependsOnIds: ["q1"], dependsOn: "q1" },
+      { id: "q0", title: "済み", criterion: "", dueDate: "2026-10-11", status: "done" },
+      { id: "q3", title: "前が済み", criterion: "", dueDate: "2026-10-25", status: "todo", dependsOnIds: ["q0"], dependsOn: "q0" },
+    ],
+  };
+  const out = buildHaakuManagementOverview(parseHaakuRoadmap(raw), null, "2026-10-16");
+  assert.equal(out.roadmap.next_milestone?.id, "q1", "前が未達成の q2 より、期限が後でも前が無い q1 を先に。状態 doing の期限なしは選ばない");
+  assert.equal(out.roadmap.next_milestone?.explicitly_selected, false);
+  const focused = buildHaakuManagementOverview(parseHaakuRoadmap({ ...raw, focusMilestoneId: "far" }), null, "2026-10-16");
+  assert.equal(focused.roadmap.next_milestone?.id, "far", "本人が選んだものを優先する");
+  assert.equal(focused.roadmap.next_milestone?.explicitly_selected, true);
+});
+
+test("次に達成するマス：今期に未達成が無いときだけ、前の選び方（状態の順 → 期限）に戻す", () => {
+  const road = parseHaakuRoadmap({
+    ...rawRoadmap, focusMilestoneId: "",
+    milestones: [
+      { id: "q0", title: "済み", criterion: "", dueDate: "2026-10-11", status: "done" },
+      { id: "late", title: "来年", criterion: "", dueDate: "2027-02-01", status: "todo" },
+      { id: "far", title: "来年の教材", criterion: "", dueDate: "", status: "doing" },
+    ],
+  });
+  assert.equal(buildHaakuManagementOverview(road, null, "2026-10-16").roadmap.next_milestone?.id, "far");
+});
