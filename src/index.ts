@@ -529,6 +529,7 @@
  * v1.18.0（2026-10-15 開発部）：TaskMaster のマイルストーンの選び欄の改訂（依頼 https://www.notion.so/3f99c6c1c43981a3898fdd4d436535fa の 2026-10-15 改訂）。受け口 GET /haaku/task-links のマイルストーンに phase_month（フェーズの月・例 "10月"）を足した。月は os_roadmap_v1 の phases の開始日、無ければ期限から取り、マイルストーンの phaseId で引く（haaku-home-store.ts の phaseMonthsOf）。読む文書は 3 本のまま。設定の追加 0 個。
  * v1.19.0（2026-10-16 開発部）：haAku のフェーズの記録を読む口（依頼 https://www.notion.so/3fa9c6c1c43981158846cae87a3221d0）。haAku__get_management_overview の roadmap.phases に、os_roadmap_v1 の phases を件数 count と 1 件ずつ（id・title・purpose・start_date・due_date・project_id・order・milestones_total・milestones_achieved）で返す。欄が無ければ 0 件、並びでない・id か題名が無い・id が重なるときは 0 件と区別して止める。マイルストーンに phase_id。読むのは既にある os_roadmap_v1 の 1 文書だけで、書く道具は足していない（書くのは preview／apply の kind phase のまま）。試験は test/haaku-plan-summary.test.ts。設定の追加 0 個。
  * v1.20.0（2026-10-16 開発部）：haAku の小さい 2 つ（依頼 https://www.notion.so/3f89c6c1c4398115afa7e01e5b5eeca3）。①get_home の deadlines に excluding_routine（ホームの今週の予定と同じく、TaskMaster の時間帯 app_data/groups の題名が routine のタスクを除いた open_total・due_by_today_open・next_week.count と routine_open・routine_groups）。今の欄はそのまま。時間帯を読めなくてもホームは止めず、数を null で返す。②get_management_overview の next_milestone を、本人が選んだマスが無いとき今期（期限が今期の月）の未達成から選ぶ（前のマスが全部達成のものを先に・期限が近い順）。今期に無いときだけ前の選び方。③haaku_weekly は直していない（日曜 JST 23:30 だけ動く作りで、10/12 に入ってから日曜がまだ来ていない。初回は 10/18）。試験は test/haaku-home.test.ts と test/haaku-plan-summary.test.ts。設定の追加 0 個。
+ * v1.21.0（2026-10-18 開発部）：思考整理くん（mindmap.shia2n.jp）の道具 5 本（AI 連携の段階 A・Naoki「OK」12:51）。mindmap__list_maps・mindmap__get_map（箇条書きの文字・各行に {id}）・mindmap__list_ai_requests（「AI への指示」が残る枝を全マップから）・mindmap__add_branches（子の枝を足すだけ・足した枝に by: "ai"・足し先の指示を消す）・mindmap__mark_done。読み書きは Supabase の mm_maps と mm_settings を Naoki の user_id だけに絞る。書くのは版（rev）が読んだときと同じ行だけ、最後の保存から 3 分以内のマップには force が無ければ書かない（画面で書いている最中とぶつけないため）。中身は src/tools-mindmap.ts と src/mindmap-core.ts・試験は test/mindmap-core.test.ts。設定の追加 0 個（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  * v1.14.0（2026-10-13 開発部）：haAku のマスの着手日（startDate）を、結んだ TaskMaster のタスクの startDate へ写す（期限の写し 1.13.0 と同じ 4 つの決まり・記録は os_task_deadline_sync_v1 の starts に別に持つ・1 タスクへの書き込みは期限と合わせて 1 回）。承認の流れの kind milestone に notes（文章）と links（[{title,url}]）を足した。着手日は画面が書き、AI が期限を着手日より前にする変更は断る。get_management_overview のマスに start_date・notes・links。欄の名前は統括の 1 枚（https://www.notion.so/3f79c6c1c43981b6bdffde986b9e0c04）で決めたもの。設定の追加 0 個。
  * v1.13.0（2026-10-13 開発部）：haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す（依頼 https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941）。決まりは 4 つ：空か前回写した日のままのタスクだけ写す・Naoki が入れた日は上書きしない・マスの期限が空になったら写した日のままのものだけ空に戻す・結びを外したら期限は触らず写した記録だけ消す。写した記録は haAku の側（os_task_deadline_sync_v1）に持ち、TaskMaster には deadline の 1 欄だけを読んだ版を条件に書く（値が変わらなければ書かない）。結んだタスクだけを id で読む（30 分ごとに全部読むと無料枠を超えるため）。動く時は haAku__link_tasks の直後・30 分ごと（0,30 の枠）・手で呼ぶ haAku__sync_task_deadlines（dry_run で見るだけ）。記録は haaku_deadline。中身は src/haaku-deadline-sync.ts・試験は test/haaku-deadline-sync.test.ts。設定の追加 0 個。
  */
@@ -587,6 +588,7 @@ import { registerGateTools } from "./tools-gate.js";
 import { registerInspectTools } from "./tools-inspect.js";
 import { registerImpactTools } from "./tools-impact.js";
 import { registerLineInboxTools } from "./tools-line-inbox.js";
+import { registerMindmapTools } from "./tools-mindmap.js";
 import { handleLineWebhook, cleanupLineInbox } from "./line-inbox.js";
 
 export interface Env {
@@ -742,6 +744,7 @@ function createMcpServer(env: Env): McpServer {
   registerInspectTools(server, env);
   registerImpactTools(server, env);
   registerLineInboxTools(server, env);
+  registerMindmapTools(server, env);
   return server;
 }
 
