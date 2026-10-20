@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HEADERS, addrKey, checkRow, putSozaiRows, resolveSheetId, splitList, type SheetsJson } from "../src/sozai-core.ts";
+import { HEADERS, addrKey, checkLook, checkRow, putSozaiRows, resolveSheetId, splitList, toBase64, type SheetsJson } from "../src/sozai-core.ts";
 
 /** 偽の表：1 タブ・値の配列。values:batchUpdate で書き、values/ で読む */
 function fakeSheet(initial: string[][]) {
@@ -149,4 +149,18 @@ test("表の番号：設定があればそれ・無ければ名前で 1 つだ�
   assert.deepEqual(await resolveSheetId(none, " X9 "), { id: "X9" });
   assert.ok("error" in (await resolveSheetId(none, undefined)));
   assert.ok("error" in (await resolveSheetId(two, undefined)));
+});
+
+test("画像を見る：見てよいのは画像だけ・大きすぎるものは断る", () => {
+  assert.deepEqual(checkLook({ id: "a", mimeType: "image/png", size: "1000" }), { ok: true });
+  assert.ok("error" in checkLook({ id: "a", mimeType: "application/pdf", size: "1000" }));
+  assert.ok("error" in checkLook({ id: "a", mimeType: "image/png", size: "9000000" }));
+  assert.ok("error" in checkLook({ id: "a", mimeType: "image/png" }));
+  assert.ok("error" in checkLook({ mimeType: "image/png", size: "10" }));
+});
+
+test("base64：Buffer と同じ（小分けの境目をまたぐ長さでも）", () => {
+  const bytes = new Uint8Array(70000).map((_, i) => (i * 37) % 256);
+  assert.equal(toBase64(bytes), Buffer.from(bytes).toString("base64"));
+  assert.equal(toBase64(new Uint8Array([])), "");
 });
