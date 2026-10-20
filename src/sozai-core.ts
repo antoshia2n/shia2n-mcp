@@ -212,3 +212,39 @@ export async function putSozaiRows(sheets: SheetsJson, id: string, input: PutSoz
   }
   return { ok: true, written: true, dry_run: false, tab, added: plan, skipped };
 }
+
+// ── 画像を見る（2026-10-20 追加・v1.23.0）
+// Google ドライブの道具の read_file_content は画像の文字しか返さず、文字が拾えない画面写真は空で返る。
+// 振り分けが画面写真の中身を見て種類を決められるよう、機械用の身分で画像そのものを取って渡す。
+
+export const LOOK_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
+export const LOOK_MAX_BYTES = 4_500_000;
+
+export interface DriveMeta {
+  id?: string;
+  name?: string;
+  mimeType?: string;
+  size?: string;
+}
+
+/** 見せてよい画像か。だめなら理由を返す */
+export function checkLook(meta: DriveMeta): { ok: true } | { error: string } {
+  if (!meta.id) return { error: "ファイルが見つかりません" };
+  if (!(LOOK_TYPES as readonly string[]).includes(meta.mimeType ?? "")) {
+    return { error: `画像（${LOOK_TYPES.join("・")}）だけを見られます（このファイルは ${meta.mimeType ?? "不明"}）` };
+  }
+  const size = Number(meta.size ?? "0");
+  if (!Number.isFinite(size) || size <= 0) return { error: "大きさが読めないファイルです" };
+  if (size > LOOK_MAX_BYTES) return { error: `大きすぎます（${size} バイト。上限 ${LOOK_MAX_BYTES} バイト）` };
+  return { ok: true };
+}
+
+/** バイト列を base64 に（Workers には Buffer が無いので btoa を小分けに使う） */
+export function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
