@@ -1,8 +1,28 @@
 // @ts-nocheck
 /**
- * 案件くんの取り込みの芯（anken リポジトリの src/core/parse.js と同じ中身を写したもの）。
+ * 案件くんの取り込みの芯（anken リポジトリの src/core/parse.js と同じ中身を写したもの・2026-10-21 夜に写し直し）。
  * 直すときは両方を同じに直す。試験は test/anken-core.test.ts。
  */
+/**
+ * 取り込みの芯（画面とサーバーの両方で使う。外の部品に頼らない）。
+ *
+ *   parseLine(text, { self })  … LINE の「トーク履歴を保存」の .txt か、貼り付けた文を発言の並びにする
+ *   maskSecrets(text)          … ID・パスワードらしき値を伏せる（保存する前に必ず通す）
+ *   withHashes(msgs, salt)     … 同じ発言を何度入れても 1 回だけになる印を付ける
+ *
+ * LINE の形（2026-10 時点の書き出し）：
+ *   [LINE] ○○とのトーク履歴            ← 先頭。チャットの名前の手がかり
+ *   保存日時：2026/10/21 19:00
+ *   2026.10.20 火曜日                   ← 日付の行（古い形は 2026/10/20(火)）
+ *   10:12<TAB>名前<TAB>本文             ← 発言。タブで区切られる。貼り付けだと空白のことがある
+ *   "1 行目                              ← 改行を含む発言は本文が " で囲まれる
+ *   2 行目"
+ *   10:13<TAB>名前がメッセージの送信を取り消しました  ← 発言者の無い知らせ
+ *
+ * 名前に空白が入る人がいる（NAOKI TAKEBAYASHI など）。タブ区切りなら迷わない。
+ * 空白区切りのときは、行の頭によく出る語の並びを名前とみなす（下の guessNames）。
+ */
+
 const DAY_RE = /^(\d{4})[./年](\d{1,2})[./月](\d{1,2})日?\s*(?:\(.\)|（.）|.曜日)?\s*$/;
 const MSG_RE = /^(午前|午後)?(\d{1,2}):(\d{2})(?:\t| +)(.*)$/;
 const TITLE_RE = /^\[LINE\]\s*(.+?)(?:とのトーク履歴|のトーク履歴)\s*$/;
@@ -37,12 +57,23 @@ function guessNames(lines, self = []) {
   return names;
 }
 
+/** LINE の知らせ（発言ではない行）。空白区切りの書き出しでは「名前がメッセージの送信を取り消しました」のように 1 語で来る */
+const SYS_TAIL = /(メッセージの送信を取り消しました|グループに参加しました|グループに追加しました|グループを退会しました|グループから削除しました|を退会させました|招待しました|アナウンスしました(<\/u>)?|グループ名を.*に変更しました|新しいノートを作成しました|ノートに投稿しました)。?$/;
+const isSystem = (who, body) => SYS_TAIL.test(body) && (!who || body.startsWith(who) || /^新しいノート/.test(body));
+
 function splitWho(rest, names) {
+  // 本文にタブが混じった行（表を貼った発言など）：最初の欄が知っている名前でなく、頭が知っている名前なら、空白で分ける
+  const field0 = rest.split("\t")[0];
+  const known = [...names].filter((n) => field0.startsWith(n + " ")).sort((a, b) => b.length - a.length)[0];
+  if (rest.includes("\t") && known && !names.has(field0.trim())) {
+    return { who: known, body: rest.slice(known.length + 1) };
+  }
   if (rest.includes("\t")) {
     const [who, ...body] = rest.split("\t");
     if (!body.length) return { who: "", body: who, system: true };
     return { who: who.trim(), body: body.join("\t") };
   }
+  if (names.has(rest.trim())) return { who: rest.trim(), body: "" };
   const toks = rest.split(/ +/);
   for (let i = Math.min(4, toks.length - 1); i >= 1; i--) {
     const k = toks.slice(0, i).join(" ");
@@ -84,16 +115,28 @@ export function parseLine(text: any, opts: any = {}): any {
       const d = ln.match(DAY_RE);
       if (d) { day = `${d[1]}-${pad(d[2])}-${pad(d[3])}`; continue; }
       const m = ln.match(MSG_RE);
-      if (m && day && (m[4].includes("\t") || /\S +\S/.test(m[4]) || !out.length)) {
+      const time = m ? toTime(m[1], m[2], m[3]) : null;
+      const last = out[out.length - 1];
+      // 同じ日に時刻が戻る行（本文の中の「0:00 - オープニング」のような目次）は、前の発言の続き
+      const goesBack = m && last && last.day === day && time < last.time;
+      if (m && day && !goesBack && !/\S +[^ ]/.test(m[4]) && !m[4].includes("\t") && SYS_TAIL.test(m[4])) {
+        out.push({ day, time, who: "", body: m[4], system: true });
+        continue;
+      }
+      // 名前だけの行（本文が次の行から始まる発言。リンクを改行して貼ったときなど）も 1 件の発言
+      const nameOnly = m && names.has(m[4].trim());
+      if (m && day && !goesBack && (m[4].includes("\t") || /\S +[^ ]/.test(m[4]) || nameOnly || !out.length)) {
         const { who, body, system } = splitWho(m[4], names);
-        out.push({ day, time: toTime(m[1], m[2], m[3]), who, body, system: !!system });
+        out.push({ day, time, who, body, system: !!system || isSystem(who, body) });
         open = body.startsWith('"') && !(body.length > 1 && body.endsWith('"') && !body.endsWith('""'));
         continue;
       }
     }
     if (out.length) {
       const last = out[out.length - 1];
-      last.body += "\n" + ln;
+      // 知らせの行には続きを付けない（続きに見える行は、その前の本当の発言のもの）
+      const host = last.system ? [...out].reverse().find((x) => !x.system) || last : last;
+      host.body += (host.body ? "\n" : "") + ln;
       if (open && ln.endsWith('"') && !ln.endsWith('""')) open = false;
       continue;
     }
@@ -120,10 +163,13 @@ const LABEL = String.raw`(?:ID|ＩＤ|ｉｄ|id|ログインID|ユーザー名|�
 const LABEL_LINE = new RegExp(String.raw`^(\s*[・\-*●■▪◆]?\s*[^\n:：=＝]{0,16}?${LABEL}\s*[:：=＝]\s*)(\S.*)$`, "i");
 const PASS_WORD = new RegExp(String.raw`(?:パスワード|password|pass|PW|ＰＷ|暗証番号)`, "i");
 const MASK = "＊＊＊（伏せた）";
+const EMAIL_RE = /(?<![\w.%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w-])/g;
+const PHONE_RE = /(?<![\d-])(?:0\d{1,4}-\d{1,4}-\d{3,4}|0[5789]0\d{8}|\+81[- ]?\d{1,4}[- ]?\d{1,4}[- ]?\d{3,4})(?![\d-])/g;
 
 /**
  * 1 行ずつ見て、「ラベル：値」の値を伏せる。
  * 「パスワード」とだけ書いた行のすぐ下が空白の無い短い文字なら、その行も伏せる。
+ * ラベルの無いメールアドレスと電話番号も伏せる（ミーティング ID・リンクの中の @ は伏せない）。
  * 返り値：{ text, count }（伏せた数）
  */
 export function maskSecrets(text: any): { text: string; count: number } {
@@ -131,11 +177,15 @@ export function maskSecrets(text: any): { text: string; count: number } {
   let count = 0;
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(LABEL_LINE);
-    if (m && !/https?:\/\//.test(m[2])) {
+    if (m && !/https?:\/\//.test(m[2]) && !/(ミーティング|meeting)\s*ID/i.test(m[1])) {
       lines[i] = m[1] + MASK;
       count++;
       continue;
     }
+    // ラベルの無いメールアドレス・電話番号も伏せる（申込者の連絡先が貼られることがある）
+    const before = lines[i];
+    lines[i] = lines[i].replace(EMAIL_RE, MASK).replace(PHONE_RE, MASK);
+    if (lines[i] !== before) count++;
     const bare = lines[i].trim();
     if (bare && bare.length <= 20 && PASS_WORD.test(bare) && !/[:：=＝]/.test(bare)) {
       const nx = (lines[i + 1] ?? "").trim();
