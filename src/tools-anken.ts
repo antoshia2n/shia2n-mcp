@@ -21,6 +21,7 @@ import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
  *   アプリの AI の口（Claude API）の代わりに、Claude のチャットや予約した仕事が読んで書く道具。
  *   ・anken__setup_case：案件を作る・TaskMaster のプロジェクトとつなぐ
  *   ・anken__import_text／anken__import_doc：LINE の文・議事録（Google ドキュメント）を入れる（伏せ字・重ならない）
+ *   ・anken__replace_days：読み方や伏せ字を直したあと、ある期間の発言を入れ直して読み直しに戻す（2026-10-21 夜 追加）
  *   ・anken__ai_next_days → anken__ai_record_days：まだ読んでいない日を渡す → 日ごとの要約と出来事を書く（段 1）
  *   ・anken__ai_case_context → anken__ai_update_case：出来事の一覧を渡す → 5 つの分け・プロジェクト・要約を書く（段 2）
  *   書く決まりはアプリの worker/ai.js と同じ（Naoki が決めたものは書き換えない・根拠の無いものは入れない）
@@ -75,6 +76,14 @@ async function sha1(s: string): Promise<string> {
   return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("").slice(0, 16);
 }
 
+/** やること・決定の見分け（アプリの worker/ai.js の fpOf と同じ）。議事録（1 回分が 1 発言）は該当行ごとに分ける */
+async function fpOf(prefix: string, msgId: number, isMinutes: boolean, quote?: string, title?: string): Promise<string> {
+  if (!isMinutes) return `${prefix}:${Number(msgId)}`;
+  const key = String(quote || title || "").replace(/\s+/g, "").slice(0, 80);
+  const h = (await sha1(key)).slice(0, 12);
+  return `${prefix}:${Number(msgId)}:${h}`;
+}
+
 
 async function sbPatch(env: Env, path: string, body: Row): Promise<Row[]> {
   const res = await fetch(`${env.SUPABASE_URL}/rest/v1${path}`, {
@@ -123,7 +132,7 @@ const DAY_RULES = `日ごとに「1 行要約（60 字以内）」と「出来�
 
 const CASE_RULES = `まだ閉じていないことを洗い出し、anken__ai_update_case に渡す。
 5 つの分け（kind）：report（報告がまだ）＝自分が引き受けた・約束したことで、3 日以上たってもそのことについての report が見当たらないもの／do（やる）＝自分がやること。引き受けて 3 日未満・期限が 14 日以内・自分から言い出した提案／ask（確かめる）＝誰がやるか・何をするかが読み取れず、相手に確かめないと進めないもの／wait（相手待ち）＝相手の作業・返事を待っているもの／later（あとで）＝期限が 15 日以上先か、相手が「急がない」と言ったもの。
-後の日付に同じことの report や、相手の「ありがとう・できました・届きました」がある依頼は閉じている。出さない。取り下げ・別の人に頼んだものも出さない。同じことは 1 つにまとめ、origin_msg_id は最初の依頼か約束。「登録済み」「TaskMaster にあるもの」「Naoki が外したもの（理由を読む）」と同じことは出さない。note は日付と事実で 1 文。プロジェクトは 3〜8 個、既存の名前はそのまま使う。決定は直近 30 日の大事なものだけ多くて 8 つ。next_mtg は記録にあればその日時、無ければ過去の開催から推定して「（推定）」。`;
+後の日付に同じことの report や、相手の「ありがとう・できました・届きました」がある依頼は閉じている。出さない。取り下げ・別の人に頼んだものも出さない。同じことは 1 つにまとめ、origin_msg_id は最初の依頼か約束。議事録は 1 回分が 1 つの発言なので、1 つの議事録から複数のやること・決定を出してよい（そのときは origin_quote・quote に議事録の該当行をそのまま書く）。「登録済み」「TaskMaster にあるもの」「Naoki が外したもの（理由を読む）」と同じことは出さない。note は日付と事実で 1 文。プロジェクトは 3〜8 個、既存の名前はそのまま使う。決定は直近 30 日の大事なものだけ多くて 8 つ。next_mtg は記録にあればその日時、無ければ過去の開催から推定して「（推定）」。`;
 
 export function registerAnkenTools(server: McpServer, env: Env): void {
 
@@ -341,6 +350,55 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
     }
   );
 
+  // ─── 6b. anken__replace_days ─────────────────────────────────────
+  server.tool(
+    "anken__replace_days",
+    "案件くんの 1 つの記録（チャットか議事録）の、from〜to の日の発言を入れ直す（読み方や伏せ字を直したあとに使う）。その範囲の古い発言を消して text から読み直して入れ、その日々は AI がもう一度読む（全部の記録の、その日の発言を未読に戻し、日ごとの要約を消す）。続けて anken__ai_next_days → anken__ai_record_days → anken__ai_case_context → anken__ai_update_case を回す。戻り値: { ok, 消した, 入れた, 未読に戻した, 古い発言を根拠にしていたやること }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      kind: z.enum(["line", "minutes"]).describe("line＝LINE の履歴・minutes＝議事録"),
+      name: z.string().min(1).max(80).describe("入れ直す記録の名前（例: 1対1）。前に入れたときと同じ名前"),
+      text: z.string().min(1).max(200000).describe("その範囲を含む元の文（範囲の外の日は入れない）"),
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("この日から"),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("この日まで（from から 62 日以内）"),
+    },
+    async ({ case: q, kind, name, text, from, to }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        if (from > to || (Date.parse(to) - Date.parse(from)) / 864e5 > 62) return asMcpTextResult({ ok: false, message: "from〜to は 62 日以内にしてください" });
+        const [src] = await sbGet(env, `/ak_sources?select=id,name&case_id=eq.${enc(c.id)}&${own}&kind=eq.${kind}&name=eq.${enc(name)}`);
+        if (!src) return asMcpTextResult({ ok: false, message: `記録「${name}」がありません。初めてなら anken__import_text で入れてください` });
+        const parsed = kind === "minutes" ? parseMinutes(text, { today: todayJst() }) : parseLine(text, { self: SELF_NAMES });
+        const inRange = (parsed.messages as Row[]).filter((m) => !m.system && m.day >= from && m.day <= to);
+        if (!inRange.length) return asMcpTextResult({ ok: false, message: `${from}〜${to} の発言を 1 件も読めませんでした。何も消していません` });
+        const range = `day=gte.${from}&day=lte.${to}`;
+        const old = await sbGet(env, `/ak_msgs?select=id&case_id=eq.${enc(c.id)}&${own}&source_id=eq.${enc(src.id)}&${range}`);
+        const oldIds = new Set(old.map((m) => Number(m.id)));
+        await sbDelete(env, `/ak_msgs?case_id=eq.${enc(c.id)}&${own}&source_id=eq.${enc(src.id)}&${range}`);
+        let masked = 0;
+        const clean = inRange.map((m) => { const r = maskSecrets(m.body); masked += r.count; return { ...m, body: r.text, masked: r.count > 0 }; });
+        const hashed = await withHashes(clean);
+        let added = 0;
+        for (let i = 0; i < hashed.length; i += 400) {
+          const rows = hashed.slice(i, i + 400).map((m: Row) => ({
+            user_id: OWNER_UID, case_id: c.id, source_id: src.id, day: m.day, at_time: m.time || null, who: m.who || null, body: m.body, masked: m.masked, hash: m.hash,
+          }));
+          added += (await sbPost(env, `/ak_msgs?on_conflict=source_id,hash`, rows, "resolution=ignore-duplicates,return=representation")).length;
+        }
+        const reset = await sbPatch(env, `/ak_msgs?case_id=eq.${enc(c.id)}&${own}&${range}&select=id`, { ai_at: null });
+        await sbDelete(env, `/ak_days?case_id=eq.${enc(c.id)}&${own}&${range}`);
+        const items = await sbGet(env, `/ak_items?select=title,status,src&case_id=eq.${enc(c.id)}&${own}`);
+        const touched = items.filter((it) => (it.src || []).some((x: Row) => oldIds.has(Number(x.msg_id))));
+        return asMcpTextResult({
+          ok: true, 案件: c.name, 記録: name, 期間: `${from} 〜 ${to}`, 消した: old.length, 入れた: added, 伏せた: masked, 未読に戻した: reset.length,
+          古い発言を根拠にしていたやること: touched.map((it) => `${STATUS[it.status] ?? it.status}：${it.title}`),
+          次: `anken__ai_next_days（since: ${from}）から読み直す`,
+        });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
   // ─── 7. anken__import_doc ────────────────────────────────────────
   server.tool(
     "anken__import_doc",
@@ -517,6 +575,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
       projects: z.array(z.object({ name: z.string().max(60), state: z.enum(["g", "y", "r"]), next: z.string().max(120), recent: z.string().max(120) })).max(10),
       items: z.array(z.object({
         origin_msg_id: z.number().int(),
+        origin_quote: z.string().max(200).optional().describe("起点の発言の中で、このやることに当たる原文（議事録のときは該当行をそのまま）"),
         kind: z.enum(["report", "do", "ask", "wait", "later"]),
         title: z.string().max(120),
         project: z.string().max(60),
@@ -524,7 +583,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         evidence_msg_ids: z.array(z.number().int()).max(5),
         note: z.string().max(300),
       })).max(60),
-      decisions: z.array(z.object({ msg_id: z.number().int(), title: z.string().max(120), project: z.string().max(60) })).max(12),
+      decisions: z.array(z.object({ msg_id: z.number().int(), quote: z.string().max(200).optional().describe("決まったことに当たる原文（議事録のときは該当行をそのまま）"), title: z.string().max(120), project: z.string().max(60) })).max(12),
     },
     async ({ case: q, week, state, alert, next_mtg, projects, items, decisions }) => {
       try {
@@ -533,9 +592,9 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const now = new Date().toISOString();
         const [oldProj, oldItems, days, sources] = await Promise.all([
           sbGet(env, `/ak_projects?select=id,name&case_id=eq.${enc(c.id)}&${own}`),
-          sbGet(env, `/ak_items?select=id,fp,status,origin&case_id=eq.${enc(c.id)}&${own}`),
+          sbGet(env, `/ak_items?select=id,fp,status,origin,kind&case_id=eq.${enc(c.id)}&${own}`),
           sbGet(env, `/ak_days?select=day,tags&case_id=eq.${enc(c.id)}&${own}`),
-          sbGet(env, `/ak_sources?select=id,name&case_id=eq.${enc(c.id)}&${own}`),
+          sbGet(env, `/ak_sources?select=id,name,kind&case_id=eq.${enc(c.id)}&${own}`),
         ]);
         const savedProj = projects.length ? await sbPost(env, `/ak_projects?on_conflict=case_id,name`, projects.map((p, i) => ({
           user_id: OWNER_UID, case_id: c.id, name: p.name, state: p.state, next: p.next || null, recent: p.recent || null, sort: i, updated_at: now,
@@ -549,17 +608,21 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const msgs = ids.size ? await sbGet(env, `/ak_msgs?select=id,day,at_time,who,body,source_id&case_id=eq.${enc(c.id)}&${own}&id=in.(${[...ids].join(",")})`) : [];
         const byId = new Map(msgs.map((m) => [Number(m.id), m]));
         const sName = new Map(sources.map((s) => [s.id, s.name]));
-        const srcOf = (list: number[]) => [...new Set(list)].filter((id) => byId.has(id)).slice(0, 3).map((id) => {
+        const sKind = new Map(sources.map((s) => [s.id, s.kind]));
+        const isMinutes = (id: number) => sKind.get(byId.get(id)?.source_id) === "minutes";
+        // 根拠は 5 つまで。先頭（起点の発言）の原文は、示された該当行を優先する
+        const srcOf = (list: number[], firstQuote?: string) => [...new Set(list)].filter((id) => byId.has(id)).slice(0, 5).map((id, i) => {
           const m = byId.get(id)!;
-          return { msg_id: id, day: m.day, time: m.at_time, chat: sName.get(m.source_id) ?? "", who: m.who, quote: evQuote.get(id) ?? String(m.body).slice(0, 120) };
+          const quote = (i === 0 && firstQuote) || evQuote.get(id) || String(m.body).slice(0, 120);
+          return { msg_id: id, day: m.day, time: m.at_time, chat: sName.get(m.source_id) ?? "", who: m.who, quote: String(quote).slice(0, 200) };
         });
         const byFp = new Map(oldItems.map((i) => [i.fp, i]));
         const keep = new Set<string>();
         let added = 0, updated = 0;
         for (const it of items) {
-          const src = srcOf([it.origin_msg_id, ...it.evidence_msg_ids]);
+          const src = srcOf([it.origin_msg_id, ...it.evidence_msg_ids], it.origin_quote);
           if (!src.length) continue;
-          const fp = `m:${it.origin_msg_id}`;
+          const fp = await fpOf("m", it.origin_msg_id, isMinutes(it.origin_msg_id), it.origin_quote, it.title);
           keep.add(fp);
           const row = { kind: it.kind, title: it.title, project_id: pId.get(it.project) ?? null, due: it.due ?? null, note: it.note || null, src, updated_at: now };
           const ex = byFp.get(fp);
@@ -568,17 +631,22 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         }
         const gone = oldItems.filter((i) => i.status === "candidate" && i.origin === "ai" && String(i.fp ?? "").startsWith("m:") && !keep.has(i.fp));
         for (const g of gone) await sbDelete(env, `/ak_items?id=eq.${enc(g.id)}&${own}&status=eq.candidate`);
-        let nd = 0;
+        // 決定：AI が出したものは毎回出し直す（直す・足す・今回出さなかったものは消す）
+        const keepD = new Set<string>();
         for (const d of decisions) {
-          const src = srcOf([d.msg_id]);
+          const src = srcOf([d.msg_id], d.quote);
           if (!src.length) continue;
-          nd += (await sbPost(env, `/ak_items?on_conflict=case_id,fp`, [{
-            user_id: OWNER_UID, case_id: c.id, fp: `d:${d.msg_id}`, kind: "decision", status: "open", origin: "ai", title: d.title, project_id: pId.get(d.project) ?? null, src, decided_at: now,
-          }], "resolution=ignore-duplicates,return=representation")).length;
+          const fp = await fpOf("d", d.msg_id, isMinutes(d.msg_id), d.quote, d.title);
+          keepD.add(fp);
+          await sbPost(env, `/ak_items?on_conflict=case_id,fp`, [{
+            user_id: OWNER_UID, case_id: c.id, fp, kind: "decision", status: "open", origin: "ai", title: d.title, project_id: pId.get(d.project) ?? null, src, decided_at: now, updated_at: now,
+          }], "resolution=merge-duplicates,return=minimal");
         }
+        const goneD = oldItems.filter((i) => i.kind === "decision" && i.origin === "ai" && String(i.fp ?? "").startsWith("d:") && !keepD.has(i.fp));
+        for (const g of goneD) await sbDelete(env, `/ak_items?id=eq.${enc(g.id)}&${own}&origin=eq.ai&kind=eq.decision`);
         await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { week, state, alert: alert || null, mtg: next_mtg, updated_at: now });
         await sbPost(env, `/ak_runs`, [{ user_id: OWNER_UID, case_id: c.id, days: days.length, msgs: items.length, model: "claude-chat", note: "段 2：案件ごと（MCP）" }], "return=minimal");
-        return asMcpTextResult({ ok: true, 案件: c.name, 新しい候補: added, 直した候補: updated, 下げた候補: gone.length, 決定: nd, プロジェクト: projects.length, 住所: `${APP_URL}/c/${c.id}` });
+        return asMcpTextResult({ ok: true, 案件: c.name, 新しい候補: added, 直した候補: updated, 下げた候補: gone.length, 決定: keepD.size, 下げた決定: goneD.length, プロジェクト: projects.length, 住所: `${APP_URL}/c/${c.id}` });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
