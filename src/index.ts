@@ -532,6 +532,7 @@
  * v1.21.0（2026-10-18 開発部）：思考整理くん（mindmap.shia2n.jp）の道具 5 本（AI 連携の段階 A・Naoki「OK」12:51）。mindmap__list_maps・mindmap__get_map（箇条書きの文字・各行に {id}）・mindmap__list_ai_requests（「AI への指示」が残る枝を全マップから）・mindmap__add_branches（子の枝を足すだけ・足した枝に by: "ai"・足し先の指示を消す）・mindmap__mark_done。読み書きは Supabase の mm_maps と mm_settings を Naoki の user_id だけに絞る。書くのは版（rev）が読んだときと同じ行だけ、最後の保存から 3 分以内のマップには force が無ければ書かない（画面で書いている最中とぶつけないため）。中身は src/tools-mindmap.ts と src/mindmap-core.ts・試験は test/mindmap-core.test.ts。設定の追加 0 個（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  * v1.22.0（2026-10-20 開発部）：sozai__put_row 追加（ドライブの「素材」フォルダの表「素材の一覧」に、毎朝の振り分けが 1 件 1 行で足す。足すだけ・同じ住所は足さない・種類 5 つと使う場面 5 語だけ・数字は実績だけ・掲載の許可は生徒の声だけで空なら未確認）。src/sozai-core.ts と src/tools-sozai.ts を新設・試験は test/sozai-core.test.ts。設定の追加 0 個（表は機械用の身分に共有された「素材の一覧」を名前で探す。SOZAI_SHEET_ID は任意）。Google 側は Sheets API と Drive API（どちらも有効化済み）。
  * v1.23.0（2026-10-20 開発部）：sozai__look 追加（受け箱の画面写真を画像そのままで返す・読むだけ。Google ドライブの道具の read_file_content は画像の文字しか返さず、10/20 の試しで 4 枚中 3 枚が空だったため。機械用の身分に閲覧者で共有した受け箱だけ見える）。中身は src/sozai-core.ts（checkLook・toBase64）と src/tools-sozai.ts。設定の追加 0 個。
+ * v1.24.0（2026-10-21 開発部）：案件くん（anken.shia2n.jp）の道具 4 本（案件くん 1便目の段 5「AI 連動」）。anken__list_cases・anken__get_home（要約・状態・次の MTG・プロジェクト・やること・決定・記録）・anken__search（言葉か日付で記録を探す）・anken__add_candidates（候補箱に足すだけ・origin "mcp"・同じ名前は足さない・TaskMaster へ入れるか外すかは Naoki が画面で決める）。読み書きは Supabase の ak_ の表を Naoki の user_id だけに絞る。中身は src/tools-anken.ts。設定の追加 0 個（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  * v1.14.0（2026-10-13 開発部）：haAku のマスの着手日（startDate）を、結んだ TaskMaster のタスクの startDate へ写す（期限の写し 1.13.0 と同じ 4 つの決まり・記録は os_task_deadline_sync_v1 の starts に別に持つ・1 タスクへの書き込みは期限と合わせて 1 回）。承認の流れの kind milestone に notes（文章）と links（[{title,url}]）を足した。着手日は画面が書き、AI が期限を着手日より前にする変更は断る。get_management_overview のマスに start_date・notes・links。欄の名前は統括の 1 枚（https://www.notion.so/3f79c6c1c43981b6bdffde986b9e0c04）で決めたもの。設定の追加 0 個。
  * v1.13.0（2026-10-13 開発部）：haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す（依頼 https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941）。決まりは 4 つ：空か前回写した日のままのタスクだけ写す・Naoki が入れた日は上書きしない・マスの期限が空になったら写した日のままのものだけ空に戻す・結びを外したら期限は触らず写した記録だけ消す。写した記録は haAku の側（os_task_deadline_sync_v1）に持ち、TaskMaster には deadline の 1 欄だけを読んだ版を条件に書く（値が変わらなければ書かない）。結んだタスクだけを id で読む（30 分ごとに全部読むと無料枠を超えるため）。動く時は haAku__link_tasks の直後・30 分ごと（0,30 の枠）・手で呼ぶ haAku__sync_task_deadlines（dry_run で見るだけ）。記録は haaku_deadline。中身は src/haaku-deadline-sync.ts・試験は test/haaku-deadline-sync.test.ts。設定の追加 0 個。
  */
@@ -592,6 +593,7 @@ import { registerImpactTools } from "./tools-impact.js";
 import { registerLineInboxTools } from "./tools-line-inbox.js";
 import { registerMindmapTools } from "./tools-mindmap.js";
 import { registerSozaiTools } from "./tools-sozai.js";
+import { registerAnkenTools } from "./tools-anken.js";
 import { handleLineWebhook, cleanupLineInbox } from "./line-inbox.js";
 
 export interface Env {
@@ -750,6 +752,7 @@ function createMcpServer(env: Env): McpServer {
   registerLineInboxTools(server, env);
   registerMindmapTools(server, env);
   registerSozaiTools(server, env);
+  registerAnkenTools(server, env);
   return server;
 }
 
