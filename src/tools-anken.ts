@@ -38,6 +38,11 @@ import { PERIOD_KINDS, mergePeriods, extractLinks, typeLabel, googleIdOf, type P
  *   ・予定（ak_cases.periods）：ai_update_case の periods で AI が拾ったクライアントの期間・日を書く（ガントの一番上の段）。
  *     Naoki が画面で足した・直した・消したものは残し、AI は出し直さない（anken-plan.ts の mergePeriods）
  *   ・anken__links：記録に出てきたリンクと今の名称を返す／anken__name_links：リンクに名称を付ける（ak_cases.link_names）
+ *
+ * 2026-10-22 案件チャットの作業台（Naoki「案件ごとの Claude のプロジェクトが案件くんをフル活用して動く」）：
+ *   ・anken__log_work：案件チャットが作業の終わりに「対応記録」を 1 件書く。時系列の記録「対応記録」の発言として入るので、
+ *     記録と検索で探せ、日ごとの流れに並び、AI の読み取りにも乗る（表は増やさない）
+ *   ・anken__get_home に「直近の対応記録」
  */
 
 type Row = Record<string, any>;
@@ -137,6 +142,9 @@ async function sbDelete(env: Env, path: string): Promise<Row[]> {
   return t ? (JSON.parse(t) as Row[]) : [];
 }
 const todayJst = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+const nowJstTime = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(11, 16);
+/** 対応記録を入れる記録の名前（時系列の中の 1 本・2026-10-22） */
+const LOG_SOURCE = "対応記録";
 const daysBefore = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) - n * 864e5).toISOString().slice(0, 10);
 const BODY_MAX = 1500;
 const fmtMsg = (m: Row, src: string) => `[#${m.id}] ${m.at_time || "--:--"} 〈${src}〉 ${m.who || "?"}：${String(m.body).length > BODY_MAX ? String(m.body).slice(0, BODY_MAX) + "…（以下略）" : m.body}`;
@@ -164,7 +172,7 @@ async function importMessages(env: Env, c: Row, kind: "line" | "minutes", name: 
 const DAY_RULES = `日ごとに「1 行要約（60 字以内）」と「出来事」を拾い、anken__ai_record_days に渡す。
 自分＝${SELF_NAMES.join("・")}（同じ人。シアニンはこの人の発信名）。この記録は自分（コンサル側）とクライアントやその周りの人とのやりとり。
 出来事の type：ask＝自分以外が自分に頼んだ・聞いた／promise＝自分がこれからやると言った／report＝自分がやったと伝えた（何についての報告かを text に）／decision＝決まったこと／wait＝自分以外がやると言った／deadline＝期限・日程だけ。
-挨拶・お礼・相づち・雑談・「画像」「音声」だけの発言は拾わない。quote は原文をそのまま 80 字以内で切り出す（言い換えない）。期限は発言の日付から YYYY-MM-DD に直す（読めなければ null）。渡した日はすべて days に入れる（出来事が無い日も要約は書く）。`;
+〈対応記録〉の発言は自分（シアニン側・案件チャットの Claude を含む）の作業の記録。やったことは type＝report で拾う。挨拶・お礼・相づち・雑談・「画像」「音声」だけの発言は拾わない。quote は原文をそのまま 80 字以内で切り出す（言い換えない）。期限は発言の日付から YYYY-MM-DD に直す（読めなければ null）。渡した日はすべて days に入れる（出来事が無い日も要約は書く）。`;
 
 const CASE_RULES = `「拾い始めの日」以降に新しく出た依頼・約束を拾い、anken__ai_update_case に渡す。それより前の出来事は、閉じているかどうかと文脈を読むためだけに使い、そこからやることは出さない（過去の分は推測しない）。
 4 つの分け（kind）：do（やる）＝自分が引き受けた・頼まれた・自分から言い出したこと／ask（確かめる）＝誰がやるか・何をするかが読み取れず、相手に確かめないと進めないもの／wait（相手待ち）＝相手の作業・返事を待っているもの／later（あとで）＝期限が 15 日以上先か、相手が「急がない」と言ったもの。「報告がまだ」の分けは無い（済んだかどうかは TaskMaster の完了で見る）。
@@ -216,6 +224,8 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
       try {
         const c = await findCase(env, q);
         if (!c) return notFound(env, q);
+        const logSrc = (await sbGet(env, `/ak_sources?select=id&case_id=eq.${enc(c.id)}&${own}&name=eq.${enc(LOG_SOURCE)}`))[0];
+        const logs = logSrc ? await sbGet(env, `/ak_msgs?select=day,at_time,who,body&source_id=eq.${enc(logSrc.id)}&${own}&order=day.desc,at_time.desc&limit=5`) : [];
         const [projects, items, sources, last] = await Promise.all([
           sbGet(env, `/ak_projects?select=id,name,state,next,recent&case_id=eq.${enc(c.id)}&${own}&order=sort.asc`),
           sbGet(env, `/ak_items?select=id,kind,title,status,due,note,reason,src,origin,project_id,tm_task_id,created_at&case_id=eq.${enc(c.id)}&${own}`),
@@ -237,6 +247,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           数: { やる: tm ? tm.open.length : n("do", "open"), 確かめる: n("ask"), 相手待ち: n("wait"), 候補箱: act.filter((i) => i.status === "candidate").length },
           状態: STL[c.state] ?? c.state, 今週: c.week ?? "", 注意: c.alert ?? "",
           最後のやりとり: last[0]?.day ?? null,
+          直近の対応記録: logs.map((m) => `${m.day} ${m.at_time ?? ""} ${m.who ?? ""}：${String(m.body).replace(/^【対応記録】/, "").split("\n")[0].slice(0, 100)}`),
           次のMTG: c.mtg ?? {},
           拾い始めの日: pickFromOf(c),
           予定: (Array.isArray(c.periods) ? c.periods : []).filter((p: Period) => !p.hidden).map((p: Period) => ({ 名前: p.title, 始まり: p.start, 終わり: p.end, 種類: p.kind, 出どころ: p.by === "naoki" ? "Naoki" : "AI" })),
@@ -811,6 +822,46 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         }
         if (wrote) await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { link_names: cur, updated_at: new Date().toISOString() });
         return asMcpTextResult({ ok: true, 案件: c.name, 書いた: wrote, "書き換えなかった（Naoki の名称）": kept, 知らない鍵: unknown, 住所: `${APP_URL}/c/${c.id}` });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 14. anken__log_work ─────────────────────────────────────────
+  server.tool(
+    "anken__log_work",
+    "案件くんに「対応記録」を 1 件書く。案件ごとの Claude のチャットが、作業の終わりに必ず呼ぶ（何をしたか・手順・関連の資料・どのタスクか・作業したチャットの住所）。記録は時系列の「対応記録」の発言として入り、案件くんの「記録と検索」で探せ、日ごとの流れに並び、次に AI にかけたとき「済んだ」の判断にも使われる。ID・パスワードなどの値は書かない（書かれていても伏せる）。戻り値: { ok, 案件, 日, 時刻, 伏せた, 住所 }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      title: z.string().min(1).max(80).describe("何をしたか（1 行。例：本講座申込フォーム②を新価格に直した）"),
+      body: z.string().max(1500).optional().describe("やったことの中身（1〜5 行）"),
+      steps: z.string().max(1500).optional().describe("手順（次に同じことをするときに役立つもの。あれば）"),
+      links: z.array(z.object({ name: z.string().max(60), url: z.string().url().max(500) })).max(10).optional().describe("関連の資料・ページ"),
+      task: z.string().max(200).optional().describe("どの TaskMaster のタスクの作業か（題名の一部で可）"),
+      session_url: z.string().max(300).optional().describe("作業したチャットの住所（claude.ai のチャットの URL など）"),
+      who: z.string().max(40).optional().describe("書き手（省略時「Claude（案件チャット）」）"),
+    },
+    async ({ case: q, title, body, steps, links, task, session_url, who }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const text = [
+          `【対応記録】${title.trim()}`,
+          body?.trim() || "",
+          steps?.trim() ? `手順：\n${steps.trim()}` : "",
+          links?.length ? `関連：\n${links.map((l) => `・${l.name} ${l.url}`).join("\n")}` : "",
+          task?.trim() ? `タスク：${task.trim()}` : "",
+          session_url?.trim() ? `チャット：${session_url.trim()}` : "",
+        ].filter(Boolean).join("\n");
+        const day = todayJst(), time = nowJstTime();
+        const { messages: clean, count: masked } = maskMessages([{ day, time, who: who?.trim() || "Claude（案件チャット）", body: text }]);
+        const [m] = await withHashes(clean);
+        const [src] = await sbPost(env, `/ak_sources?on_conflict=case_id,kind,name`, [{
+          user_id: OWNER_UID, case_id: c.id, kind: "line", name: LOG_SOURCE, last_import_at: new Date().toISOString(),
+        }], "resolution=merge-duplicates,return=representation");
+        await sbPost(env, `/ak_msgs?on_conflict=source_id,hash`, [{
+          user_id: OWNER_UID, case_id: c.id, source_id: src.id, day, at_time: time, who: m.who, body: m.body, masked: m.masked, hash: m.hash,
+        }], "resolution=ignore-duplicates,return=minimal");
+        return asMcpTextResult({ ok: true, 案件: c.name, 日: day, 時刻: time, 伏せた: masked, 住所: `${APP_URL}/c/${c.id}` });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
