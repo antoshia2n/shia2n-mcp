@@ -273,7 +273,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           直近の対応記録: logs.map((m) => `${m.day} ${m.at_time ?? ""} ${m.who ?? ""}：${String(m.body).replace(/^【対応記録】/, "").split("\n")[0].slice(0, 100)}`),
           次のMTG: c.mtg ?? {},
           拾い始めの日: pickFromOf(c),
-          予定: (Array.isArray(c.periods) ? c.periods : []).filter((p: Period) => !p.hidden).map((p: Period) => ({ 名前: p.title, 始まり: p.start, 終わり: p.end, 種類: p.kind, 出どころ: p.by === "naoki" ? "Naoki" : "AI" })),
+          予定: (Array.isArray(c.periods) ? c.periods : []).filter((p: Period) => !p.hidden).map((p: Period) => ({ 名前: p.title, 始まり: p.start, 終わり: p.end, 種類: p.kind, 出どころ: p.by === "naoki" ? "Naoki" : p.by === "chat" ? "案件チャット" : "AI" })),
           プロジェクト: projects.map((p) => ({ 名前: p.name, 状態: STL[p.state] ?? p.state, 次の一手: p.next, 直近: p.recent })),
           やること: todo.map((i) => ({
             id: i.id, 種類: KIND[i.kind] ?? i.kind, 置き場: STATUS[st(i)] ?? st(i), 名前: i.title, 期限: i.due,
