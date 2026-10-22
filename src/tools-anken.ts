@@ -5,6 +5,7 @@ import type { Env } from "./index.js";
 import { parseLine, parseMinutes, maskMessages, withHashes, SELF_NAMES } from "./anken-core.js";
 import { getGoogleTokenForScope } from "./google-token.js";
 import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
+import { PERIOD_KINDS, mergePeriods, extractLinks, typeLabel, googleIdOf, type Period } from "./anken-plan.js";
 
 /**
  * 案件くん（anken.shia2n.jp・クライアント案件の LINE・議事録・やることを 1 か所で見る）の道具。
@@ -32,6 +33,11 @@ import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
  *   ・「報告がまだ」の分けは無くし「やる」にまとめた（残っていたものは ai_update_case のときに do へ移す）
  *   ・「まだ」は TaskMaster の未完了だけで見る。数は やる（TaskMaster 未完了）／確かめる／相手待ち／候補箱
  *   ・期限の無い依頼は次の定例の日を仮の期限に置き、次の定例の議題に載せる
+ *
+ * 2026-10-22 案件のタブの直し（Naoki「クライアントのスケジュール感も必要・リンクは名称で整理」）：
+ *   ・予定（ak_cases.periods）：ai_update_case の periods で AI が拾ったクライアントの期間・日を書く（ガントの一番上の段）。
+ *     Naoki が画面で足した・直した・消したものは残し、AI は出し直さない（anken-plan.ts の mergePeriods）
+ *   ・anken__links：記録に出てきたリンクと今の名称を返す／anken__name_links：リンクに名称を付ける（ak_cases.link_names）
  */
 
 type Row = Record<string, any>;
@@ -163,7 +169,8 @@ const DAY_RULES = `日ごとに「1 行要約（60 字以内）」と「出来�
 const CASE_RULES = `「拾い始めの日」以降に新しく出た依頼・約束を拾い、anken__ai_update_case に渡す。それより前の出来事は、閉じているかどうかと文脈を読むためだけに使い、そこからやることは出さない（過去の分は推測しない）。
 4 つの分け（kind）：do（やる）＝自分が引き受けた・頼まれた・自分から言い出したこと／ask（確かめる）＝誰がやるか・何をするかが読み取れず、相手に確かめないと進めないもの／wait（相手待ち）＝相手の作業・返事を待っているもの／later（あとで）＝期限が 15 日以上先か、相手が「急がない」と言ったもの。「報告がまだ」の分けは無い（済んだかどうかは TaskMaster の完了で見る）。
 期限：発言に期限があればその日。期限の無い do・ask・wait は、次の定例の日（next_mtg の日付）を仮の期限にして due に入れ、next_mtg.agenda にも載せる（多いときは「新しい依頼の確認」1 つにまとめ、note に名前を並べる）。
-後の日付に同じことの report や、相手の「ありがとう・できました・届きました」がある依頼は閉じている。出さない。取り下げ・別の人に頼んだものも出さない。同じことは 1 つにまとめ、origin_msg_id は最初の依頼か約束。議事録は 1 回分が 1 つの発言なので、1 つの議事録から複数のやること・決定を出してよい（そのときは origin_quote・quote に議事録の該当行をそのまま書く）。「登録済み」「TaskMaster にあるもの」「Naoki が外したもの（理由を読む）」と同じことは出さない。note は日付と事実で 1 文。プロジェクトは 3〜8 個、既存の名前はそのまま使う。決定は直近 30 日の大事なものだけ多くて 8 つ。next_mtg は記録にあればその日時、無ければ過去の開催から推定して「（推定）」。`;
+後の日付に同じことの report や、相手の「ありがとう・できました・届きました」がある依頼は閉じている。出さない。取り下げ・別の人に頼んだものも出さない。同じことは 1 つにまとめ、origin_msg_id は最初の依頼か約束。議事録は 1 回分が 1 つの発言なので、1 つの議事録から複数のやること・決定を出してよい（そのときは origin_quote・quote に議事録の該当行をそのまま書く）。「登録済み」「TaskMaster にあるもの」「Naoki が外したもの（理由を読む）」と同じことは出さない。note は日付と事実で 1 文。プロジェクトは 3〜8 個、既存の名前はそのまま使う。決定は直近 30 日の大事なものだけ多くて 8 つ。next_mtg は記録にあればその日時、無ければ過去の開催から推定して「（推定）」。
+予定（periods）：クライアント側の期間・日を、記録に書いてあるものだけ拾う（オファー・募集・販売＝offer／公開・配信・リリース＝release／セミナー・撮影・イベント・MTG 以外の催し＝event／不在・休み・旅行＝off／ほか＝other）。定例 MTG そのものは入れない。start・end は YYYY-MM-DD（1 日だけなら同じ日、終わりが読めなければ start と同じ）。今日の 30 日前から 90 日先まで。拾い始めの日より前の発言からも拾ってよい（予定は過去の推測ではなく書いてある日付）。「今の予定」に Naoki のもの（by: naoki）があれば同じものは出さない。title は 20 字ほど。`;
 
 export function registerAnkenTools(server: McpServer, env: Env): void {
 
@@ -232,6 +239,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           最後のやりとり: last[0]?.day ?? null,
           次のMTG: c.mtg ?? {},
           拾い始めの日: pickFromOf(c),
+          予定: (Array.isArray(c.periods) ? c.periods : []).filter((p: Period) => !p.hidden).map((p: Period) => ({ 名前: p.title, 始まり: p.start, 終わり: p.end, 種類: p.kind, 出どころ: p.by === "naoki" ? "Naoki" : "AI" })),
           プロジェクト: projects.map((p) => ({ 名前: p.name, 状態: STL[p.state] ?? p.state, 次の一手: p.next, 直近: p.recent })),
           やること: todo.map((i) => ({
             id: i.id, 種類: KIND[i.kind] ?? i.kind, 置き場: STATUS[st(i)] ?? st(i), 名前: i.title, 期限: i.due,
@@ -591,6 +599,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           登録済み: items.filter((i) => (i.status === "open" || i.status === "done") && i.kind !== "decision").map((i) => i.title),
           外したもの: items.filter((i) => i.status === "dismissed").map((i) => `${i.title}：${i.reason || "理由なし"}`),
           TaskMaster: tm,
+          今の予定: (Array.isArray(c.periods) ? c.periods : []).filter((p: Period) => !p.hidden).map((p: Period) => `${p.start}〜${p.end} ${p.kind} ${p.title}（${p.by === "naoki" ? "Naoki" : "AI"}）`),
           要約: days.slice(-21).map((d) => `${d.day}：${d.summary}`),
           出来事: ev,
           前の出来事: before.slice(-300),
@@ -625,8 +634,17 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         note: z.string().max(300),
       })).max(60),
       decisions: z.array(z.object({ msg_id: z.number().int(), quote: z.string().max(200).optional().describe("決まったことに当たる原文（議事録のときは該当行をそのまま）"), title: z.string().max(120), project: z.string().max(60) })).max(12),
+      periods: z.array(z.object({
+        title: z.string().min(1).max(40),
+        start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("終わりの日（1 日だけなら省略）"),
+        kind: z.enum(PERIOD_KINDS).describe("offer＝オファー・募集・販売／release＝公開・配信／event＝セミナー・撮影などの催し／off＝不在・休み／other"),
+        project: z.string().max(60).optional(),
+        msg_id: z.number().int().describe("その日付が書いてある発言"),
+        quote: z.string().max(120).optional().describe("日付が書いてある原文"),
+      })).max(30).optional().describe("クライアントの予定（ガントの一番上の段）。省略すると今の予定はそのまま。渡すと AI の分を出し直す（Naoki のもの・消したものは残る）"),
     },
-    async ({ case: q, week, state, alert, next_mtg, projects, items, decisions }) => {
+    async ({ case: q, week, state, alert, next_mtg, projects, items, decisions, periods }) => {
       try {
         const c = await findCase(env, q);
         if (!c) return notFound(env, q);
@@ -650,6 +668,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const ids = new Set<number>();
         for (const it of items) for (const id of [it.origin_msg_id, ...it.evidence_msg_ids]) ids.add(id);
         for (const d of decisions) ids.add(d.msg_id);
+        for (const p of periods ?? []) ids.add(p.msg_id);
         const msgs = ids.size ? await sbGet(env, `/ak_msgs?select=id,day,at_time,who,body,source_id&case_id=eq.${enc(c.id)}&${own}&id=in.(${[...ids].join(",")})`) : [];
         const byId = new Map(msgs.map((m) => [Number(m.id), m]));
         const sName = new Map(sources.map((s) => [s.id, s.name]));
@@ -707,14 +726,91 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         if (missing.length && agenda.length < 8) {
           agenda.push({ title: "新しい依頼の確認", note: missing.slice(0, 6).join("／").slice(0, 200) });
         }
-        await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { week, state, alert: alert || null, mtg: { ...next_mtg, agenda }, updated_at: now });
+        // 予定：根拠の発言が見つかるものだけ。Naoki のもの・消したものは残す
+        let plan: { periods: Period[]; added: number; skipped: number } | null = null;
+        let planDropped = 0;
+        if (periods) {
+          const inc = periods.filter((p) => byId.has(p.msg_id) || (planDropped++, false)).map((p) => {
+            const m = byId.get(p.msg_id)!;
+            return { title: p.title, start: p.start, end: p.end ?? p.start, kind: p.kind, project: p.project ?? null,
+              src: { msg_id: p.msg_id, day: m.day, chat: sName.get(m.source_id) ?? "", who: m.who, quote: String(p.quote || evQuote.get(p.msg_id) || m.body).slice(0, 120) } };
+          });
+          plan = await mergePeriods(c.periods, inc);
+        }
+        await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { week, state, alert: alert || null, mtg: { ...next_mtg, agenda }, ...(plan ? { periods: plan.periods } : {}), updated_at: now });
         await sbPost(env, `/ak_runs`, [{ user_id: OWNER_UID, case_id: c.id, days: days.length, msgs: items.length, model: "claude-chat", note: "段 2：案件ごと（MCP）" }], "return=minimal");
         return asMcpTextResult({
           ok: true, 案件: c.name, 拾い始めの日: from, 新しい候補: added, 直した候補: updated, 下げた候補: gone.length,
           "入れなかった（拾い始めより前）": tooOld, 仮の期限を置いた: provisional, ...(nextMtg ? { 仮の期限: nextMtg } : {}),
           ...(moved.length ? { "「報告がまだ」から「やる」へ移した": moved.length } : {}),
-          決定: keepD.size, 下げた決定: goneD.length, プロジェクト: projects.length, 住所: `${APP_URL}/c/${c.id}`,
+          決定: keepD.size, 下げた決定: goneD.length, プロジェクト: projects.length,
+          ...(plan ? { 予定: { 入れた: plan.added, "出し直さなかった（Naoki のもの・消したもの）": plan.skipped, "根拠が無く入れなかった": planDropped, 全部: plan.periods.filter((p) => !p.hidden).length } } : {}),
+          住所: `${APP_URL}/c/${c.id}`,
         });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 12. anken__links ────────────────────────────────────────────
+  server.tool(
+    "anken__links",
+    "案件くんの案件の記録（LINE・議事録）に出てきたリンクを、新しい順に返す（画面の「リンク」タブと同じ拾い方）。名称は anken__name_links で付けたものがあればそれ、無ければ前後の文から付けた仮の名前。Google のファイルは google_id を返すので、Google ドライブの道具で本当のファイル名を見て名称に使える。Zoom は既定で外す。戻り値: { ok, 案件, 件数, 名称なし, リンク: [{ key, 名称, 名称の出どころ, 種類, url, google_id, 日, チャット, 発言者, 回数 }] }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      unnamed_only: z.boolean().optional().describe("名称をまだ付けていないものだけ"),
+      include_zoom: z.boolean().optional().describe("Zoom のリンクも出す"),
+    },
+    async ({ case: q, unnamed_only, include_zoom }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const [msgs, sources] = await Promise.all([
+          sbGet(env, `/ak_msgs?select=day,at_time,who,body,source_id&case_id=eq.${enc(c.id)}&${own}&body=ilike.*http*&order=day.desc&limit=1500`),
+          sbGet(env, `/ak_sources?select=id,name&case_id=eq.${enc(c.id)}&${own}`),
+        ]);
+        const sName = new Map(sources.map((x) => [x.id, x.name]));
+        const names: Record<string, Row> = c.link_names && typeof c.link_names === "object" ? c.link_names : {};
+        const rows = extractLinks(msgs, { chatOf: (m) => sName.get(m.source_id) ?? "" })
+          .filter((l) => include_zoom || l.type !== "zoom")
+          .map((l) => ({ l, n: names[l.key] }));
+        const list = rows.filter(({ n }) => !unnamed_only || !n?.name);
+        return asMcpTextResult({
+          ok: true, 案件: c.name, 件数: rows.length, 名称なし: rows.filter(({ n }) => !n?.name).length,
+          リンク: list.slice(0, 200).map(({ l, n }) => ({
+            key: l.key, 名称: n?.name || l.name, 名称の出どころ: n?.name ? (n.by === "naoki" ? "Naoki" : "Claude") : "前後の文（仮）",
+            種類: typeLabel(l.type), url: l.url, google_id: googleIdOf(l.key), 日: l.day, チャット: l.chat, 発言者: l.who, 回数: l.count,
+          })),
+        });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 13. anken__name_links ───────────────────────────────────────
+  server.tool(
+    "anken__name_links",
+    "案件くんのリンクに名称を付ける（画面の「リンク」タブは名称の順に並び、同じ名称はまとまる）。key は anken__links の key。Google のファイルは本当のファイル名を、ほかは何のページかが分かる短い名前（20 字ほど）にする。Naoki が画面で付けた名称は書き換えない。name を空にすると Claude の付けた名称を消す。戻り値: { ok, 書いた, 書き換えなかった（Naoki の名称）, 知らない鍵 }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      names: z.array(z.object({ key: z.string().min(1).max(300), name: z.string().max(60) })).min(1).max(200),
+    },
+    async ({ case: q, names }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const msgs = await sbGet(env, `/ak_msgs?select=day,at_time,who,body,source_id&case_id=eq.${enc(c.id)}&${own}&body=ilike.*http*&order=day.desc&limit=1500`);
+        const known = new Set(extractLinks(msgs).map((l) => l.key));
+        const cur: Record<string, Row> = c.link_names && typeof c.link_names === "object" ? { ...c.link_names } : {};
+        let wrote = 0, kept = 0;
+        const unknown: string[] = [];
+        for (const { key, name } of names) {
+          if (!known.has(key)) { unknown.push(key); continue; }
+          if (cur[key]?.by === "naoki") { kept++; continue; }
+          const v = name.trim();
+          if (v) cur[key] = { name: v, by: "claude" }; else delete cur[key];
+          wrote++;
+        }
+        if (wrote) await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { link_names: cur, updated_at: new Date().toISOString() });
+        return asMcpTextResult({ ok: true, 案件: c.name, 書いた: wrote, "書き換えなかった（Naoki の名称）": kept, 知らない鍵: unknown, 住所: `${APP_URL}/c/${c.id}` });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
