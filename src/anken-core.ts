@@ -310,10 +310,14 @@ export function parseMinutes(text: any, opts: any = {}): any {
       let y = m[1] ? Number(m[1]) : (year ?? ty);
       const d = `${y}-${pad(m[2])}-${pad(m[3])}`;
       if (!m[1] && !year && d > today) y -= 1;
-      year = y;
-      cur = { day: `${y}-${pad(m[2])}-${pad(m[3])}`, time: "", who, body: ln.trim(), system: false };
-      out.push(cur);
-      continue;
+      const day = `${y}-${pad(m[2])}-${pad(m[3])}`;
+      // 今日より先の日付は見出しにしない（本文の中の予定の日付・2026-10-22 るーみんの「■ 11月3日（火・祝）」）
+      if (!(today && day > today)) {
+        year = y;
+        cur = { day, time: "", who, body: ln.trim(), system: false };
+        out.push(cur);
+        continue;
+      }
     }
     if (!cur) {
       if (!ln.trim()) continue;

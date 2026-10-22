@@ -33,3 +33,10 @@ test("リンクの鍵と拾い方（anken の links.js と同じ）", () => {
   assert.equal(rows[0].name, "台本はこちら");
   assert.equal(rows[1].name, "サンクスページ");
 });
+
+test("案件チャットが入れた予定は AI の出し直しで消えない（2026-10-22）", async () => {
+  const chat = { id: await periodId("大分合宿", "2026-10-30"), title: "大分合宿", start: "2026-10-30", end: "2026-10-31", kind: "event" as const, by: "chat" as const };
+  const r = await mergePeriods([chat], [{ title: "熊本セミナー", start: "2026-11-04", end: "2026-11-04", kind: "event" }]);
+  assert.ok(r.periods.some((p) => p.title === "大分合宿"));
+  assert.equal(r.added, 1);
+});

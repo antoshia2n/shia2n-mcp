@@ -541,6 +541,7 @@
  * v1.29.0（2026-10-22 開発部・案件のタブの直し）：案件くんに「予定」（クライアントの期間・日。ak_cases.periods）と「リンクの名称」（ak_cases.link_names）を足した。anken__ai_update_case に periods（AI が拾った予定。Naoki が足した・消したものは残す）、anken__ai_case_context に今の予定、anken__get_home に予定。anken__links（記録に出てきたリンクと名称）・anken__name_links（リンクに名称を付ける）を追加。列は作業 24 で足す。設定の追加 0 個。
  * v1.30.0（2026-10-22 開発部・案件チャットの作業台）：anken__log_work を追加（案件ごとの Claude のチャットが作業の終わりに「対応記録」を書く。時系列の記録「対応記録」の発言として入り、検索・日ごとの流れ・AI の読み取りに乗る。表は増やさない）。anken__get_home に「直近の対応記録」。日ごとの読み取りの決まりに「対応記録は自分の作業＝report」を足した。設定の追加 0 個。
  * v1.31.0（2026-10-22 開発部・GPT の入口）：案件くんだけの入口 /anken/mcp を足した（ChatGPT のプロジェクトをつなぐため）。出す道具は anken__list_cases・get_home・search・links・add_candidates・log_work・name_links の 7 本だけ。認証は /mcp と同じ。設定の追加 0 個。
+ * v1.32.0（2026-10-22 開発部・定期と並び）：taskmaster__add_task・update_task に繰り返し（repeat）を足し、繰り返しタスクを済みにしたら TaskMaster の画面と同じく次の回を作る。案件くんのホームの返事を「単発（Naoki が並べた順）」と「定期（次の日の順）」に分け、数の「やる」から定期を外した。anken__add_period・anken__remove_period（予定を 1 件ずつ）を追加し、GPT の入口にも出した。議事録の読み取りで今日より先の日付を見出しにしない。「最後のやりとり」は今日より先の日を数えない。設定の追加 0 個。
  * v1.14.0（2026-10-13 開発部）：haAku のマスの着手日（startDate）を、結んだ TaskMaster のタスクの startDate へ写す（期限の写し 1.13.0 と同じ 4 つの決まり・記録は os_task_deadline_sync_v1 の starts に別に持つ・1 タスクへの書き込みは期限と合わせて 1 回）。承認の流れの kind milestone に notes（文章）と links（[{title,url}]）を足した。着手日は画面が書き、AI が期限を着手日より前にする変更は断る。get_management_overview のマスに start_date・notes・links。欄の名前は統括の 1 枚（https://www.notion.so/3f79c6c1c43981b6bdffde986b9e0c04）で決めたもの。設定の追加 0 個。
  * v1.13.0（2026-10-13 開発部）：haAku のマスの期限を、結んだ TaskMaster のタスクの期限（deadline）へ写す（依頼 https://www.notion.so/3f79c6c1c43981448625fbcf4ebde941）。決まりは 4 つ：空か前回写した日のままのタスクだけ写す・Naoki が入れた日は上書きしない・マスの期限が空になったら写した日のままのものだけ空に戻す・結びを外したら期限は触らず写した記録だけ消す。写した記録は haAku の側（os_task_deadline_sync_v1）に持ち、TaskMaster には deadline の 1 欄だけを読んだ版を条件に書く（値が変わらなければ書かない）。結んだタスクだけを id で読む（30 分ごとに全部読むと無料枠を超えるため）。動く時は haAku__link_tasks の直後・30 分ごと（0,30 の枠）・手で呼ぶ haAku__sync_task_deadlines（dry_run で見るだけ）。記録は haaku_deadline。中身は src/haaku-deadline-sync.ts・試験は test/haaku-deadline-sync.test.ts。設定の追加 0 個。
  */
@@ -788,7 +789,7 @@ function isAuthorized(request: Request, env: Env): boolean {
  */
 const ANKEN_GPT_TOOLS = new Set([
   "anken__list_cases", "anken__get_home", "anken__search", "anken__links",
-  "anken__add_candidates", "anken__log_work", "anken__name_links",
+  "anken__add_candidates", "anken__log_work", "anken__name_links", "anken__add_period", "anken__remove_period",
 ]);
 function createAnkenMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "anken-mcp", version: APP_VERSION });
