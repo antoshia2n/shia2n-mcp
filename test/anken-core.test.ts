@@ -58,3 +58,12 @@ test("名前の推定で @All を名前に含めない（2026-10-22 おかぜり
   const r = parseLine("2026.10.01 木曜日\n10:00 Ruriko Koizumi @All 明日の件です\n10:05 Ruriko Koizumi よろしくお願いします\n10:06 Ruriko Koizumi @All 資料を送ります\n10:07 Ruriko Koizumi @All 締切は金曜です\n10:08 Ruriko Koizumi @All 確認お願いします", { self: ["NAOKI TAKEBAYASHI"] });
   assert.ok(r.messages.every((m: any) => m.who === "Ruriko Koizumi"));
 });
+
+test("議事録の本文の中の先の日付は見出しにしない（2026-10-22 るーみんの予定共有）", () => {
+  const r = parseMinutes("# 2026/10/22\n\nるーみんの予定\n■ 10月30日・31日 にんけん大分合宿\n■ 11月3日（火・祝）大分別府市\n10:00〜12:00 セミナー", { today: "2026-10-22" });
+  assert.equal(r.messages.length, 1);
+  assert.equal(r.messages[0].day, "2026-10-22");
+  assert.ok(r.messages[0].body.includes("11月3日"));
+  const past = parseMinutes("# 2026/10/15\nA\n# 2026/10/21\nB", { today: "2026-10-22" });
+  assert.equal(past.messages.length, 2);
+});

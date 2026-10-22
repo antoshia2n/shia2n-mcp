@@ -294,6 +294,7 @@ type TaskRecord = {
   deadline: string | null;
   groupId: string | null;
   projectId: string | null;
+  repeat?: string;
 };
 
 type ProjectRecord = {
@@ -322,6 +323,7 @@ function toTask(t: Item): TaskRecord {
     deadline:  nullStr(t.deadline),
     groupId:   nullStr(t.groupId),
     projectId: nullStr(t.projectId),
+    ...(typeof t.repeat === "string" && t.repeat ? { repeat: t.repeat } : {}),
   };
 }
 
@@ -381,7 +383,36 @@ export type AddTaskInput = {
   deadline?: string | null;
   groupId?: string | null;
   projectId?: string | null;
+  /** 繰り返し（TaskMaster の画面と同じ値：daily／weekday／weekly／monthly。2026-10-22） */
+  repeat?: string;
 };
+
+/** TaskMaster の繰り返しの値（taskmaster の src/lib/util.js の REPEAT と同じ・2026-10-22） */
+export const REPEATS = ["daily", "weekday", "weekly", "monthly"] as const;
+/** 繰り返しの次の回の期限（taskmaster の nextRepeatDate と同じ決まり） */
+export function nextRepeatDate(dl: string, repeat: string): string | null {
+  if (!repeat || !/^\d{4}-\d{2}-\d{2}$/.test(dl)) return null;
+  const d = new Date(`${dl}T00:00:00Z`);
+  if (repeat === "daily") d.setUTCDate(d.getUTCDate() + 1);
+  else if (repeat === "weekday") {
+    d.setUTCDate(d.getUTCDate() + 1);
+    if (d.getUTCDay() === 0) d.setUTCDate(d.getUTCDate() + 1);
+    if (d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 2);
+  } else if (repeat === "weekly") d.setUTCDate(d.getUTCDate() + 7);
+  else if (repeat === "monthly") d.setUTCMonth(d.getUTCMonth() + 1);
+  else return null;
+  return d.toISOString().slice(0, 10);
+}
+/** 済みにした繰り返しタスクの次の回（taskmaster の toggleDone と同じ形：期限だけ進め、完了の印とサブタスクの済みを戻す） */
+export function nextRepeatTask(t: Item, todayStr: string): Item | null {
+  const repeat = typeof t.repeat === "string" ? t.repeat : "";
+  if (!repeat) return null;
+  const nd = nextRepeatDate(typeof t.deadline === "string" && t.deadline ? t.deadline : todayStr, repeat);
+  if (!nd) return null;
+  const subs = Array.isArray(t.subtasks) ? (t.subtasks as Item[]).map((x) => ({ ...x, done: false })) : [];
+  return { ...t, id: crypto.randomUUID(), deadline: nd, completed: false, status: "todo", doneAt: "", completedAt: "",
+    order: typeof t.order === "number" ? t.order + 1 : t.order, subtasks: subs };
+}
 
 // v1.16.0：新しいタスクの形はここ 1 か所で作る（taskmaster__add_task と LINE タスク秘書が同じ形で書くため）
 export function buildNewTask(body: AddTaskInput, now = new Date()): Item {
@@ -396,6 +427,7 @@ export function buildNewTask(body: AddTaskInput, now = new Date()): Item {
     archived:  false,
     completed: false,
     createdAt: now.toISOString().slice(0, 10),
+    ...(body.repeat ? { repeat: body.repeat } : {}),
   };
 }
 
@@ -464,6 +496,8 @@ type UpdateTaskInput = {
   archived?: boolean;
   projectId?: string | null;
   groupId?: string | null;
+  /** 繰り返し（daily／weekday／weekly／monthly、空で解除・2026-10-22） */
+  repeat?: string;
 };
 
 export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promise<Response> {
@@ -501,7 +535,7 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
     catch (e) { return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 }); }
     if (!current) return Response.json({ error: "task not found", task_id: body.task_id }, { status: 404 });
     const fields: Item = {};
-    for (const k of ["title", "status", "priority", "deadline", "archived", "projectId", "groupId"] as const) {
+    for (const k of ["title", "status", "priority", "deadline", "archived", "projectId", "groupId", "repeat"] as const) {
       if (body[k] !== undefined) fields[k] = body[k];
     }
     if (body.status !== undefined) {
@@ -514,7 +548,17 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
     }
     try { await patchTask(token, uid, body.task_id, fields); }
     catch (e) { return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 }); }
-    return Response.json({ ok: true, task: toTask({ ...docToItem(current), ...fields }) });
+    // 2026-10-22：繰り返しタスクを済みにしたら次の回を作る（TaskMaster の画面で済みにしたときと同じ）。もう済みだったものは作らない
+    const curItem = docToItem(current);
+    let nextTask: Item | null = null;
+    if (body.status === "done" && !(curItem.completed === true || curItem.status === "done")) {
+      nextTask = nextRepeatTask({ ...curItem, ...fields, id: body.task_id }, tokyoToday());
+      if (nextTask) {
+        try { await patchTask(token, uid, nextTask.id as string, nextTask); }
+        catch (e) { return Response.json({ error: "next repeat write failed", detail: String(e) }, { status: 500 }); }
+      }
+    }
+    return Response.json({ ok: true, task: toTask({ ...curItem, ...fields }), ...(nextTask ? { next: toTask(nextTask) } : {}) });
   }
 
   let tasksDoc: FSDoc;
@@ -539,9 +583,14 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
   if (body.archived  !== undefined) updated.archived  = body.archived;
   if (body.projectId !== undefined) updated.projectId = body.projectId;
   if (body.groupId   !== undefined) updated.groupId   = body.groupId;
+  if (body.repeat    !== undefined) updated.repeat    = body.repeat;
 
   const updatedItems = [...existingItems];
   updatedItems[targetIndex] = updated;
+  // 2026-10-22：繰り返しタスクを済みにしたら次の回を足す（古い置き場でも同じ）
+  const wasDone = existingItems[targetIndex].completed === true || existingItems[targetIndex].status === "done";
+  const legacyNext = body.status === "done" && !wasDone ? nextRepeatTask(updated, tokyoToday()) : null;
+  if (legacyNext) updatedItems.push(legacyNext);
 
   // Firestore に書き戻す（value フィールドのみ updateMask）
   try {

@@ -48,7 +48,7 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
 
   server.tool(
     "taskmaster__add_task",
-    "TaskMasterに新しいタスクを追加する。Firestoreのtasksドキュメントにタスクを書き込む。戻り値は { ok: true, task: {id, title, status, priority, deadline, groupId, projectId} }。",
+    "TaskMasterに新しいタスクを追加する。Firestoreのtasksドキュメントにタスクを書き込む。repeat で繰り返しタスク（毎週土曜の速報など）を 1 行で入れられる。戻り値は { ok: true, task: {id, title, status, priority, deadline, groupId, projectId, repeat?} }。",
     {
       title: z.string().describe("タスクのタイトル（必須）"),
       status: z.string().optional().describe("ステータス。例: \"todo\" / \"in_progress\" / \"done\"。省略時は \"todo\""),
@@ -56,6 +56,7 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
       deadline: z.string().nullable().optional().describe("期限日（ISO 8601 形式。例: \"2026-05-14\"）。省略・null 可"),
       groupId: z.string().nullable().optional().describe("グループ ID。省略・null 可"),
       projectId: z.string().nullable().optional().describe("プロジェクト ID。省略・null 可"),
+      repeat: z.enum(["daily", "weekday", "weekly", "monthly"]).optional().describe("繰り返し（daily＝毎日／weekday＝平日／weekly＝毎週／monthly＝毎月）。deadline が最初の回。済みにすると次の回が自動で入る。終わりの日は持てないので、終わる回を済みにしたあとに次の回を廃案にする。省略で繰り返しなし"),
     },
     async (args) => {
       const res = await handleTaskmasterAddTask(
@@ -73,7 +74,7 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
 
   server.tool(
     "taskmaster__update_task",
-    "TaskMasterのタスクを更新する。期限変更・ステータス変更・廃案（archived: true）に使う。指定したフィールドのみ上書きし、未指定フィールドは既存値を保持する。status を done にすると完了の印 completed・終わった日 doneAt・終わった時刻 completedAt（日本時間の ISO・v1.15.0）もそろえる（done 以外にすると空に戻す）。戻り値は { ok: true, task: {id, title, status, priority, deadline, groupId, projectId} } または { error: 'task not found' }。",
+    "TaskMasterのタスクを更新する。期限変更・ステータス変更・廃案（archived: true）に使う。指定したフィールドのみ上書きし、未指定フィールドは既存値を保持する。status を done にすると完了の印 completed・終わった日 doneAt・終わった時刻 completedAt（日本時間の ISO・v1.15.0）もそろえる（done 以外にすると空に戻す）。繰り返しタスクを done にすると、TaskMaster の画面と同じく次の回を作り next に返す（v1.32.0）。戻り値は { ok: true, task: {id, title, status, priority, deadline, groupId, projectId, repeat?}, next? } または { error: 'task not found' }。",
     {
       task_id: z.string().describe("更新対象のタスクID（必須。taskmaster__list_tasks の id フィールド）"),
       title: z.string().optional().describe("新しいタスク名。省略時は変更なし"),
@@ -83,6 +84,7 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
       archived: z.boolean().optional().describe("true にすると廃案・アーカイブ扱い（論理削除）。省略時は変更なし"),
       projectId: z.string().nullable().optional().describe("紐付けるプロジェクトID。null でプロジェクト解除。省略時は変更なし"),
       groupId: z.string().nullable().optional().describe("紐付けるグループID。null でグループ解除。省略時は変更なし"),
+      repeat: z.enum(["", "daily", "weekday", "weekly", "monthly"]).optional().describe("繰り返し（daily／weekday／weekly／monthly）。空の文字列で解除。省略時は変更なし"),
     },
     async (args) => {
       const res = await handleTaskmasterUpdateTask(

@@ -15,7 +15,7 @@ export type PeriodKind = (typeof PERIOD_KINDS)[number];
 
 export interface Period {
   id: string; title: string; start: string; end: string; kind: PeriodKind;
-  project?: string | null; src?: Row | null; by: "ai" | "naoki"; hidden?: boolean;
+  project?: string | null; src?: Row | null; by: "ai" | "naoki" | "chat"; hidden?: boolean;
 }
 
 async function sha1(s: string): Promise<string> {
@@ -27,7 +27,8 @@ export const periodId = (title: string, start: string) => sha1(`${String(title).
 
 /** AI が出し直した予定を、今ある予定に重ねる。Naoki のもの・消したものは残し、同じものは出し直さない */
 export async function mergePeriods(old: Period[], incoming: Omit<Period, "id" | "by">[]): Promise<{ periods: Period[]; added: number; skipped: number }> {
-  const keep = (Array.isArray(old) ? old : []).filter((p) => p && (p.by === "naoki" || p.hidden));
+  // AI の予定だけ出し直す。Naoki と案件チャット（anken__add_period・2026-10-22）が入れたもの、消したものは残す
+  const keep = (Array.isArray(old) ? old : []).filter((p) => p && (p.by !== "ai" || p.hidden));
   const taken = new Set(keep.map((p) => p.id));
   const out: Period[] = [...keep];
   let added = 0, skipped = 0;

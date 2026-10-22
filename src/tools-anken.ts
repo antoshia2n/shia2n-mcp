@@ -5,7 +5,7 @@ import type { Env } from "./index.js";
 import { parseLine, parseMinutes, maskMessages, withHashes, SELF_NAMES } from "./anken-core.js";
 import { getGoogleTokenForScope } from "./google-token.js";
 import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
-import { PERIOD_KINDS, mergePeriods, extractLinks, typeLabel, googleIdOf, type Period } from "./anken-plan.js";
+import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleIdOf, type Period } from "./anken-plan.js";
 
 /**
  * 案件くん（anken.shia2n.jp・クライアント案件の LINE・議事録・やることを 1 か所で見る）の道具。
@@ -43,6 +43,12 @@ import { PERIOD_KINDS, mergePeriods, extractLinks, typeLabel, googleIdOf, type P
  *   ・anken__log_work：案件チャットが作業の終わりに「対応記録」を 1 件書く。時系列の記録「対応記録」の発言として入るので、
  *     記録と検索で探せ、日ごとの流れに並び、AI の読み取りにも乗る（表は増やさない）
  *   ・anken__get_home に「直近の対応記録」
+ *
+ * 2026-10-22 定期・並び・予定の 1 件ずつ（るーみん案件チャットからの依頼）：
+ *   ・TaskMaster の繰り返しタスク＝定期。数の「やる」とホームの「対応する順」から外し、「定期」に次の日の順で出す
+ *   ・「対応する順」は Naoki が案件くんで並べた順（TaskMaster のタスクの caseOrder）。並べていない新しいものはその上に自動の順
+ *   ・anken__add_period／anken__remove_period：予定を 1 件ずつ足す・消す（案件チャットが入れた予定は AI の出し直しで消えない）
+ *   ・「最後のやりとり」は今日より先の日を数えない
  */
 
 type Row = Record<string, any>;
@@ -74,6 +80,23 @@ async function tmOf(env: Env, projectId: string | null | undefined): Promise<{ o
       doneIds: new Set(tasks.filter((t: Row) => t.completed || t.archived).map((t: Row) => String(t.id))),
     };
   } catch { return null; }
+}
+/** 繰り返しタスク（TaskMaster の repeat が入っているもの）＝定期。案件くんの「対応する順」とは別の枠に出す（2026-10-22） */
+const isRegular = (t: Row) => typeof t.repeat === "string" && !!t.repeat;
+const REPEAT_L: Record<string, string> = { daily: "毎日", weekday: "平日", weekly: "毎週", monthly: "毎月" };
+/**
+ * 単発のタスクの並び（案件くんのホームの「対応する順」と同じ・2026-10-22）。
+ * Naoki が案件くんで並べたもの（caseOrder）はその順。まだ並べていない新しいものは、その上に自動の順（期限切れ → 次の定例まで → 優先度 → 期限）で出す
+ */
+function orderOneOff(tasks: Row[], c: Row): Row[] {
+  const today = todayJst();
+  const mtg = mtgDay(c.mtg?.when);
+  const pri: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const band = (t: Row) => (t.deadline && t.deadline < today ? 0 : t.deadline && mtg && t.deadline <= mtg ? 1 : 2);
+  const auto = (a: Row, b: Row) => band(a) - band(b) || (pri[a.priority] ?? 1) - (pri[b.priority] ?? 1) || String(a.deadline || "9").localeCompare(String(b.deadline || "9"));
+  const placed = tasks.filter((t) => typeof t.caseOrder === "number").sort((a, b) => a.caseOrder - b.caseOrder);
+  const fresh = tasks.filter((t) => typeof t.caseOrder !== "number").sort(auto);
+  return [...fresh, ...placed];
 }
 const STATUS: Record<string, string> = { candidate: "候補箱", open: "登録済み", done: "済み", dismissed: "外した" };
 const STL: Record<string, string> = { g: "順調", y: "注意", r: "遅れ" };
@@ -202,7 +225,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
             const tm = tms[ci];
             return {
               id: c.id, 名前: c.name, 状態: STL[c.state] ?? c.state, 今週: c.week ?? "", 注意: c.alert ?? "",
-              数: { やる: tm ? tm.open.length : n("do", "open"), 確かめる: n("ask"), 相手待ち: n("wait"), 候補箱: its.filter((i) => i.status === "candidate").length },
+              数: { やる: tm ? tm.open.filter((t) => !isRegular(t)).length : n("do", "open"), 定期: tm ? tm.open.filter(isRegular).length : 0, 確かめる: n("ask"), 相手待ち: n("wait"), 候補箱: its.filter((i) => i.status === "candidate").length },
               次のMTG: c.mtg?.when ?? "", 拾い始めの日: pickFromOf(c), 住所: `${APP_URL}/c/${c.id}`,
             };
           }),
@@ -230,7 +253,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           sbGet(env, `/ak_projects?select=id,name,state,next,recent&case_id=eq.${enc(c.id)}&${own}&order=sort.asc`),
           sbGet(env, `/ak_items?select=id,kind,title,status,due,note,reason,src,origin,project_id,tm_task_id,created_at&case_id=eq.${enc(c.id)}&${own}`),
           sbGet(env, `/ak_sources?select=name,kind,last_import_at&case_id=eq.${enc(c.id)}&${own}`),
-          sbGet(env, `/ak_msgs?select=day&case_id=eq.${enc(c.id)}&${own}&order=day.desc&limit=1`),
+          sbGet(env, `/ak_msgs?select=day&case_id=eq.${enc(c.id)}&${own}&day=lte.${todayJst()}&order=day.desc&limit=1`),
         ]);
         const pName = new Map(projects.map((p) => [p.id, p.name]));
         const tm = await tmOf(env, c.tm_project);
@@ -244,7 +267,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const n = (k: string, s?: string) => act.filter((i) => kindOf(i.kind) === k && (!s || i.status === s)).length;
         return asMcpTextResult({
           ok: true, 案件: c.name, 住所: `${APP_URL}/c/${c.id}`,
-          数: { やる: tm ? tm.open.length : n("do", "open"), 確かめる: n("ask"), 相手待ち: n("wait"), 候補箱: act.filter((i) => i.status === "candidate").length },
+          数: { やる: tm ? tm.open.filter((t) => !isRegular(t)).length : n("do", "open"), 定期: tm ? tm.open.filter(isRegular).length : 0, 確かめる: n("ask"), 相手待ち: n("wait"), 候補箱: act.filter((i) => i.status === "candidate").length },
           状態: STL[c.state] ?? c.state, 今週: c.week ?? "", 注意: c.alert ?? "",
           最後のやりとり: last[0]?.day ?? null,
           直近の対応記録: logs.map((m) => `${m.day} ${m.at_time ?? ""} ${m.who ?? ""}：${String(m.body).replace(/^【対応記録】/, "").split("\n")[0].slice(0, 100)}`),
@@ -257,7 +280,11 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
             プロジェクト: pName.get(i.project_id) ?? "", 見立て: i.note ?? "", ...(i.reason ? { 外した理由: i.reason } : {}),
             根拠: (i.src || []).map(srcLine), 出どころ: i.origin === "mcp" ? "Claude" : "AI の拾い", TaskMaster: !!i.tm_task_id,
           })),
-          TaskMaster: tm ? tm.open.map((t) => ({ 名前: t.title ?? "", 期限: t.deadline || null })) : c.tm_project ? "読めませんでした" : "つないでいない",
+          TaskMaster: tm ? {
+            "対応する順（単発・Naoki が並べた順）": orderOneOff(tm.open.filter((t) => !isRegular(t)), c).map((t) => ({ id: t.id, 名前: t.title ?? "", 期限: t.deadline || null, 優先度: t.priority ?? "medium" })),
+            "定期（次の日の順）": tm.open.filter(isRegular).sort((a, b) => String(a.deadline || "9").localeCompare(String(b.deadline || "9")))
+              .map((t) => ({ id: t.id, 名前: t.title ?? "", 次の日: t.deadline || null, 繰り返し: REPEAT_L[t.repeat] ?? t.repeat })),
+          } : c.tm_project ? "読めませんでした" : "つないでいない",
           決定: items.filter((i) => i.kind === "decision" && i.status !== "dismissed").slice(0, 12).map((i) => ({ 名前: i.title, 根拠: (i.src || []).map(srcLine)[0] ?? "" })),
           記録: sources.map((s) => ({ 名前: s.name, 種類: s.kind === "minutes" ? "議事録" : "LINE", 最後の取り込み: s.last_import_at })),
         });
@@ -862,6 +889,57 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           user_id: OWNER_UID, case_id: c.id, source_id: src.id, day, at_time: time, who: m.who, body: m.body, masked: m.masked, hash: m.hash,
         }], "resolution=ignore-duplicates,return=minimal");
         return asMcpTextResult({ ok: true, 案件: c.name, 日: day, 時刻: time, 伏せた: masked, 住所: `${APP_URL}/c/${c.id}` });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+  // ─── 15. anken__add_period ───────────────────────────────────────
+  server.tool(
+    "anken__add_period",
+    "案件くんの予定（ガントの一番上の段・クライアントの期間や日）を 1 件足す。案件チャットが Naoki に聞いた予定や、資料で見つけた予定を入れるときに使う。入れた予定は「AI にかけ直す」で消えない（Naoki が画面で入れたものと同じ扱い）。同じ題名・同じ始まりの日の予定がすでにあれば足さない。戻り値: { ok, 案件, 足した, 予定, 住所 }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      title: z.string().min(1).max(40).describe("予定の名前（20 字ほど。例：にんけん大分合宿）"),
+      start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("始まりの日"),
+      end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("終わりの日（1 日だけなら省略）"),
+      kind: z.enum(PERIOD_KINDS).describe("offer＝オファー・募集・販売／release＝公開・配信／event＝セミナー・合宿などの催し／off＝不在・休み／other"),
+      project: z.string().max(60).optional().describe("束ねるプロジェクトの名前（案件くんのプロジェクト名）"),
+      note: z.string().max(120).optional().describe("出どころや時刻など 1 行（例：10:00 セミナー／13:00 グループセッション）"),
+    },
+    async ({ case: q, title, start, end, kind, project, note }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const list: Period[] = Array.isArray(c.periods) ? c.periods : [];
+        const id = await periodId(title, start);
+        if (list.some((p) => p.id === id && !p.hidden)) return asMcpTextResult({ ok: true, 案件: c.name, 足した: 0, message: "同じ予定がすでにあります", 住所: `${APP_URL}/c/${c.id}` });
+        const row: Period = { id, title: title.trim(), start, end: end && end >= start ? end : start, kind, project: project ?? null,
+          src: note ? { quote: note.slice(0, 120), chat: "案件チャット" } : null, by: "chat" };
+        const next = [...list.filter((p) => !(p.id === id && p.hidden)), row].sort((a, b) => a.start.localeCompare(b.start));
+        await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { periods: next, updated_at: new Date().toISOString() });
+        return asMcpTextResult({ ok: true, 案件: c.name, 足した: 1, 予定: `${row.start}〜${row.end} ${row.title}`, 住所: `${APP_URL}/c/${c.id}` });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 16. anken__remove_period ────────────────────────────────────
+  server.tool(
+    "anken__remove_period",
+    "案件くんの予定を 1 件消す（題名と始まりの日で指す）。AI が拾った予定は隠して残し、次に AI にかけても出し直さない。案件チャットや Naoki が入れた予定は消す。戻り値: { ok, 案件, 消した, 住所 }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      title: z.string().min(1).max(40).describe("予定の名前（get_home の「予定」の名前そのまま）"),
+      start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("始まりの日"),
+    },
+    async ({ case: q, title, start }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const list: Period[] = Array.isArray(c.periods) ? c.periods : [];
+        const hit = list.filter((p) => !p.hidden && String(p.title).trim() === title.trim() && p.start === start);
+        if (!hit.length) return asMcpTextResult({ ok: false, message: `予定「${title}」（${start}）が見つかりません`, 予定: list.filter((p) => !p.hidden).map((p) => `${p.start} ${p.title}`) });
+        const next = list.flatMap((p) => (hit.includes(p) ? (p.by === "ai" ? [{ ...p, hidden: true }] : []) : [p]));
+        await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { periods: next, updated_at: new Date().toISOString() });
+        return asMcpTextResult({ ok: true, 案件: c.name, 消した: hit.length, 住所: `${APP_URL}/c/${c.id}` });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
