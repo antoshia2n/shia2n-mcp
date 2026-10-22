@@ -4,6 +4,7 @@ import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { parseLine, parseMinutes, maskMessages, withHashes, SELF_NAMES } from "./anken-core.js";
 import { pickQuote } from "./anken-quote.js";
+import { planRows, NEW_TAB_HEADER } from "./anken-sheet.js";
 import { getGoogleTokenForScope } from "./google-token.js";
 import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
 import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleIdOf, type Period } from "./anken-plan.js";
@@ -55,6 +56,7 @@ import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleId
 type Row = Record<string, any>;
 /** 案件くんに入れる 1 人（画面の wrangler.jsonc の ANKEN_ALLOW_UID と同じ値。秘密ではない） */
 const OWNER_UID = "VrMwzeSceqWeXVQOrm8kpu4uVR33";
+const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const APP_URL = "https://anken.shia2n.jp";
 const own = `user_id=eq.${OWNER_UID}`;
 /** 「報告がまだ」（report）は 2026-10-22 に無くした。古い行が残っていても「やる」として見せる */
@@ -896,6 +898,73 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           user_id: OWNER_UID, case_id: c.id, source_id: src.id, day, at_time: time, who: m.who, body: m.body, masked: m.masked, hash: m.hash,
         }], "resolution=ignore-duplicates,return=minimal");
         return asMcpTextResult({ ok: true, 案件: c.name, 日: day, 時刻: time, 伏せた: masked, 住所: `${APP_URL}/c/${c.id}` });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+  // ─── 14b. anken__sheet_add_links（案件シートへリンクを足す・2026-10-22） ─────────
+  server.tool(
+    "anken__sheet_add_links",
+    "案件シート（案件の資料の正本。例：るーみん案件データ管理）の 1 つのタブに、リンクを行として足す。列は見出しで見分ける（名前か名称・リンク・詳細。見出しの無いタブは B＝詳細・C＝リンク）。タブが無ければ作り、見出し（A 空き・B 名前・C リンク・D 詳細）を入れる。同じリンクがそのタブに既にあれば足さない（Google のファイルは番号で見る）。既にある行は書き換えない。sheet を省くと案件に登録したシートを使い、渡すと案件にも登録する。dry_run: true なら書かずに、足す行と足さない行だけ返す。戻り値: { ok, 案件, タブ, 作ったタブ, 足した数, 足した行, 足さなかったもの, シート }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      sheet: z.string().max(300).optional().describe("案件シートの住所か番号（省くと案件に登録したもの）"),
+      tab: z.string().min(1).max(60).describe("タブの名前（案件くんのプロジェクト名にそろえる）"),
+      items: z.array(z.object({
+        name: z.string().min(1).max(200).describe("リンクの名前"),
+        url: z.string().url().max(1000),
+        detail: z.string().max(300).optional().describe("詳細（種類・日付・どこで出たか など 1 行）"),
+        group: z.string().max(40).optional().describe("ジャンル（「ジャンル」の見出しがあるタブだけに入る）"),
+      })).min(1).max(100),
+      dry_run: z.boolean().optional(),
+    },
+    async ({ case: q, sheet, tab, items, dry_run }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const src = sheet?.trim() || c.sheet_url || "";
+        const id = (src.match(/\/spreadsheets\/d\/([\w-]+)/) || [])[1] || (/^[\w-]{20,}$/.test(src) ? src : "");
+        if (!id) return asMcpTextResult({ ok: false, message: "案件シートが分かりません。sheet に住所を渡してください" });
+        const token = await getGoogleTokenForScope(env, SHEETS_SCOPE);
+        const api = async (path: string, init: RequestInit = {}): Promise<Row> => {
+          const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } });
+          const text = await res.text();
+          if (!res.ok) throw new Error(`Sheets ${res.status}: ${text.slice(0, 300)}`);
+          return text ? JSON.parse(text) : {};
+        };
+        const meta = await api(`?fields=${enc("properties.title,sheets.properties.title")}`);
+        const titles: string[] = (meta.sheets || []).map((x: Row) => x.properties?.title);
+        const q1 = `'${tab.replace(/'/g, "''")}'`;
+        let created = false;
+        let values: string[][] = [];
+        if (!titles.includes(tab)) {
+          if (!dry_run) {
+            await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab } } }] }) });
+            await api(`/values/${enc(`${q1}!A1`)}?valueInputOption=RAW`, { method: "PUT", body: JSON.stringify({ values: [NEW_TAB_HEADER] }) });
+          }
+          created = true;
+          values = [NEW_TAB_HEADER];
+        } else {
+          // 値だけでなく、リンクの付いた文字やチップの住所も読む（同じリンクを 2 度足さないため）
+          const read = async (fields: string) => api(`?ranges=${enc(`${q1}!A1:J3000`)}&fields=${enc(fields)}`);
+          let grid: Row;
+          try { grid = await read("sheets.data.rowData.values(formattedValue,hyperlink,chipRuns)"); }
+          catch { grid = await read("sheets.data.rowData.values(formattedValue,hyperlink)"); }
+          const rowData: Row[] = grid.sheets?.[0]?.data?.[0]?.rowData || [];
+          values = rowData.map((r) => (r.values || []).map((v: Row) => {
+            const chips = (v.chipRuns || []).map((cr: Row) => cr.chip?.richLinkProperties?.uri).filter(Boolean);
+            return [v.formattedValue, v.hyperlink, ...chips].filter(Boolean).join(" ");
+          }));
+        }
+        const plan = planRows(values, items);
+        if (!dry_run && plan.rows.length) {
+          await api(`/values/${enc(`${q1}!A${plan.startRow}`)}?valueInputOption=USER_ENTERED`, { method: "PUT", body: JSON.stringify({ values: plan.rows }) });
+        }
+        if (!dry_run && sheet?.trim() && !c.sheet_url) await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { sheet_url: `https://docs.google.com/spreadsheets/d/${id}/edit` });
+        return asMcpTextResult({
+          ok: true, 案件: c.name, タブ: tab, 作ったタブ: created, 書いた: !dry_run, 足した数: plan.rows.length,
+          足した行: plan.rows.length ? `${plan.startRow}〜${plan.startRow + plan.rows.length - 1} 行目` : "なし",
+          足さなかったもの: plan.skipped, シート: `https://docs.google.com/spreadsheets/d/${id}/edit`,
+        });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
