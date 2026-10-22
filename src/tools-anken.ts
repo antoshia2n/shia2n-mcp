@@ -5,6 +5,7 @@ import type { Env } from "./index.js";
 import { parseLine, parseMinutes, maskMessages, withHashes, SELF_NAMES } from "./anken-core.js";
 import { pickQuote } from "./anken-quote.js";
 import { addLinks, readSheet, sheetIdOf } from "./anken-sheet-io.js";
+import { memoOf, keepMemo } from "./anken-memo.js";
 import { getGoogleTokenForScope } from "./google-token.js";
 import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
 import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleIdOf, type Period } from "./anken-plan.js";
@@ -69,6 +70,8 @@ const pickFromOf = (c: Row) => {
   const made = c.created_at ? jstDay(String(c.created_at)) : "";
   return made > PICK_FROM ? made : PICK_FROM;
 };
+/** 事前メモから Naoki のメモを抜いたもの（返すときに 2 回出さない） */
+const mtgOnly = (c: Row) => { const { memo: _m, memo_at: _a, ...rest } = c?.mtg ?? {}; return rest; };
 /** 次の MTG の when（例「2026-10-22（木）13時（推定）」）の日付。読めなければ null */
 const mtgDay = (when: unknown) => /^(\d{4}-\d{2}-\d{2})/.exec(String(when ?? ""))?.[1] ?? null;
 /** TaskMaster のつないだプロジェクトのタスク（未完了の題名と、完了した id）。読めなければ null */
@@ -228,7 +231,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
             return {
               id: c.id, 名前: c.name, 状態: STL[c.state] ?? c.state, 今週: c.week ?? "", 注意: c.alert ?? "",
               数: { やる: tm ? tm.open.filter((t) => !isRegular(t)).length : n("do", "open"), 定期: tm ? tm.open.filter(isRegular).length : 0, 確かめる: n("ask"), 相手待ち: n("wait"), 候補箱: its.filter((i) => i.status === "candidate").length },
-              次のMTG: c.mtg?.when ?? "", 拾い始めの日: pickFromOf(c), 住所: `${APP_URL}/c/${c.id}`,
+              次のMTG: c.mtg?.when ?? "", ...(memoOf(c).text ? { Naokiのメモ: memoOf(c).text } : {}), 拾い始めの日: pickFromOf(c), 住所: `${APP_URL}/c/${c.id}`,
             };
           }),
         });
@@ -273,7 +276,8 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           状態: STL[c.state] ?? c.state, 今週: c.week ?? "", 注意: c.alert ?? "",
           最後のやりとり: last[0]?.day ?? null,
           直近の対応記録: logs.map((m) => `${m.day} ${m.at_time ?? ""} ${m.who ?? ""}：${String(m.body).replace(/^【対応記録】/, "").split("\n")[0].slice(0, 100)}`),
-          次のMTG: c.mtg ?? {},
+          Naokiのメモ: memoOf(c).text ? { 本文: memoOf(c).text, 書いた: memoOf(c).at } : null,
+          次のMTG: mtgOnly(c),
           拾い始めの日: pickFromOf(c),
           予定: (Array.isArray(c.periods) ? c.periods : []).filter((p: Period) => !p.hidden).map((p: Period) => ({ 名前: p.title, 始まり: p.start, 終わり: p.end, 種類: p.kind, 出どころ: p.by === "naoki" ? "Naoki" : p.by === "chat" ? "案件チャット" : "AI" })),
           プロジェクト: projects.map((p) => ({ 名前: p.name, 状態: STL[p.state] ?? p.state, 次の一手: p.next, 直近: p.recent })),
@@ -634,6 +638,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         for (const d of days) for (const e of d.tags || []) (d.day >= from ? ev : before).push(evLine(e, d.day));
         return asMcpTextResult({
           ok: true, 案件: c.name, 今日: todayJst(), 拾い始めの日: from, 決まり: CASE_RULES,
+          ...(memoOf(c).text ? { Naokiのメモ: `${memoOf(c).text}（Naoki が決めた優先。議題・注意・次の一手はこれを前提にする。書き換えない）` } : {}),
           ...(pend.length ? { 注意: "まだ読んでいない日があります。先に anken__ai_next_days を済ませてください" } : {}),
           既存のプロジェクト: projects.map((p) => p.name),
           登録済み: items.filter((i) => (i.status === "open" || i.status === "done") && i.kind !== "decision").map((i) => i.title),
@@ -783,7 +788,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           });
           plan = await mergePeriods(c.periods, inc);
         }
-        await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { week, state, alert: alert || null, mtg: { ...next_mtg, agenda }, ...(plan ? { periods: plan.periods } : {}), updated_at: now });
+        await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { week, state, alert: alert || null, mtg: keepMemo(c.mtg, { ...next_mtg, agenda }), ...(plan ? { periods: plan.periods } : {}), updated_at: now });
         await sbPost(env, `/ak_runs`, [{ user_id: OWNER_UID, case_id: c.id, days: days.length, msgs: items.length, model: "claude-chat", note: "段 2：案件ごと（MCP）" }], "return=minimal");
         return asMcpTextResult({
           ok: true, 案件: c.name, 拾い始めの日: from, 新しい候補: added, 直した候補: updated, 下げた候補: gone.length,
