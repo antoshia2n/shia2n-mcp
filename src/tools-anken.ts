@@ -692,13 +692,17 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         // 「報告がまだ」は無くした：残っている行は「やる」へ移す（Naoki が決めた置き場はそのまま）
         const moved = await sbPatch(env, `/ak_items?case_id=eq.${enc(c.id)}&${own}&kind=eq.report&select=id`, { kind: "do", updated_at: now });
         const [oldProj, oldItems, days, sources] = await Promise.all([
-          sbGet(env, `/ak_projects?select=id,name&case_id=eq.${enc(c.id)}&${own}`),
+          sbGet(env, `/ak_projects?select=id,name,sort&case_id=eq.${enc(c.id)}&${own}`),
           sbGet(env, `/ak_items?select=id,fp,status,origin,kind,src&case_id=eq.${enc(c.id)}&${own}`),
           sbGet(env, `/ak_days?select=day,tags&case_id=eq.${enc(c.id)}&${own}`),
           sbGet(env, `/ak_sources?select=id,name,kind&case_id=eq.${enc(c.id)}&${own}`),
         ]);
-        const savedProj = projects.length ? await sbPost(env, `/ak_projects?on_conflict=case_id,name`, projects.map((p, i) => ({
-          user_id: OWNER_UID, case_id: c.id, name: p.name, state: p.state, next: p.next || null, recent: p.recent || null, sort: i, updated_at: now,
+        // 並び（sort）は Naoki が画面で並べたものを残す。今あるプロジェクトは今の sort、新しいものは後ろへ（2026-10-22）
+        const oldSort = new Map<string, number>(oldProj.map((p: any) => [p.name, typeof p.sort === "number" ? p.sort : 0]));
+        let tail = oldProj.reduce((m: number, p: any) => Math.max(m, typeof p.sort === "number" ? p.sort : 0), -1);
+        const savedProj = projects.length ? await sbPost(env, `/ak_projects?on_conflict=case_id,name`, projects.map((p) => ({
+          user_id: OWNER_UID, case_id: c.id, name: p.name, state: p.state, next: p.next || null, recent: p.recent || null,
+          sort: oldSort.has(p.name) ? oldSort.get(p.name) : ++tail, updated_at: now,
         })), "resolution=merge-duplicates,return=representation") : [];
         const pId = new Map([...oldProj, ...savedProj].map((p) => [p.name, p.id]));
         const evQuote = new Map<number, string>();
