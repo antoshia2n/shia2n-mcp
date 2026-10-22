@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { parseLine, parseMinutes, maskSecrets, withHashes, SELF_NAMES } from "./anken-core.js";
+import { parseLine, parseMinutes, maskMessages, withHashes, SELF_NAMES } from "./anken-core.js";
 import { getGoogleTokenForScope } from "./google-token.js";
 import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
 
@@ -140,8 +140,7 @@ const evLine = (e: Row, day: string) => `[#${e.msg_id}] ${day} ${e.type} ${e.who
 async function importMessages(env: Env, c: Row, kind: "line" | "minutes", name: string, parsed: Row, url?: string): Promise<Row> {
   const msgs = (parsed.messages as Row[]).filter((m) => !m.system);
   if (!msgs.length) return { ok: false, message: "発言を 1 件も読めませんでした", 読めなかった行: (parsed.skipped || []).slice(0, 5) };
-  let masked = 0;
-  const clean = msgs.map((m) => { const r = maskSecrets(m.body); masked += r.count; return { ...m, body: r.text, masked: r.count > 0 }; });
+  const { messages: clean, count: masked } = maskMessages(msgs);
   const hashed = await withHashes(clean);
   const [src] = await sbPost(env, `/ak_sources?on_conflict=case_id,kind,name`, [{
     user_id: OWNER_UID, case_id: c.id, kind, name, ...(url ? { url } : {}), last_import_at: new Date().toISOString(),
@@ -422,8 +421,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const old = await sbGet(env, `/ak_msgs?select=id&case_id=eq.${enc(c.id)}&${own}&source_id=eq.${enc(src.id)}&${range}`);
         const oldIds = new Set(old.map((m) => Number(m.id)));
         await sbDelete(env, `/ak_msgs?case_id=eq.${enc(c.id)}&${own}&source_id=eq.${enc(src.id)}&${range}`);
-        let masked = 0;
-        const clean = inRange.map((m) => { const r = maskSecrets(m.body); masked += r.count; return { ...m, body: r.text, masked: r.count > 0 }; });
+        const { messages: clean, count: masked } = maskMessages(inRange);
         const hashed = await withHashes(clean);
         let added = 0;
         for (let i = 0; i < hashed.length; i += 400) {

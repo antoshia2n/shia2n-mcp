@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 案件くんの取り込みの芯（anken リポジトリの src/core/parse.js と同じ中身を写したもの・2026-10-21 夜に写し直し）。
+ * 案件くんの取り込みの芯（anken リポジトリの src/core/parse.js と同じ中身を写したもの・2026-10-22 に写し直し：伏せ字の抜けと " の取りこぼし）。
  * 直すときは両方を同じに直す。試験は test/anken-core.test.ts。
  */
 /**
@@ -111,6 +111,8 @@ export function parseLine(text: any, opts: any = {}): any {
     }
     // 閉じの " が見つからないまま、タブ区切りの新しい発言が来たら、そこで閉じたとみなす（取りこぼし防止）
     if (open && /^\d{1,2}:\d{2}\t[^\t]+\t/.test(ln)) open = false;
+    // 空白区切りの書き出しでも、日付の行のすぐ下に発言の行が来たら閉じたとみなす（2026-10-22 おかぜりの履歴で見つかった取りこぼし）
+    if (open && DAY_RE.test(ln) && MSG_RE.test(lines[i + 1] ?? "")) open = false;
     if (!open) {
       const d = ln.match(DAY_RE);
       if (d) { day = `${d[1]}-${pad(d[2])}-${pad(d[3])}`; continue; }
@@ -128,7 +130,8 @@ export function parseLine(text: any, opts: any = {}): any {
       if (m && day && !goesBack && (m[4].includes("\t") || /\S +[^ ]/.test(m[4]) || nameOnly || !out.length)) {
         const { who, body, system } = splitWho(m[4], names);
         out.push({ day, time, who, body, system: !!system || isSystem(who, body) });
-        open = body.startsWith('"') && !(body.length > 1 && body.endsWith('"') && !body.endsWith('""'));
+        // " で始まっても、同じ行の中で閉じている（「"せどり"のワードは…」）なら複数行の発言ではない
+        open = body.startsWith('"') && body.replace(/""/g, "").split('"').length % 2 === 0;
         continue;
       }
     }
@@ -163,12 +166,22 @@ const LABEL = String.raw`(?:ID|ＩＤ|ｉｄ|id|ログインID|ユーザー名|�
 const LABEL_LINE = new RegExp(String.raw`^(\s*[・\-*●■▪◆]?\s*[^\n:：=＝]{0,16}?${LABEL}\s*[:：=＝]\s*)(\S.*)$`, "i");
 const PASS_WORD = new RegExp(String.raw`(?:パスワード|password|pass|PW|ＰＷ|暗証番号)`, "i");
 const MASK = "＊＊＊（伏せた）";
+/** API の鍵らしい文字列（Stripe・OpenAI・GitHub・Google・Slack・AWS）。ラベルが無くても伏せる */
+const KEY_RE = /(?<![A-Za-z0-9_])(?:(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}|sk-(?:proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9_])/g;
 const EMAIL_RE = /(?<![\w.%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![\w-])/g;
 const PHONE_RE = /(?<![\d-])(?:0\d{1,4}-\d{1,4}-\d{3,4}|0[5789]0\d{8}|\+81[- ]?\d{1,4}[- ]?\d{1,4}[- ]?\d{3,4})(?![\d-])/g;
 
+/** ラベルだけの行（「ID」「PASS」など。区切りの記号なし） */
+const LABEL_ONLY = new RegExp(String.raw`^[・\-*●■▪◆\s]*${LABEL}[\s\\]*$`, "i");
+/** 「pass xxxx」のように空白で区切った 1 語の値（2026-10-22 おかぜりの議事録で見つかった形） */
+const LABEL_SPACE = new RegExp(String.raw`^(\s*[・\-*●■▪◆]?\s*(?:パスワード|パス|password|pass|PW|ＰＷ|暗証番号|ログインID|ユーザーID|ID|ＩＤ|メールアドレス|メアド|メール|mail|email)\s+)([\x21-\x7E]{3,64})\s*$`, "i");
+/** 値らしい 1 語（空白なし・英数と記号だけ・リンクでない） */
+const isToken = (s) => !!s && s.length <= 64 && /^[\x21-\x7E]+$/.test(s) && !/^https?:/i.test(s);
+
 /**
  * 1 行ずつ見て、「ラベル：値」の値を伏せる。
- * 「パスワード」とだけ書いた行のすぐ下が空白の無い短い文字なら、その行も伏せる。
+ * 「pass xxxx」のように空白で区切った 1 語の値も伏せる。
+ * 「ID」「パスワード」とだけ書いた行は、その下（空行は 2 行まで飛ばす）の値の行を伏せる。
  * ラベルの無いメールアドレスと電話番号も伏せる（ミーティング ID・リンクの中の @ は伏せない）。
  * 返り値：{ text, count }（伏せた数）
  */
@@ -182,21 +195,72 @@ export function maskSecrets(text: any): { text: string; count: number } {
       count++;
       continue;
     }
+    const sp = lines[i].match(LABEL_SPACE);
+    if (sp && !/(ミーティング|meeting)/i.test(sp[1])) {
+      lines[i] = sp[1] + MASK;
+      count++;
+      continue;
+    }
     // ラベルの無いメールアドレス・電話番号も伏せる（申込者の連絡先が貼られることがある）
     const before = lines[i];
-    lines[i] = lines[i].replace(EMAIL_RE, MASK).replace(PHONE_RE, MASK);
+    lines[i] = lines[i].replace(EMAIL_RE, MASK).replace(PHONE_RE, MASK).replace(KEY_RE, MASK);
     if (lines[i] !== before) count++;
     const bare = lines[i].trim();
-    if (bare && bare.length <= 20 && PASS_WORD.test(bare) && !/[:：=＝]/.test(bare)) {
-      const nx = (lines[i + 1] ?? "").trim();
-      if (nx && !/\s/.test(nx) && nx.length <= 64 && !/^https?:/.test(nx)) {
-        lines[i + 1] = MASK;
+    const passOnly = bare && bare.length <= 20 && PASS_WORD.test(bare) && !/[:：=＝]/.test(bare);
+    if (passOnly || LABEL_ONLY.test(bare)) {
+      // 下の値の行（空行は 2 行まで飛ばす）
+      let j = i + 1;
+      while (j < lines.length && j <= i + 3 && !lines[j].trim()) j++;
+      const nx = (lines[j] ?? "").trim().replace(/\\(?=[!_*#\-.])/g, "");
+      if (j < lines.length && j <= i + 3 && nx !== MASK && !LABEL_ONLY.test(nx)
+        && (EMAIL_RE.test(nx) || isToken(nx) || (passOnly && !/\s/.test(nx) && nx.length <= 64 && !/^https?:/.test(nx)))) {
+        EMAIL_RE.lastIndex = 0;
+        lines[j] = MASK;
         count++;
-        i++;
+        i = j;
       }
+      EMAIL_RE.lastIndex = 0;
     }
   }
   return { text: lines.join("\n"), count };
+}
+
+/** 前の発言に ID・パスワードの話が出たあと、値だけを 1 通で送った発言（「zeri0318!!」のような 1 語） */
+const CRED_TALK = /(ID|ＩＤ|パスワード|パス|pass|PW|ログイン|アカウント|メールアドレス|メアド)/i;
+const LONE_SECRET = (b) => {
+  const t = b.trim().replace(/\\(?=[!_*#\-.])/g, "");
+  return t.length >= 6 && t.length <= 40 && /^[\x21-\x7E]+$/.test(t) && !/^https?:/i.test(t)
+    && !/^%[^%]+%$/.test(t) && !/^\{\{.+\}\}$/.test(t) // UTAGE などの差し込み（%sei_mei% など）は伏せない
+    && /[0-9!#$%&*+?@^~_.-]/.test(t) && /[A-Za-z]/.test(t);
+};
+
+/**
+ * 発言の並びをまとめて伏せる（保存する前に必ず通す）。maskSecrets に加えて、
+ * 直前 2 通（同じ人か 30 分以内）に ID・パスワードの話がある「1 語だけの発言」も伏せる。
+ * 返り値：{ messages（body を伏せ、masked を付けたもの）, count }
+ */
+export function maskMessages(msgs: any[]): { messages: any[]; count: number } {
+  let count = 0;
+  const out = [];
+  const toMin = (t) => (/^\d{1,2}:\d{2}$/.test(t || "") ? Number(t.slice(0, -3)) * 60 + Number(t.slice(-2)) : null);
+  const credTalk = (body) => { EMAIL_RE.lastIndex = 0; const r = CRED_TALK.test(body) || EMAIL_RE.test(body); EMAIL_RE.lastIndex = 0; return r; };
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    const r = maskSecrets(m.body);
+    let body = r.text, n = r.count;
+    const prev = msgs.slice(Math.max(0, i - 2), i).filter((p) => p.day === m.day
+      && (p.who === m.who || (toMin(m.time) != null && toMin(p.time) != null && toMin(m.time) - toMin(p.time) <= 30)));
+    if (prev.some((p) => credTalk(p.body)) || credTalk(m.body)) {
+      const lines = body.split("\n");
+      for (let k = 0; k < lines.length; k++) {
+        if (lines[k] !== MASK && LONE_SECRET(lines[k])) { lines[k] = MASK; n++; }
+      }
+      body = lines.join("\n");
+    }
+    count += n;
+    out.push({ ...m, body, masked: n > 0 });
+  }
+  return { messages: out, count };
 }
 
 /* ───────── 重ならない印 ───────── */
