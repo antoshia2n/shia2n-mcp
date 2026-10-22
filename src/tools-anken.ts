@@ -3,6 +3,7 @@ import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { parseLine, parseMinutes, maskMessages, withHashes, SELF_NAMES } from "./anken-core.js";
+import { pickQuote } from "./anken-quote.js";
 import { getGoogleTokenForScope } from "./google-token.js";
 import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
 import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleIdOf, type Period } from "./anken-plan.js";
@@ -705,8 +706,9 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           sort: oldSort.has(p.name) ? oldSort.get(p.name) : ++tail, updated_at: now,
         })), "resolution=merge-duplicates,return=representation") : [];
         const pId = new Map([...oldProj, ...savedProj].map((p) => [p.name, p.id]));
-        const evQuote = new Map<number, string>();
-        for (const d of days) for (const e of d.tags || []) if (!evQuote.has(Number(e.msg_id))) evQuote.set(Number(e.msg_id), e.quote);
+        // その発言で拾った出来事の言葉（議事録は 1 つの発言から多く拾うので、全部持つ）
+        const evQuote = new Map<number, string[]>();
+        for (const d of days) for (const e of d.tags || []) if (e.quote) evQuote.set(Number(e.msg_id), [...(evQuote.get(Number(e.msg_id)) || []), e.quote]);
         const ids = new Set<number>();
         for (const it of items) for (const id of [it.origin_msg_id, ...it.evidence_msg_ids]) ids.add(id);
         for (const d of decisions) ids.add(d.msg_id);
@@ -716,10 +718,11 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const sName = new Map(sources.map((s) => [s.id, s.name]));
         const sKind = new Map(sources.map((s) => [s.id, s.kind]));
         const isMinutes = (id: number) => sKind.get(byId.get(id)?.source_id) === "minutes";
-        // 根拠は 5 つまで。先頭（起点の発言）の原文は、示された該当行を優先する
-        const srcOf = (list: number[], firstQuote?: string) => [...new Set(list)].filter((id) => byId.has(id)).slice(0, 5).map((id, i) => {
+        // 根拠は 5 つまで。先頭（起点の発言）の原文は、示された該当行を優先する。
+        // 示されていない根拠は、その発言の行と出来事の言葉から、やることの名前にいちばん近いものを選ぶ（議事録で先頭の行が出ないように）
+        const srcOf = (list: number[], firstQuote?: string, title = "") => [...new Set(list)].filter((id) => byId.has(id)).slice(0, 5).map((id, i) => {
           const m = byId.get(id)!;
-          const quote = (i === 0 && firstQuote) || evQuote.get(id) || String(m.body).slice(0, 120);
+          const quote = pickQuote({ body: String(m.body), title, given: i === 0 ? firstQuote : undefined, tagQuotes: evQuote.get(id) });
           return { msg_id: id, day: m.day, time: m.at_time, chat: sName.get(m.source_id) ?? "", who: m.who, quote: String(quote).slice(0, 200) };
         });
         const byFp = new Map(oldItems.map((i) => [i.fp, i]));
@@ -733,7 +736,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           const om = byId.get(it.origin_msg_id);
           if (!om) continue;
           if (String(om.day) < from) { tooOld++; continue; }
-          const src = srcOf([it.origin_msg_id, ...it.evidence_msg_ids], it.origin_quote);
+          const src = srcOf([it.origin_msg_id, ...it.evidence_msg_ids], it.origin_quote, it.title);
           if (!src.length) continue;
           const fp = await fpOf("m", it.origin_msg_id, isMinutes(it.origin_msg_id), it.origin_quote, it.title);
           keep.add(fp);
@@ -751,7 +754,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         // 決定：AI が出したものは毎回出し直す（直す・足す・今回出さなかったものは消す）
         const keepD = new Set<string>();
         for (const d of decisions) {
-          const src = srcOf([d.msg_id], d.quote);
+          const src = srcOf([d.msg_id], d.quote, d.title);
           if (!src.length) continue;
           const fp = await fpOf("d", d.msg_id, isMinutes(d.msg_id), d.quote, d.title);
           keepD.add(fp);
@@ -775,7 +778,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           const inc = periods.filter((p) => byId.has(p.msg_id) || (planDropped++, false)).map((p) => {
             const m = byId.get(p.msg_id)!;
             return { title: p.title, start: p.start, end: p.end ?? p.start, kind: p.kind, project: p.project ?? null,
-              src: { msg_id: p.msg_id, day: m.day, chat: sName.get(m.source_id) ?? "", who: m.who, quote: String(p.quote || evQuote.get(p.msg_id) || m.body).slice(0, 120) } };
+              src: { msg_id: p.msg_id, day: m.day, chat: sName.get(m.source_id) ?? "", who: m.who, quote: pickQuote({ body: String(m.body), title: p.title, given: p.quote, tagQuotes: evQuote.get(p.msg_id) }).slice(0, 120) } };
           });
           plan = await mergePeriods(c.periods, inc);
         }
