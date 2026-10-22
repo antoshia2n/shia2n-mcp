@@ -4,7 +4,7 @@ import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { parseLine, parseMinutes, maskMessages, withHashes, SELF_NAMES } from "./anken-core.js";
 import { pickQuote } from "./anken-quote.js";
-import { planRows, NEW_TAB_HEADER } from "./anken-sheet.js";
+import { addLinks, readSheet, sheetIdOf } from "./anken-sheet-io.js";
 import { getGoogleTokenForScope } from "./google-token.js";
 import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
 import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleIdOf, type Period } from "./anken-plan.js";
@@ -56,7 +56,6 @@ import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleId
 type Row = Record<string, any>;
 /** 案件くんに入れる 1 人（画面の wrangler.jsonc の ANKEN_ALLOW_UID と同じ値。秘密ではない） */
 const OWNER_UID = "VrMwzeSceqWeXVQOrm8kpu4uVR33";
-const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const APP_URL = "https://anken.shia2n.jp";
 const own = `user_id=eq.${OWNER_UID}`;
 /** 「報告がまだ」（report）は 2026-10-22 に無くした。古い行が残っていても「やる」として見せる */
@@ -835,10 +834,10 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
   // ─── 13. anken__name_links ───────────────────────────────────────
   server.tool(
     "anken__name_links",
-    "案件くんのリンクに名称を付ける（画面の「リンク」タブは名称の順に並び、同じ名称はまとまる）。key は anken__links の key。Google のファイルは本当のファイル名を、ほかは何のページかが分かる短い名前（20 字ほど）にする。Naoki が画面で付けた名称は書き換えない。name を空にすると Claude の付けた名称を消す。戻り値: { ok, 書いた, 書き換えなかった（Naoki の名称）, 知らない鍵 }。",
+    "案件くんのリンクに名称を付ける（画面の「リンク」タブは名称の順に並び、同じ名称はまとまる）。key は anken__links の key。Google のファイルは本当のファイル名を、ほかは何のページかが分かる短い名前（20 字ほど）にする。Naoki が画面で付けた名称は書き換えない。name を空にすると Claude の付けた名称を消す。hide: true は「案件シートに入れない」印（資料のタブの未整理に出さない。Naoki の名称でも印だけは付く）。戻り値: { ok, 書いた, 書き換えなかった（Naoki の名称）, 知らない鍵 }。",
     {
       case: z.string().min(1).max(80).describe("案件の名前か id"),
-      names: z.array(z.object({ key: z.string().min(1).max(300), name: z.string().max(60) })).min(1).max(200),
+      names: z.array(z.object({ key: z.string().min(1).max(300), name: z.string().max(60), hide: z.boolean().optional().describe("案件シートに入れない印") })).min(1).max(200),
     },
     async ({ case: q, names }) => {
       try {
@@ -849,11 +848,18 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const cur: Record<string, Row> = c.link_names && typeof c.link_names === "object" ? { ...c.link_names } : {};
         let wrote = 0, kept = 0;
         const unknown: string[] = [];
-        for (const { key, name } of names) {
+        for (const { key, name, hide } of names) {
           if (!known.has(key)) { unknown.push(key); continue; }
-          if (cur[key]?.by === "naoki") { kept++; continue; }
-          const v = name.trim();
-          if (v) cur[key] = { name: v, by: "claude" }; else delete cur[key];
+          const mark = hide === undefined ? {} : hide ? { hide: true } : {};
+          if (cur[key]?.by === "naoki") {
+            if (hide === undefined) { kept++; continue; }
+            const { hide: _h, ...rest } = cur[key];
+            cur[key] = { ...rest, ...mark };
+            wrote++;
+            continue;
+          }
+          const v = name.trim() || (hide ? String(cur[key]?.name ?? "") : "");
+          if (v || hide) cur[key] = { ...(v ? { name: v } : {}), by: "claude", ...mark }; else delete cur[key];
           wrote++;
         }
         if (wrote) await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { link_names: cur, updated_at: new Date().toISOString() });
@@ -921,50 +927,41 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
       try {
         const c = await findCase(env, q);
         if (!c) return notFound(env, q);
-        const src = sheet?.trim() || c.sheet_url || "";
-        const id = (src.match(/\/spreadsheets\/d\/([\w-]+)/) || [])[1] || (/^[\w-]{20,}$/.test(src) ? src : "");
+        const id = sheetIdOf(sheet?.trim() || c.sheet_url);
         if (!id) return asMcpTextResult({ ok: false, message: "案件シートが分かりません。sheet に住所を渡してください" });
-        const token = await getGoogleTokenForScope(env, SHEETS_SCOPE);
-        const api = async (path: string, init: RequestInit = {}): Promise<Row> => {
-          const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}${path}`, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } });
-          const text = await res.text();
-          if (!res.ok) throw new Error(`Sheets ${res.status}: ${text.slice(0, 300)}`);
-          return text ? JSON.parse(text) : {};
-        };
-        const meta = await api(`?fields=${enc("properties.title,sheets.properties.title")}`);
-        const titles: string[] = (meta.sheets || []).map((x: Row) => x.properties?.title);
-        const q1 = `'${tab.replace(/'/g, "''")}'`;
-        let created = false;
-        let values: string[][] = [];
-        if (!titles.includes(tab)) {
-          if (!dry_run) {
-            await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab } } }] }) });
-            await api(`/values/${enc(`${q1}!A1`)}?valueInputOption=RAW`, { method: "PUT", body: JSON.stringify({ values: [NEW_TAB_HEADER] }) });
-          }
-          created = true;
-          values = [NEW_TAB_HEADER];
-        } else {
-          // 値だけでなく、リンクの付いた文字やチップの住所も読む（同じリンクを 2 度足さないため）
-          const read = async (fields: string) => api(`?ranges=${enc(`${q1}!A1:J3000`)}&fields=${enc(fields)}`);
-          let grid: Row;
-          try { grid = await read("sheets.data.rowData.values(formattedValue,hyperlink,chipRuns)"); }
-          catch { grid = await read("sheets.data.rowData.values(formattedValue,hyperlink)"); }
-          const rowData: Row[] = grid.sheets?.[0]?.data?.[0]?.rowData || [];
-          values = rowData.map((r) => (r.values || []).map((v: Row) => {
-            const chips = (v.chipRuns || []).map((cr: Row) => cr.chip?.richLinkProperties?.uri).filter(Boolean);
-            return [v.formattedValue, v.hyperlink, ...chips].filter(Boolean).join(" ");
-          }));
-        }
-        const plan = planRows(values, items);
-        if (!dry_run && plan.rows.length) {
-          await api(`/values/${enc(`${q1}!A${plan.startRow}`)}?valueInputOption=USER_ENTERED`, { method: "PUT", body: JSON.stringify({ values: plan.rows }) });
-        }
+        const { created, plan } = await addLinks(env, id, tab, items, !!dry_run);
         if (!dry_run && sheet?.trim() && !c.sheet_url) await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { sheet_url: `https://docs.google.com/spreadsheets/d/${id}/edit` });
         return asMcpTextResult({
           ok: true, 案件: c.name, タブ: tab, 作ったタブ: created, 書いた: !dry_run, 足した数: plan.rows.length,
           足した行: plan.rows.length ? `${plan.startRow}〜${plan.startRow + plan.rows.length - 1} 行目` : "なし",
           足さなかったもの: plan.skipped, シート: `https://docs.google.com/spreadsheets/d/${id}/edit`,
         });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+  // ─── 14c. anken__sheet_read（案件シートを読む・2026-10-22） ─────────
+  server.tool(
+    "anken__sheet_read",
+    "案件シート（案件の資料の正本）を読む。タブごとに行（名前・リンク・詳細・ジャンル・行の番号）を返す。tab を渡すとそのタブだけ、query を渡すと名前・詳細・リンクに言葉を含む行だけ。資料を探すときは、記録を探す前にまずここを見る。戻り値: { ok, 案件, シート, タブ: [{ 名前, 行: [{ 行, 名前, リンク, 詳細, ジャンル }] }] }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      tab: z.string().max(60).optional().describe("このタブだけ"),
+      query: z.string().max(60).optional().describe("この言葉を含む行だけ"),
+    },
+    async ({ case: q, tab, query }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const id = sheetIdOf(c.sheet_url);
+        if (!id) return asMcpTextResult({ ok: false, message: "案件シートが登録されていません（案件くんの設定で管理シートの住所を入れる）" });
+        const { tabs } = await readSheet(env, id);
+        const k = (query ?? "").trim().toLowerCase();
+        const out = tabs.filter((t) => !tab || t.title === tab).map((t) => ({
+          名前: t.title,
+          行: t.rows.filter((r) => !k || `${r.name} ${r.detail} ${r.url ?? ""} ${r.group}`.toLowerCase().includes(k))
+            .map((r) => ({ 行: r.row, 名前: r.name, リンク: r.url, 詳細: r.detail, ジャンル: r.group })),
+        })).filter((t) => !k || t.行.length);
+        return asMcpTextResult({ ok: true, 案件: c.name, シート: `https://docs.google.com/spreadsheets/d/${id}/edit`, タブ: out });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
