@@ -53,3 +53,8 @@ test("伏せ字の抜けと \" の取りこぼし（2026-10-22 おかぜり）",
   const q = parseLine("2025.05.03 土曜日\n11:30 岡芹 \"せどり\"のワードは省きました！\n12:16 NAOKI TAKEBAYASHI ありがとう！\n2025.05.05 月曜日\n00:08 岡芹 お疲れ様です！", { self: ["NAOKI TAKEBAYASHI"] });
   assert.equal(q.messages.length, 3);
 });
+
+test("名前の推定で @All を名前に含めない（2026-10-22 おかぜりのグループ）", () => {
+  const r = parseLine("2026.10.01 木曜日\n10:00 Ruriko Koizumi @All 明日の件です\n10:05 Ruriko Koizumi よろしくお願いします\n10:06 Ruriko Koizumi @All 資料を送ります\n10:07 Ruriko Koizumi @All 締切は金曜です\n10:08 Ruriko Koizumi @All 確認お願いします", { self: ["NAOKI TAKEBAYASHI"] });
+  assert.ok(r.messages.every((m: any) => m.who === "Ruriko Koizumi"));
+});

@@ -44,6 +44,7 @@ function guessNames(lines, self = []) {
     if (!m || m[4].includes("\t")) continue;
     const toks = m[4].split(/ +/);
     for (let i = 1; i <= Math.min(4, toks.length - 1); i++) {
+      if (toks[i - 1].startsWith("@")) break; // 「@All」などの宛先は名前に入れない（2026-10-22 おかぜりのグループ）
       const k = toks.slice(0, i).join(" ");
       cnt.set(k, (cnt.get(k) || 0) + 1);
     }
