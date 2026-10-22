@@ -542,6 +542,7 @@
  * v1.30.0（2026-10-22 開発部・案件チャットの作業台）：anken__log_work を追加（案件ごとの Claude のチャットが作業の終わりに「対応記録」を書く。時系列の記録「対応記録」の発言として入り、検索・日ごとの流れ・AI の読み取りに乗る。表は増やさない）。anken__get_home に「直近の対応記録」。日ごとの読み取りの決まりに「対応記録は自分の作業＝report」を足した。設定の追加 0 個。
  * v1.31.0（2026-10-22 開発部・GPT の入口）：案件くんだけの入口 /anken/mcp を足した（ChatGPT のプロジェクトをつなぐため）。出す道具は anken__list_cases・get_home・search・links・add_candidates・log_work・name_links の 7 本だけ。認証は /mcp と同じ。設定の追加 0 個。
  * v1.32.0（2026-10-22 開発部・定期と並び）：taskmaster__add_task・update_task に繰り返し（repeat）を足し、繰り返しタスクを済みにしたら TaskMaster の画面と同じく次の回を作る。案件くんのホームの返事を「単発（Naoki が並べた順）」と「定期（次の日の順）」に分け、数の「やる」から定期を外した。anken__add_period・anken__remove_period（予定を 1 件ずつ）を追加し、GPT の入口にも出した。議事録の読み取りで今日より先の日付を見出しにしない。「最後のやりとり」は今日より先の日を数えない。設定の追加 0 個。
+ * v1.35.0（2026-10-22 開発部・案件シートを画面へ）：案件くんの画面から案件シートを読む・足す受け口 /anken/sheet（案件くんの住所だけ・Firebase のログインで Naoki 本人だけ）。道具 anken__sheet_read を追加（タブごとの行・言葉で絞れる）。anken__sheet_read と anken__sheet_add_links を GPT の入口にも出した。シートを読む・足す部分は src/anken-sheet-io.ts にまとめた。設定の追加 0 個。
  * v1.34.0（2026-10-22 開発部・案件シート）：anken__sheet_add_links を追加（案件シートのタブにリンクを行として足す。列は見出しで見分け、無いタブは作る。同じリンクは足さない。src/anken-sheet.ts）。書き込みは既にあるシート用の署名（スプレッドシートの範囲）を使い、相手のシートにその署名の宛先を編集者として共有しておく。設定の追加 0 個。
  * v1.33.0（2026-10-22 開発部・根拠の言葉）：anken__ai_update_case の根拠の言葉を、議事録の先頭の行や最初に拾った言葉ではなく、やることの名前にいちばん近い行から選ぶ（src/anken-quote.ts）。示された原文（origin_quote・quote）があればこれまでどおりそれを使う。候補箱へ入れる道具と対応記録の道具の説明に「チャットで済ませる作業は候補箱に入れない」を足した（#82）。設定の追加 0 個。
  * v1.14.0（2026-10-13 開発部）：haAku のマスの着手日（startDate）を、結んだ TaskMaster のタスクの startDate へ写す（期限の写し 1.13.0 と同じ 4 つの決まり・記録は os_task_deadline_sync_v1 の starts に別に持つ・1 タスクへの書き込みは期限と合わせて 1 回）。承認の流れの kind milestone に notes（文章）と links（[{title,url}]）を足した。着手日は画面が書き、AI が期限を着手日より前にする変更は断る。get_management_overview のマスに start_date・notes・links。欄の名前は統括の 1 枚（https://www.notion.so/3f79c6c1c43981b6bdffde986b9e0c04）で決めたもの。設定の追加 0 個。
@@ -566,6 +567,7 @@ import { registerInboxReviewTools } from "./tools-inbox-review.js";
 import { registerHaakuTools } from "./tools-haaku.js";
 import { handleHaakuHumanApproval } from "./haaku-human-approval.js";
 import { handleHaakuTaskLinks, TASK_LINKS_PATH } from "./haaku-task-link-http.js";
+import { handleAnkenSheet, ANKEN_SHEET_PATH } from "./anken-sheet-http.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
 import { registerManabuSeminarTools, putSeminar, type PutSeminarArgs } from "./tools-manabu-seminar.js";
@@ -792,6 +794,7 @@ function isAuthorized(request: Request, env: Env): boolean {
 const ANKEN_GPT_TOOLS = new Set([
   "anken__list_cases", "anken__get_home", "anken__search", "anken__links",
   "anken__add_candidates", "anken__log_work", "anken__name_links", "anken__add_period", "anken__remove_period",
+  "anken__sheet_read", "anken__sheet_add_links",
 ]);
 function createAnkenMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "anken-mcp", version: APP_VERSION });
@@ -841,6 +844,10 @@ export default {
     // v1.17.0：TaskMaster の画面からマイルストーンに結ぶ受け口（Firebase のログインで守る・TaskMaster の住所だけ）
     if (url.pathname === TASK_LINKS_PATH) {
       return handleHaakuTaskLinks(request, env);
+    }
+    // v1.35.0：案件くんの画面から案件シートを読む・足す受け口（Firebase のログインで守る・案件くんの住所だけ）
+    if (url.pathname === ANKEN_SHEET_PATH) {
+      return handleAnkenSheet(request, env);
     }
 
     if (request.method === "OPTIONS") {

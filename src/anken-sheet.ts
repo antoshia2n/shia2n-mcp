@@ -72,3 +72,69 @@ export function planRows(values: Cells, items: LinkItem[]): { startRow: number; 
   }
   return { startRow: Math.max(lastFilledRow(values), cols.headerRow) + 1, width, rows, skipped };
 }
+
+/* ───────── 読む側（案件くんの「資料」とプロジェクトのページに出す・2026-10-22） ───────── */
+
+/** セル 1 つ：見えている文字と、付いているリンク（文字の中の URL・セルのリンク・チップの住所） */
+export interface Cell { text: string; links: string[] }
+export interface SheetRow { row: number; name: string; url: string | null; detail: string; group: string }
+export interface SheetTab { title: string; rows: SheetRow[] }
+
+const isUrl = (s: string) => /^https?:\/\//.test(s.trim());
+const firstUrl = (c: Cell | undefined): string | null => {
+  if (!c) return null;
+  const m = c.text.match(/https?:\/\/[^\s"']+/);
+  return c.links.find(Boolean) || (m ? m[0] : null);
+};
+const hostOf = (u: string) => u.replace(/^https?:\/\/(www\.)?/, "").split(/[/?#]/)[0];
+
+/** 1 つのタブを行の並びにする。見出しは findColumns と同じ見分け。ジャンルだけの行は区切りとして下の行へ引き継ぐ */
+export function readTab(title: string, cells: Cell[][]): SheetTab {
+  const cols = findColumns(cells.map((r) => r.map((c) => c?.text ?? "")));
+  const rows: SheetRow[] = [];
+  let carry = "";
+  for (let r = cols.headerRow; r < cells.length; r++) {
+    const line = cells[r] ?? [];
+    const t = (i: number | null) => (i === null ? "" : (line[i]?.text ?? "").trim());
+    const linkCell = line[cols.link];
+    const url = firstUrl(linkCell);
+    const linkText = t(cols.link);
+    let name = t(cols.name);
+    let detail = t(cols.detail);
+    const group = t(cols.group) || carry;
+    if (cols.name === null) {
+      // 見出しの無いタブ：B は「名前｜詳細」か説明。リンクの欄が URL の文字なら B の先頭を名前にする
+      if (linkText && !isUrl(linkText)) name = linkText;
+      else { const [head, ...rest] = detail.split("｜"); name = head; detail = rest.join("｜"); }
+    }
+    if (!name && linkText && !isUrl(linkText)) name = linkText;
+    if (!name && !url && !detail) {
+      if (cols.group !== null && t(cols.group)) carry = t(cols.group);
+      continue;
+    }
+    rows.push({ row: r + 1, name: name || (url ? hostOf(url) : "（名前なし）"), url, detail, group });
+  }
+  return { title, rows };
+}
+
+/* ───────── 画面から足すときの中身の確かめ（受け口 /anken/sheet の POST） ───────── */
+
+/** POST の中身を確かめる。case_id・tab・items の 3 つだけ */
+export function parseAddBody(raw: string): { caseId: string; tab: string; items: { name: string; url: string; detail?: string }[] } {
+  if (raw.length > 20000) throw new Error("body_too_large");
+  let d: any;
+  try { d = JSON.parse(raw); } catch { throw new Error("invalid_json"); }
+  if (!d || typeof d !== "object" || Array.isArray(d)) throw new Error("invalid_body");
+  if (Object.keys(d).sort().join(",") !== "case_id,items,tab") throw new Error("invalid_body");
+  if (typeof d.case_id !== "string" || !/^[\w-]{8,64}$/.test(d.case_id)) throw new Error("invalid_case_id");
+  if (typeof d.tab !== "string" || !d.tab.trim() || d.tab.length > 60) throw new Error("invalid_tab");
+  if (!Array.isArray(d.items) || !d.items.length || d.items.length > 20) throw new Error("invalid_items");
+  const items = d.items.map((it: any) => {
+    if (!it || typeof it.name !== "string" || !it.name.trim() || it.name.length > 200) throw new Error("invalid_item_name");
+    if (typeof it.url !== "string" || !/^https?:\/\/\S+$/.test(it.url) || it.url.length > 1000) throw new Error("invalid_item_url");
+    if (it.detail != null && (typeof it.detail !== "string" || it.detail.length > 300)) throw new Error("invalid_item_detail");
+    return { name: it.name.trim(), url: it.url.trim(), ...(it.detail ? { detail: it.detail } : {}) };
+  });
+  return { caseId: d.case_id, tab: d.tab.trim(), items };
+}
+
