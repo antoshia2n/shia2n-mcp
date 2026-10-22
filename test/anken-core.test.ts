@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseLine, parseMinutes, maskSecrets, withHashes } from "../src/anken-core.ts";
+import { parseLine, parseMinutes, maskSecrets, maskMessages, withHashes } from "../src/anken-core.ts";
 
 // 案件くん（anken リポジトリ src/core/parse.js）と同じ中身であることの試し
 test("LINE の履歴：名前に空白・改行・同じ時刻の画像", async () => {
@@ -35,4 +35,21 @@ test("名前だけの行・ラベルの無いメールアドレスと電話番�
   assert.equal(a.count, 2);
   assert.ok(!/joey|1234-5678/.test(a.text));
   assert.equal(maskSecrets("ミーティングID: 929 784 4714\nhttps://www.youtube.com/@channel-x").count, 0);
+});
+
+test("伏せ字の抜けと \" の取りこぼし（2026-10-22 おかぜり）", () => {
+  const a = maskSecrets("Xアカウント  \nID  \nuser01@example.com  \npass abcdefgh");
+  assert.ok(!/user01|abcdefgh/.test(a.text));
+  const c = maskSecrets("pk_live_abcdefghij1234567890\nrk_live_ZYXWVUTSRQ0987654321");
+  assert.equal(c.count, 2);
+  assert.equal(maskSecrets("ID\nありがとうございます").count, 0);
+  const s = maskMessages([
+    { day: "2026-01-01", time: "17:20", who: "A", body: "ログインIDはこれです\nuser@example.com" },
+    { day: "2026-01-01", time: "17:29", who: "B", body: "abcd1234!!" },
+    { day: "2026-01-01", time: "18:00", who: "A", body: "差し込みは\n%sei_mei%\nで入ります（メールアドレスの欄）" },
+  ]);
+  assert.equal(s.messages[1].body, "＊＊＊（伏せた）");
+  assert.ok(s.messages[2].body.includes("%sei_mei%"));
+  const q = parseLine("2025.05.03 土曜日\n11:30 岡芹 \"せどり\"のワードは省きました！\n12:16 NAOKI TAKEBAYASHI ありがとう！\n2025.05.05 月曜日\n00:08 岡芹 お疲れ様です！", { self: ["NAOKI TAKEBAYASHI"] });
+  assert.equal(q.messages.length, 3);
 });
