@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { KINDS, LAYERS, METRICS, type Row, inMonth, layerName, layersOf, mergeMetrics, pickWeek } from "./xbunseki-core.js";
+import { KINDS, LAYERS, METRICS, type Row, actsSummary, goalsFor, inMonth, layerName, layersOf, mergeMetrics, pickWeek, weekDays } from "./xbunseki-core.js";
 
 /**
  * X分析くん（x-koryaku.shia2n.jp・Naoki の X の定点観測）の道具。
@@ -46,7 +46,7 @@ async function ownerOf(env: Env): Promise<string> {
 async function loadBase(env: Env) {
   const uid = await ownerOf(env); const own = `user_id=eq.${encodeURIComponent(uid)}`;
   const [weeks, accounts] = await Promise.all([
-    sbGet(env, `/xa_weeks?select=id,month,label,sort,policy,timeline,overall,metrics,updated_at&${own}&order=sort.desc`),
+    sbGet(env, `/xa_weeks?select=*&${own}&order=sort.desc`),
     sbGet(env, `/xa_accounts?select=*&${own}&order=sort.asc`),
   ]);
   return { uid, own, weeks, accounts };
@@ -76,7 +76,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 2. xbunseki__get_week ───────────────────────────────────────
   server.tool(
     "xbunseki__get_week",
-    "X分析くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・相手ごとの評価と 5 つの層（アカウントの目的・意図／運用のスタイル／運用の内容／投稿のスタイル／投稿の内容）と分析結果・生かすなら・この回に足した仮説。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
+    "X分析くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（X分析くんパネルで押した他人の引用・セルフ引用・リプの数と 1 日の目標・達成・日ごと・相手ごと）・相手ごとの評価と 5 つの層（アカウントの目的・意図／運用のスタイル／運用の内容／投稿のスタイル／投稿の内容）と分析結果・生かすなら・この回に足した仮説。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
     { week: z.string().max(40).optional().describe("「10月4週」「今週」など。省略でいちばん新しい回") },
     async ({ week }) => {
       try {
@@ -87,10 +87,17 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
           sbGet(env, `/xa_obs?select=*&${own}&week_id=eq.${w.id}`),
           sbGet(env, `/xa_items?select=*&${own}&week_id=eq.${w.id}&order=sort.asc`),
         ]);
+        const days = weekDays(w.month, w.label);
+        let 行動: Row | null = null;
+        try {
+          const acts = days.length ? await sbGet(env, `/xa_acts?select=day,kind,account,n&${own}&day=gte.${days[0]}&day=lte.${days[days.length - 1]}`) : [];
+          const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+          行動 = actsSummary(acts, days, goalsFor(weeks, w), today, h => accounts.find(x => x.handle.toLowerCase() === h.toLowerCase())?.name || `@${h}`);
+        } catch (_) { 行動 = null; } // 表がまだ無いときは行動だけ出さない
         const order = new Map(accounts.map((a, i) => [a.handle, a.is_self ? -1 : i]));
         obs.sort((a, b) => (order.get(a.account) ?? 999) - (order.get(b.account) ?? 999));
         return asMcpTextResult({
-          ok: true, id: w.id, 週: w.label, 月: w.month, 方針: w.policy || "", タイムラインの気づき: w.timeline || "", 全体の仮説: w.overall || "", 自分の数字: metricsOut(w.metrics),
+          ok: true, id: w.id, 週: w.label, 月: w.month, 方針: w.policy || "", タイムラインの気づき: w.timeline || "", 全体の仮説: w.overall || "", 自分の数字: metricsOut(w.metrics), 行動,
           相手: obs.map(o => { const a = accounts.find(x => x.handle === o.account); return { 名前: accName(accounts, o.account), "@": o.account, 自分: !!a?.is_self, ラベル: a?.labels || [], 評価: o.score, 層: layersOf(o.ly), ...(o.memo ? { 層に分ける前のメモ: o.memo } : {}), 分析結果: o.ana || "", 生かすなら: o.use_text || "" }; }),
           この回に足した仮説: items.map(itemOut),
           住所: APP_URL,
