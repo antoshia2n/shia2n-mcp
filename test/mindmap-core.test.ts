@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addItems, bodyOf, findRequests, markChecks, parseBullets, toOutline, type MNodes } from "../src/mindmap-core.ts";
+import { addItems, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, sameName, titleOf, toOutline, type MNodes } from "../src/mindmap-core.ts";
 
 const base = (): MNodes => ({
   r: { id: "r", text: "26年の戦略", children: ["a", "b"], parent: null, collapsed: false, color: null, side: null },
@@ -53,4 +53,32 @@ test("チェックを済みにする・見つからない枝は分けて返す",
   assert.deepEqual(r.変えた, ["a1", "b"]); assert.deepEqual(r.見つからない, ["nope"]);
   assert.equal(n.a1.check, "done");
   assert.deepEqual(markChecks(n, ["a1"], true).変えた, []);
+});
+
+test("新しいマップの木：白紙は中心 1 つだけ・名前が中心の文字", () => {
+  const t = newMapTree("26年10月27日｜オンラインビジネス攻略");
+  assert.deepEqual(Object.keys(t.nodes), [t.root]);
+  assert.deepEqual(t.nodes[t.root], { id: t.root, text: "26年10月27日｜オンラインビジネス攻略", children: [], parent: null, collapsed: false, color: null, side: null });
+  assert.equal(titleOf(t.root, t.nodes), "26年10月27日｜オンラインビジネス攻略");
+  assert.equal(countNodes(t.nodes), 0);
+  assert.deepEqual(t.made, []);
+});
+
+test("新しいマップの木：最初の枝は中心の子・全部に by ai・色と左右を回す", () => {
+  const t = newMapTree("題", parseBullets("- 導入\n  - つかみ\n- 本題\n- まとめ"));
+  assert.equal(t.made.length, 4);
+  assert.equal(countNodes(t.nodes), 4);
+  const top = t.nodes[t.root].children.map((id) => t.nodes[id]);
+  assert.deepEqual(top.map((n) => n.text), ["導入", "本題", "まとめ"]);
+  assert.deepEqual(top.map((n) => [n.color, n.side]), [["b1", "r"], ["b2", "l"], ["b3", "r"]]);
+  assert.ok(t.made.every((id) => t.nodes[id].by === "ai"));
+  assert.equal(t.nodes[t.root].by, undefined);
+  assert.match(toOutline(t.root, t.nodes), /^# 題 \{n[a-z0-9]+\}\n- 導入 \(AI\)/);
+});
+
+test("名前：改行は空白に・同じ名前は空白の違いを見ない", () => {
+  assert.equal(cleanName("  題\n  続き "), "題 続き");
+  assert.ok(sameName("26年11月3日｜リサーチ", " 26年11月3日｜リサーチ "));
+  assert.ok(sameName("a  b", "a b"));
+  assert.ok(!sameName("26年11月3日｜リサーチ", "26年11月10日｜リサーチ"));
 });

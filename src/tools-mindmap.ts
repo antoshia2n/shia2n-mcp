@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import {
-  type MNodes, ID_RE, addItems, bodyOf, countNodes, findRequests, markChecks, parseBullets, pathOf, titleOf, toOutline,
+  type MNodes, ID_RE, addItems, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, pathOf, sameName, titleOf, toOutline,
 } from "./mindmap-core.js";
 
 /**
@@ -19,6 +19,12 @@ import {
  *   ・最後の保存から 3 分たっていないマップには書かない（画面で書いている最中だと、ぶつかって「写し」ができるため）。
  *     force: true のときだけ書く
  *   ・読むのは Naoki の行だけ（user_id で絞る。画面に入れるのも Naoki の 1 人だけ）
+ *
+ * 2026-10-24 mindmap__create_map を足した（開発部・統括の依頼・Naoki「OK」19:56）。
+ *   ・画面の「新しいマップを作る」（antoshia2n/mindmap の src/engine.js の newMap → src/lib/api.js の createMap）と
+ *     同じ欄を同じ値で mm_maps に 1 行足す。拡張機能のパネル（src/panel.js）と同じく、フォルダの中の表（mm_settings の trows）には入れない
+ *   ・同じフォルダに同じ名前のマップ（テンプレは除く）があれば作らず、そのマップを返す（呼び直しで 2 枚できないため）
+ *   ・フォルダの名前は mm_settings から読む。読めないときは作らずに断る（標準の名前で別のフォルダへ入れないため）
  */
 
 type Row = Record<string, any>;
@@ -44,6 +50,13 @@ async function sbGet(env: Env, path: string): Promise<Row[]> {
   if (!res.ok) throw new Error(`Supabase error ${res.status}: ${await res.text()}`);
   return (await res.json()) as Row[];
 }
+async function sbPost(env: Env, path: string, body: Row): Promise<Row[]> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1${path}`, {
+    method: "POST", headers: sbHeaders(env, { Prefer: "return=representation" }), body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Supabase error ${res.status}: ${await res.text()}`);
+  return (await res.json()) as Row[];
+}
 async function sbPatch(env: Env, path: string, body: Row): Promise<Row[]> {
   const res = await fetch(`${env.SUPABASE_URL}/rest/v1${path}`, {
     method: "PATCH", headers: sbHeaders(env, { Prefer: "return=representation" }), body: JSON.stringify(body),
@@ -59,15 +72,21 @@ const jst = (iso: string) => {
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 };
 
-async function folderNames(env: Env): Promise<Map<string, string>> {
+/** フォルダの id → 名前。strict なら設定が読めないときに止める（作るときに別のフォルダへ入れないため） */
+async function folderNames(env: Env, strict = false): Promise<Map<string, string>> {
   const m = new Map<string, string>(Object.entries(KINDS));
   try {
     const rows = await sbGet(env, `/${SETTINGS_TABLE}?select=data&${own}&limit=1`);
     const fs = rows[0]?.data?.folders;
     if (Array.isArray(fs)) { m.clear(); for (const f of fs) if (f && f.id) m.set(String(f.id), String(f.name || "無題のフォルダ")); }
-  } catch { /* 設定が読めないときは標準の名前で返す */ }
+  } catch (e) { if (strict) throw e; /* 一覧を見るだけのときは標準の名前で返す */ }
   return m;
 }
+/** フォルダの名前か id を、フォルダの id にする（「未分類」は none）。見つからなければ null */
+const resolveFolder = (names: Map<string, string>, folder: string) => {
+  const f = folder.trim();
+  return f === "未分類" || f === "none" ? "none" : ([...names.entries()].find(([id, n]) => id === f || n === f)?.[0] ?? null);
+};
 const folderIdOf = (r: Row) => { const v = r.folder_id != null && r.folder_id !== "" ? r.folder_id : r.kind; return !v || v === "none" ? "none" : String(v); };
 
 async function getFull(env: Env, id: string): Promise<Row | null> {
@@ -119,7 +138,7 @@ export function registerMindmapTools(server: McpServer, env: Env): void {
         let list = rows.filter((r) => include_templates || !r.is_template);
         if (folder) {
           const f = folder.trim();
-          const want = f === "未分類" ? "none" : ([...names.entries()].find(([id, n]) => id === f || n === f)?.[0] ?? null);
+          const want = resolveFolder(names, f);
           if (!want) return asMcpTextResult({ ok: false, message: `フォルダ「${f}」が見つかりません`, フォルダ: [...names.values()] });
           list = list.filter((r) => (names.has(folderIdOf(r)) ? folderIdOf(r) : "none") === want);
         }
@@ -236,6 +255,57 @@ export function registerMindmapTools(server: McpServer, env: Env): void {
         const w = await writeNodes(env, r, nodes);
         if (!w.ok) return asMcpTextResult({ ok: false, message: w.message });
         return asMcpTextResult({ ok: true, 変えた: res.変えた.map((id) => ({ id, 枝: nodes[id].text })), 見つからない: res.見つからない, 版: w.rev });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 6. mindmap__create_map ──────────────────────────────────────
+  server.tool(
+    "mindmap__create_map",
+    "思考整理くんに新しいマップを 1 枚作る（画面の「新しいマップを作る」と同じ形）。name が中心の枝の文字＝マップの名前（例: 26年10月27日｜オンラインビジネス攻略）。folder はフォルダの名前か id（「未分類」も可）。branches を渡すと中心の子として足す（mindmap__add_branches と同じ書き方・足した枝にはすべて「AI」の印）。フォルダの中の表には入れない（画面ではそのフォルダの「表に入っていないマップ」に出る）。同じフォルダに同じ名前のマップがあれば作らず、そのマップを返す。戻り値: 成功 { ok: true, id, 名前, フォルダ, 住所, 足した枝の数 }／作らなかった・失敗 { ok: false, message, 既にある（同じ名前があったとき）, フォルダ（フォルダが見つからないとき） }。",
+    {
+      name: z.string().min(1).max(200).describe("マップの名前（中心の枝の文字）"),
+      folder: z.string().min(1).max(80).describe("フォルダの名前か id（例: アウトプット）。「未分類」も可"),
+      branches: z.string().max(20000).optional().describe("最初の枝の箇条書き（省略可・例: \"- 導入\\n  - つかみ\\n- 本題\"）"),
+    },
+    async ({ name, folder, branches }) => {
+      try {
+        const title = cleanName(name);
+        if (!title) return asMcpTextResult({ ok: false, message: "名前が空です" });
+        let names: Map<string, string>;
+        try { names = await folderNames(env, true); }
+        catch (e) { return asMcpTextResult({ ok: false, message: `フォルダの設定を読めなかったため、作っていません：${String(e)}` }); }
+        const want = resolveFolder(names, folder);
+        if (!want) return asMcpTextResult({ ok: false, message: `フォルダ「${folder.trim()}」が見つからないため、作っていません`, フォルダ: [...names.values()] });
+        const folderName = want === "none" ? "未分類" : names.get(want)!;
+
+        const rows = await sbGet(env, `/${MAP_TABLE}?select=id,title,kind,folder_id,is_template&${own}`);
+        const dup = rows.find((r) => !r.is_template && (names.has(folderIdOf(r)) ? folderIdOf(r) : "none") === want && sameName(r.title || "", title));
+        if (dup) {
+          return asMcpTextResult({
+            ok: false, message: `フォルダ「${folderName}」に同じ名前のマップがあるため、作っていません`,
+            既にある: { id: dup.id, 名前: dup.title, フォルダ: folderName, 住所: `${APP_URL}/m/${dup.id}` },
+          });
+        }
+
+        const items = branches && branches.trim() ? parseBullets(branches) : [];
+        if (branches && branches.trim() && !items.length) return asMcpTextResult({ ok: false, message: "最初の枝が読めませんでした（1 行 1 枝の箇条書きで）。作っていません" });
+        if (countAll(items) > 300) return asMcpTextResult({ ok: false, message: "一度に足せる枝は 300 本までです。作っていません" });
+
+        const { root, nodes, made } = newMapTree(title, items);
+        // 画面の api.js の createMap と同じ欄・同じ値（user_id は画面では入口が押す。ここでは Naoki の印を自分で押す）
+        const row = {
+          user_id: OWNER_UID, title: titleOf(root, nodes), tags: [], kind: "memo", folder_id: want, is_template: false, pinned: false,
+          root, nodes, node_count: countNodes(nodes), body_text: bodyOf(nodes), rev: 1,
+        };
+        const out = await sbPost(env, `/${MAP_TABLE}?select=id,title,folder_id`, row);
+        const m = out[0];
+        if (!m?.id) return asMcpTextResult({ ok: false, message: "作ったはずの行が返ってきませんでした。mindmap__list_maps で名前を探して確かめてください" });
+        return asMcpTextResult({
+          ok: true, id: m.id, 名前: m.title, フォルダ: folderName, 住所: `${APP_URL}/m/${m.id}`,
+          足した枝の数: made.length,
+          備考: "フォルダの中の「表に入っていないマップ」に出ます。開いたままの画面には、読み直すと出ます",
+        });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
