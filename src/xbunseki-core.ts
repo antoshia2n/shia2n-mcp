@@ -8,7 +8,8 @@
  *   xa_obs      … 1 回 × 1 人（week_id・account・score・ly・memo・ana・use_text）
  *   xa_items    … 戦略と計画の 1 項目（layer・kind・body・src・links・from_month・until_month・archived）
  *   xa_acts     … 行動の記録（2026-10-24・作業 33）。1 日 × 種類（quote・self・reply）× 相手で、押した数 n
- *   xa_weeks.act_goals … その回の 1 日の目標。空の回は前の回の目標を使う
+ *   xa_weeks.act_goals … その回の行動の項目と 1 日の目標 { items: [{ k, l, goal, hy }] }。空の回は前の回のものを使う。前の形 { quote, self, reply } も読む
+ *   xa_items.memo       … 戦略と仮説のメモ（作業 34）
  *
  * 決まり：分析は Naoki が手で書く。Claude は読む・呼び出す・数字を写すだけ（画面の「AI の使い方」と同じ）
  */
@@ -79,23 +80,33 @@ export function weekDays(month: string, label: string): string[] {
   return out;
 }
 
-/** その回の目標：その回に無ければ前の回（sort が小さい方）から引き継ぐ。画面の goalsOf と同じ */
-export function goalsFor(weeks: Row[], w: Row): Row {
-  const list = [...weeks].filter(x => (x.sort ?? 0) <= (w.sort ?? 0)).sort((a, b) => (b.sort ?? 0) - (a.sort ?? 0));
-  for (const x of list) { const g = x.act_goals; if (g && typeof g === "object" && Object.keys(g).length) return g; }
-  return {};
+/** act_goals を項目の並びにする。前の形（種類ごとの目標だけ）も読む。どちらでもなければ null */
+export function normItems(g: Row | null | undefined): Row[] | null {
+  if (g && Array.isArray(g.items)) return g.items.filter((x: Row) => x && x.k).map((x: Row) => ({ k: String(x.k), l: String(x.l || ""), goal: Number(x.goal) || 0, hy: x.hy || "" }));
+  if (g && typeof g === "object" && Object.keys(g).length) return Object.entries(ACT_KINDS).map(([k, l]) => ({ k, l, goal: Number(g[k]) || 0, hy: "" }));
+  return null;
 }
 
-/** 1 回分の行動のまとめ：種類ごとの目標・合計・達成（目標 × 過ぎた日数）・日ごと・相手ごと */
-export function actsSummary(rows: Row[], days: string[], goals: Row, today: string, name: (h: string) => string) {
+/** その回の項目：その回に無ければ前の回（sort が小さい方）から引き継ぐ。どこにも無ければ最初の 3 つ。画面の itemsOf と同じ */
+export function itemsFor(weeks: Row[], w: Row): Row[] {
+  const list = [...weeks].filter(x => (x.sort ?? 0) <= (w.sort ?? 0)).sort((a, b) => (b.sort ?? 0) - (a.sort ?? 0));
+  for (const x of list) { const it = normItems(x.act_goals); if (it) return it; }
+  return Object.entries(ACT_KINDS).map(([k, l]) => ({ k, l, goal: 0, hy: "" }));
+}
+
+/** 1 回分の行動のまとめ：項目ごとの目標・合計・達成（目標 × 過ぎた日数）・日ごと・確かめる仮説・相手ごと。項目に無い記録は名前の代わりに印のまま出す */
+export function actsSummary(rows: Row[], days: string[], items: Row[], today: string, name: (h: string) => string, hyText: (id: string) => string = () => "") {
   const inWeek = rows.filter(r => days.includes(String(r.day)));
   const elapsed = days.filter(d => d <= today).length;
-  const 種類 = Object.entries(ACT_KINDS).map(([k, l]) => {
-    const mine = inWeek.filter(r => r.kind === k), sum = mine.reduce((s, r) => s + (r.n || 0), 0), goal = Number(goals[k]) || 0;
-    return { 種類: l, "1日の目標": goal || null, この回: sum, 達成: goal && elapsed ? `${Math.round(sum / (goal * elapsed) * 100)}%` : null,
+  const label = (k: string) => items.find(x => x.k === k)?.l || ACT_KINDS[k] || k;
+  const keys = [...items.map(x => x.k), ...[...new Set(inWeek.map(r => String(r.kind)))].filter(k => !items.some(x => x.k === k))];
+  const 項目 = keys.map(k => {
+    const it = items.find(x => x.k === k), mine = inWeek.filter(r => r.kind === k), sum = mine.reduce((s, r) => s + (r.n || 0), 0), goal = Number(it?.goal) || 0;
+    return { 項目: label(k), "1日の目標": goal || null, この回: sum, 達成: goal && elapsed ? `${Math.round(sum / (goal * elapsed) * 100)}%` : null,
+      ...(it?.hy && hyText(it.hy) ? { 確かめる仮説: hyText(it.hy) } : {}), ...(it ? {} : { この回の項目にない: true }),
       日ごと: Object.fromEntries(days.filter(d => d <= today).map(d => [d, mine.filter(r => r.day === d).reduce((s, r) => s + (r.n || 0), 0)])) };
   });
   const by = new Map<string, Row>();
-  for (const r of inWeek) { if (!r.n) continue; const key = String(r.account || "").toLowerCase(); const p = by.get(key) || { 相手: r.account ? name(r.account) : "相手なし", ...(r.account ? { "@": r.account } : {}) }; const l = ACT_KINDS[r.kind] || r.kind; p[l] = (p[l] || 0) + r.n; by.set(key, p); }
-  return { 種類, 相手ごと: [...by.values()] };
+  for (const r of inWeek) { if (!r.n) continue; const key = String(r.account || "").toLowerCase(); const p = by.get(key) || { 相手: r.account ? name(r.account) : "相手なし", ...(r.account ? { "@": r.account } : {}) }; const l = label(String(r.kind)); p[l] = (p[l] || 0) + r.n; by.set(key, p); }
+  return { 項目, 相手ごと: [...by.values()] };
 }

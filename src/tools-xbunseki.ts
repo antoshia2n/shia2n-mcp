@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { KINDS, LAYERS, METRICS, type Row, actsSummary, goalsFor, inMonth, layerName, layersOf, mergeMetrics, pickWeek, weekDays } from "./xbunseki-core.js";
+import { KINDS, LAYERS, METRICS, type Row, actsSummary, inMonth, itemsFor, layerName, layersOf, mergeMetrics, pickWeek, weekDays } from "./xbunseki-core.js";
 
 /**
  * X分析くん（x-koryaku.shia2n.jp・Naoki の X の定点観測）の道具。
@@ -53,7 +53,7 @@ async function loadBase(env: Env) {
 }
 const accName = (accounts: Row[], h: string) => accounts.find(a => a.handle === h)?.name || h;
 const metricsOut = (m: Row | null | undefined) => Object.fromEntries(Object.entries(METRICS).filter(([k]) => m && m[k] != null).map(([k, l]) => [l, m![k]]));
-const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
+const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
 
 export function registerXbunsekiTools(server: McpServer, env: Env): void {
 
@@ -76,7 +76,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 2. xbunseki__get_week ───────────────────────────────────────
   server.tool(
     "xbunseki__get_week",
-    "X分析くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（X分析くんパネルで押した他人の引用・セルフ引用・リプの数と 1 日の目標・達成・日ごと・相手ごと）・相手ごとの評価と 5 つの層（アカウントの目的・意図／運用のスタイル／運用の内容／投稿のスタイル／投稿の内容）と分析結果・生かすなら・この回に足した仮説。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
+    "X分析くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（X分析くんパネルで押した数を、その回の行動の項目ごとに。1 日の目標・達成・日ごと・確かめる仮説・相手ごと）・相手ごとの評価と 5 つの層（アカウントの目的・意図／運用のスタイル／運用の内容／投稿のスタイル／投稿の内容）と分析結果・生かすなら・この回に足した仮説。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
     { week: z.string().max(40).optional().describe("「10月4週」「今週」など。省略でいちばん新しい回") },
     async ({ week }) => {
       try {
@@ -92,7 +92,9 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
         try {
           const acts = days.length ? await sbGet(env, `/xa_acts?select=day,kind,account,n&${own}&day=gte.${days[0]}&day=lte.${days[days.length - 1]}`) : [];
           const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
-          行動 = actsSummary(acts, days, goalsFor(weeks, w), today, h => accounts.find(x => x.handle.toLowerCase() === h.toLowerCase())?.name || `@${h}`);
+          const its = itemsFor(weeks, w), hyIds = its.map(x => x.hy).filter(Boolean);
+          const hyRows = hyIds.length ? await sbGet(env, `/xa_items?select=id,body&${own}&id=in.(${hyIds.map(encodeURIComponent).join(",")})`) : [];
+          行動 = actsSummary(acts, days, its, today, h => accounts.find(x => x.handle.toLowerCase() === h.toLowerCase())?.name || `@${h}`, id => hyRows.find(x => x.id === id)?.body || "");
         } catch (_) { 行動 = null; } // 表がまだ無いときは行動だけ出さない
         const order = new Map(accounts.map((a, i) => [a.handle, a.is_self ? -1 : i]));
         obs.sort((a, b) => (order.get(a.account) ?? 999) - (order.get(b.account) ?? 999));
