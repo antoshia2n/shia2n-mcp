@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { currentWeekLabel, inMonth, layersOf, mergeMetrics, pickWeek } from "../src/xbunseki-core.ts";
+import { actsSummary, currentWeekLabel, goalsFor, inMonth, layersOf, mergeMetrics, pickWeek, weekDays } from "../src/xbunseki-core.ts";
 
 const weeks = [
   { id: "a", month: "2026-09", label: "9月3週", sort: 2026093 },
@@ -33,4 +33,18 @@ test("層は空を除いて名前で出す・打ち手の月", () => {
   assert.deepEqual(layersOf({ goal: "メンシプへ", ocont: " ", pcont: "仕事" }), { "アカウントの目的・意図": "メンシプへ", "投稿の内容": "仕事" });
   assert.equal(inMonth({ from_month: "2026-09", until_month: null }, "2026-10"), true);
   assert.equal(inMonth({ from_month: "2026-09", until_month: "2026-09" }, "2026-10"), false);
+});
+
+test("行動：週の日・目標の引き継ぎ・まとめ", () => {
+  assert.deepEqual(weekDays("2026-10", "10月4週"), ["2026-10-22", "2026-10-23", "2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28"]);
+  assert.deepEqual(weekDays("2026-10", "10月5週"), ["2026-10-29", "2026-10-30", "2026-10-31"]);
+  const ws = [{ sort: 1, act_goals: { quote: 10 } }, { sort: 2, act_goals: {} }, { sort: 3, act_goals: { reply: 30 } }];
+  assert.deepEqual(goalsFor(ws, ws[1]), { quote: 10 });
+  assert.deepEqual(goalsFor(ws, ws[2]), { reply: 30 });
+  const rows = [{ day: "2026-10-22", kind: "quote", account: "ushi", n: 4 }, { day: "2026-10-23", kind: "quote", account: "", n: 2 }, { day: "2026-10-20", kind: "quote", account: "ushi", n: 9 }];
+  const s = actsSummary(rows, weekDays("2026-10", "10月4週"), { quote: 2 }, "2026-10-23", h => h === "ushi" ? "うし部長" : h);
+  assert.equal(s.種類[0].この回, 6);
+  assert.equal(s.種類[0].達成, "150%");
+  assert.deepEqual(s.種類[0].日ごと, { "2026-10-22": 4, "2026-10-23": 2 });
+  assert.deepEqual(s.相手ごと, [{ 相手: "うし部長", "@": "ushi", 他人の引用: 4 }, { 相手: "相手なし", 他人の引用: 2 }]);
 });
