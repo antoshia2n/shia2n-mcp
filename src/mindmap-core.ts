@@ -122,6 +122,23 @@ export function addItems(root: string, nodes: MNodes, parent: string, items: Ite
   return made;
 }
 
+/**
+ * 新しいマップの木（2026-10-24 mindmap__create_map）。
+ * 中心は画面の newMap の「白紙から」と同じ形（色・左右なし・開いた状態）で、文字だけ名前にする。
+ * items があれば中心の子として addItems で足す（mindmap__add_branches と同じく、すべて by: "ai"）。
+ */
+export function newMapTree(name: string, items: Item[] = []): { root: string; nodes: MNodes; made: string[] } {
+  const root = newId();
+  const nodes: MNodes = { [root]: { id: root, text: name, children: [], parent: null, collapsed: false, color: null, side: null } };
+  const made = items.length ? addItems(root, nodes, root, items) : [];
+  return { root, nodes, made };
+}
+
+/** マップの名前をそろえる（改行は空白 1 つに・前後の空白を落とす） */
+export const cleanName = (s: string) => String(s ?? "").replace(/\s*\r?\n\s*/g, " ").trim();
+/** 同じ名前か（前後の空白と、続いた空白の数の違いは同じとみなす） */
+export const sameName = (a: string, b: string) => cleanName(a).replace(/\s+/g, " ") === cleanName(b).replace(/\s+/g, " ");
+
 /** チェックを済み（または未完了）にする。チェックでない枝はチェックにしてから付ける */
 export function markChecks(nodes: MNodes, ids: string[], done: boolean): { 変えた: string[]; 見つからない: string[] } {
   const changed: string[] = [], missing: string[] = [];
