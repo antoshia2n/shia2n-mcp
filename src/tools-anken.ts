@@ -9,6 +9,7 @@ import { memoOf, keepMemo } from "./anken-memo.js";
 import { getGoogleTokenForScope } from "./google-token.js";
 import { getFirestoreToken, fsGet, fromVal, queryTasks } from "./taskmaster.js";
 import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleIdOf, type Period } from "./anken-plan.js";
+import { calendarMeetings, type CalendarMeeting } from "./anken-calendar.js";
 
 /**
  * 案件くん（anken.shia2n.jp・クライアント案件の LINE・議事録・やることを 1 か所で見る）の道具。
@@ -52,6 +53,11 @@ import { PERIOD_KINDS, mergePeriods, periodId, extractLinks, typeLabel, googleId
  *   ・「対応する順」は Naoki が案件くんで並べた順（TaskMaster のタスクの caseOrder）。並べていない新しいものはその上に自動の順
  *   ・anken__add_period／anken__remove_period：予定を 1 件ずつ足す・消す（案件チャットが入れた予定は AI の出し直しで消えない）
  *   ・「最後のやりとり」は今日より先の日を数えない
+ *
+ * 2026-10-25 v1.42.0 次の MTG を予定表から（週間レポートの口 便 3・Naoki「OK」）：
+ *   ・次の MTG は、haAku につないだ予定表（メイン・UTAGE）の「案件名＋定例」の予定から取る（src/anken-calendar.ts）。
+ *     見つからない案件だけ、今までどおり記録から AI が書いたもの（ak_cases.mtg.when）
+ *   ・get_home・list_cases の表示、期限の無い候補の仮の期限、ai_update_case が書く次の MTG の日時、ai_case_context の材料に使う
  */
 
 type Row = Record<string, any>;
@@ -74,6 +80,11 @@ const pickFromOf = (c: Row) => {
 const mtgOnly = (c: Row) => { const { memo: _m, memo_at: _a, ...rest } = c?.mtg ?? {}; return rest; };
 /** 次の MTG の when（例「2026-10-22（木）13時（推定）」）の日付。読めなければ null */
 const mtgDay = (when: unknown) => /^(\d{4}-\d{2}-\d{2})/.exec(String(when ?? ""))?.[1] ?? null;
+/** v1.42.0：次の MTG の見せ方。予定表で見つかればその日時（元＝予定表）、無ければ今までの記録から（元＝記録から AI） */
+const mtgView = (c: Row, cal?: CalendarMeeting) =>
+  cal ? { ...mtgOnly(c), when: cal.when, 元: "予定表", 予定: `${cal.title}（${cal.calendar}）` } : { ...mtgOnly(c), ...(c.mtg?.when ? { 元: "記録から AI" } : {}) };
+/** v1.42.0：予定表で見つかった日時を、案件の行の次の MTG に重ねる（並びと仮の期限の計算用・表には書かない） */
+const withCal = (c: Row, cal?: CalendarMeeting): Row => (cal ? { ...c, mtg: { ...(c.mtg ?? {}), when: cal.when } } : c);
 /** TaskMaster のつないだプロジェクトのタスク（未完了の題名と、完了した id）。読めなければ null */
 async function tmOf(env: Env, projectId: string | null | undefined): Promise<{ open: Row[]; doneIds: Set<string> } | null> {
   if (!projectId) return null;
@@ -213,7 +224,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
   // ─── 1. anken__list_cases ────────────────────────────────────────
   server.tool(
     "anken__list_cases",
-    "案件くんの案件の一覧と、それぞれの状態・今週の要約・4 つの数（やる＝TaskMaster の未完了・確かめる・相手待ち・候補箱）を返す。TaskMaster とつないでいない案件の「やる」は、登録済みの「やる」の数。戻り値: { ok, 一覧: [{ id, 名前, 状態, 今週, 数, 次のMTG, 拾い始めの日, 住所 }] }。1 件の中身は anken__get_home。",
+    "案件くんの案件の一覧と、それぞれの状態・今週の要約・4 つの数（やる＝TaskMaster の未完了・確かめる・相手待ち・候補箱）を返す。TaskMaster とつないでいない案件の「やる」は、登録済みの「やる」の数。次のMTG は予定表（haAku につないだメイン・UTAGE）の「案件名＋定例」の予定から取り、無ければ記録から AI が書いたもの（次のMTGの元 に出る）。戻り値: { ok, 一覧: [{ id, 名前, 状態, 今週, 数, 次のMTG, 次のMTGの元, 拾い始めの日, 住所 }], 予定表 }。1 件の中身は anken__get_home。",
     {},
     async () => {
       try {
@@ -221,19 +232,21 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           sbGet(env, `/ak_cases?select=*&${own}&order=sort.asc`),
           sbGet(env, `/ak_items?select=case_id,kind,status,tm_task_id&${own}&status=in.(candidate,open)`),
         ]);
-        const tms = await Promise.all(cases.map((c) => tmOf(env, c.tm_project)));
+        const [tms, cal] = await Promise.all([Promise.all(cases.map((c) => tmOf(env, c.tm_project))), calendarMeetings(env, cases.map((c) => String(c.name ?? "")))]);
         return asMcpTextResult({
           ok: true,
           一覧: cases.map((c, ci) => {
+            const cm = cal.found.get(String(c.name ?? ""));
             const its = items.filter((i) => i.case_id === c.id && i.kind !== "decision");
             const n = (k: string, st?: string) => its.filter((i) => kindOf(i.kind) === k && (!st || i.status === st)).length;
             const tm = tms[ci];
             return {
               id: c.id, 名前: c.name, 状態: STL[c.state] ?? c.state, 今週: c.week ?? "", 注意: c.alert ?? "",
               数: { やる: tm ? tm.open.filter((t) => !isRegular(t)).length : n("do", "open"), 定期: tm ? tm.open.filter(isRegular).length : 0, 確かめる: n("ask"), 相手待ち: n("wait"), 候補箱: its.filter((i) => i.status === "candidate").length },
-              次のMTG: c.mtg?.when ?? "", ...(memoOf(c).text ? { Naokiのメモ: memoOf(c).text } : {}), 拾い始めの日: pickFromOf(c), 住所: `${APP_URL}/c/${c.id}`,
+              次のMTG: cm?.when ?? c.mtg?.when ?? "", 次のMTGの元: cm ? "予定表" : c.mtg?.when ? "記録から AI" : "", ...(memoOf(c).text ? { Naokiのメモ: memoOf(c).text } : {}), 拾い始めの日: pickFromOf(c), 住所: `${APP_URL}/c/${c.id}`,
             };
           }),
+          予定表: cal.note,
         });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
@@ -242,7 +255,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
   // ─── 2. anken__get_home ──────────────────────────────────────────
   server.tool(
     "anken__get_home",
-    "案件くんの案件 1 件のホームを返す：4 つの数（やる＝TaskMaster の未完了・確かめる・相手待ち・候補箱）・今週の要約・状態・注意・次の MTG の事前メモ・プロジェクト・やること（やる → 確かめる → 相手待ち → あとで の順。候補箱か登録済みか・期限・AI の見立て・根拠の発言。TaskMaster で完了したものは「済み」）・TaskMaster の未完了・最近の決定・入っている記録。kind で 1 種類だけに絞れる。include_closed: true で済み・外したもの（外した理由つき）も出す。戻り値: { ok, 案件, 数, 状態, 今週, 注意, 次のMTG, 拾い始めの日, プロジェクト, やること, TaskMaster, 決定, 記録 }。",
+    "案件くんの案件 1 件のホームを返す：4 つの数（やる＝TaskMaster の未完了・確かめる・相手待ち・候補箱）・今週の要約・状態・注意・次の MTG の事前メモ・プロジェクト・やること（やる → 確かめる → 相手待ち → あとで の順。候補箱か登録済みか・期限・AI の見立て・根拠の発言。TaskMaster で完了したものは「済み」）・TaskMaster の未完了・最近の決定・入っている記録。次のMTG の when は予定表（haAku につないだメイン・UTAGE）の「案件名＋定例」の予定から取り、無ければ記録から AI が書いたもの（元 に出る）。kind で 1 種類だけに絞れる。include_closed: true で済み・外したもの（外した理由つき）も出す。戻り値: { ok, 案件, 数, 状態, 今週, 注意, 次のMTG, 拾い始めの日, プロジェクト, やること, TaskMaster, 決定, 記録 }。",
     {
       case: z.string().min(1).max(80).describe("案件の名前か id（例: るーみん）"),
       kind: z.enum(KINDS).optional().describe("この種類だけ（do=やる・ask=確かめる・wait=相手待ち・later=あとで）"),
@@ -250,8 +263,11 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
     },
     async ({ case: q, kind, include_closed }) => {
       try {
-        const c = await findCase(env, q);
-        if (!c) return notFound(env, q);
+        const c0 = await findCase(env, q);
+        if (!c0) return notFound(env, q);
+        const cal = await calendarMeetings(env, [String(c0.name ?? "")]);
+        const cm = cal.found.get(String(c0.name ?? ""));
+        const c = withCal(c0, cm);
         const logSrc = (await sbGet(env, `/ak_sources?select=id&case_id=eq.${enc(c.id)}&${own}&name=eq.${enc(LOG_SOURCE)}`))[0];
         const logs = logSrc ? await sbGet(env, `/ak_msgs?select=day,at_time,who,body&source_id=eq.${enc(logSrc.id)}&${own}&order=day.desc,at_time.desc&limit=5`) : [];
         const [projects, items, sources, last] = await Promise.all([
@@ -277,7 +293,8 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           最後のやりとり: last[0]?.day ?? null,
           直近の対応記録: logs.map((m) => `${m.day} ${m.at_time ?? ""} ${m.who ?? ""}：${String(m.body).replace(/^【対応記録】/, "").split("\n")[0].slice(0, 100)}`),
           Naokiのメモ: memoOf(c).text ? { 本文: memoOf(c).text, 書いた: memoOf(c).at } : null,
-          次のMTG: mtgOnly(c),
+          次のMTG: mtgView(c0, cm),
+          ...(cm ? {} : { 予定表: cal.note }),
           拾い始めの日: pickFromOf(c),
           予定: (Array.isArray(c.periods) ? c.periods : []).filter((p: Period) => !p.hidden).map((p: Period) => ({ 名前: p.title, 始まり: p.start, 終わり: p.end, 種類: p.kind, 出どころ: p.by === "naoki" ? "Naoki" : p.by === "chat" ? "案件チャット" : "AI" })),
           プロジェクト: projects.map((p) => ({ 名前: p.name, 状態: STL[p.state] ?? p.state, 次の一手: p.next, 直近: p.recent })),
@@ -368,7 +385,8 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const norm = (s: string) => s.replace(/\s+/g, "").toLowerCase();
         const have = new Set(existing.filter((i) => ACTIVE.has(i.status)).map((i) => norm(i.title)));
         const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
-        const mtg = mtgDay(c.mtg?.when);
+        const cm = (await calendarMeetings(env, [String(c.name ?? "")])).found.get(String(c.name ?? ""));
+        const mtg = cm?.day ?? mtgDay(c.mtg?.when);
         const nextMtg = mtg && mtg >= today ? mtg : null;
         const rows: Row[] = [];
         const skipped: Row[] = [];
@@ -630,7 +648,8 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           sbGet(env, `/ak_items?select=title,status,reason,kind&case_id=eq.${enc(c.id)}&${own}`),
           sbGet(env, `/ak_msgs?select=id&case_id=eq.${enc(c.id)}&${own}&ai_at=is.null&limit=1`),
         ]);
-        const tmr = await tmOf(env, c.tm_project);
+        const [tmr, cal] = await Promise.all([tmOf(env, c.tm_project), calendarMeetings(env, [String(c.name ?? "")])]);
+        const cm = cal.found.get(String(c.name ?? ""));
         const tm: string[] = (tmr?.open ?? []).map((t: Row) => String(t.title ?? "").slice(0, 120));
         const from = pickFromOf(c);
         const ev: string[] = [];
@@ -640,6 +659,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           ok: true, 案件: c.name, 今日: todayJst(), 拾い始めの日: from, 決まり: CASE_RULES,
           ...(memoOf(c).text ? { Naokiのメモ: `${memoOf(c).text}（Naoki が決めた優先。議題・注意・次の一手はこれを前提にする。書き換えない）` } : {}),
           ...(pend.length ? { 注意: "まだ読んでいない日があります。先に anken__ai_next_days を済ませてください" } : {}),
+          ...(cm ? { 予定表の次の定例: `${cm.when}（${cm.title}・${cm.calendar}）。next_mtg.when はこの日時にする（ai_update_case も予定表の日時で書く）` } : {}),
           既存のプロジェクト: projects.map((p) => p.name),
           登録済み: items.filter((i) => (i.status === "open" || i.status === "done") && i.kind !== "decision").map((i) => i.title),
           外したもの: items.filter((i) => i.status === "dismissed").map((i) => `${i.title}：${i.reason || "理由なし"}`),
@@ -733,7 +753,10 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         });
         const byFp = new Map(oldItems.map((i) => [i.fp, i]));
         const keep = new Set<string>();
-        const mtg = mtgDay(next_mtg.when);
+        // v1.42.0：予定表に次の定例があれば、その日時を次の MTG にする（AI の推定より予定表を先に）
+        const cm = (await calendarMeetings(env, [String(c.name ?? "")])).found.get(String(c.name ?? ""));
+        const nm = cm ? { ...next_mtg, when: cm.when } : next_mtg;
+        const mtg = mtgDay(nm.when);
         const nextMtg = mtg && mtg >= today ? mtg : null;
         let added = 0, updated = 0, tooOld = 0, provisional = 0;
         const provTitles: string[] = [];
@@ -771,7 +794,7 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const goneD = oldItems.filter((i) => i.kind === "decision" && i.origin === "ai" && String(i.fp ?? "").startsWith("d:") && !keepD.has(i.fp));
         for (const g of goneD) await sbDelete(env, `/ak_items?id=eq.${enc(g.id)}&${own}&origin=eq.ai&kind=eq.decision`);
         // 仮の期限を置いた依頼は、次の定例の議題にも載せる（AI が載せていなければ 1 つにまとめて足す）
-        const agenda = [...next_mtg.agenda];
+        const agenda = [...nm.agenda];
         const flat = agenda.map((a) => `${a.title}${a.note}`).join("\n");
         const missing = provTitles.filter((t) => !flat.includes(t));
         if (missing.length && agenda.length < 8) {
@@ -788,11 +811,12 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
           });
           plan = await mergePeriods(c.periods, inc);
         }
-        await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { week, state, alert: alert || null, mtg: keepMemo(c.mtg, { ...next_mtg, agenda }), ...(plan ? { periods: plan.periods } : {}), updated_at: now });
+        await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { week, state, alert: alert || null, mtg: keepMemo(c.mtg, { ...nm, agenda }), ...(plan ? { periods: plan.periods } : {}), updated_at: now });
         await sbPost(env, `/ak_runs`, [{ user_id: OWNER_UID, case_id: c.id, days: days.length, msgs: items.length, model: "claude-chat", note: "段 2：案件ごと（MCP）" }], "return=minimal");
         return asMcpTextResult({
           ok: true, 案件: c.name, 拾い始めの日: from, 新しい候補: added, 直した候補: updated, 下げた候補: gone.length,
           "入れなかった（拾い始めより前）": tooOld, 仮の期限を置いた: provisional, ...(nextMtg ? { 仮の期限: nextMtg } : {}),
+          次のMTGの元: cm ? `予定表（${cm.title}・${cm.calendar}）` : "記録から AI",
           ...(moved.length ? { "「報告がまだ」から「やる」へ移した": moved.length } : {}),
           決定: keepD.size, 下げた決定: goneD.length, プロジェクト: projects.length,
           ...(plan ? { 予定: { 入れた: plan.added, "出し直さなかった（Naoki のもの・消したもの）": plan.skipped, "根拠が無く入れなかった": planDropped, 全部: plan.periods.filter((p) => !p.hidden).length } } : {}),
