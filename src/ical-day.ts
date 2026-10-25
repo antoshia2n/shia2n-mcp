@@ -281,36 +281,20 @@ function candidates(e: Ev, target: number, dayStart: number, dayEnd: number): Ca
   return out;
 }
 
-/**
- * 届いた順の文字の流れから、日本時間 day（YYYY-MM-DD）に重なる予定を返す
- */
-export async function eventsOnDay(chunks: AsyncIterable<string> | Iterable<string>, day: string): Promise<DayResult> {
-  const target = dnOf(day);
-  const dayStart = zonedMs(target, 0, JST), dayEnd = zonedMs(target + 1, 0, JST);
-  const overrides = new Set<string>();          // 動かした回・取り消した回の元の時刻
-  const cands: Cand[] = [];
-  let unreadable = 0, scanned = 0;
+/** 届いた順の文字の流れを、予定 1 件ずつ（VEVENT の行の並び）に分けて渡す。読めないほど長い予定は onBad */
+async function scanEvents(chunks: AsyncIterable<string> | Iterable<string>, onEvent: (lines: string[]) => void, onBad: () => void): Promise<void> {
   let buf = "", cur: string[] | null = null, last: string | null = null;
   const flushLine = (line: string) => {
     if (line === "BEGIN:VEVENT") { cur = []; return; }
     if (line === "END:VEVENT") {
       if (!cur) return;
-      scanned++;
-      const e = readEvent(cur);
+      const lines = cur;
       cur = null;
-      if (e.recId) {
-        if (e.recRange === "THISANDFUTURE") { unreadable++; return; }
-        overrides.add(keyOf(e.uid, e.recId));
-      }
-      if (e.status === "CANCELLED") return;
-      const c = candidates(e, target, dayStart, dayEnd);
-      if (c === "bad") { unreadable++; return; }
-      // 動かした回は「元の回」を消す側にも、「新しい回」として出す側にも入る。元の回と区別するため鍵に印を付ける
-      for (const x of c) cands.push(e.recId ? { key: "override|" + x.key, ev: x.ev } : x);
+      onEvent(lines);
       return;
     }
     if (cur) {
-      if (cur.length > 2000) { cur = null; unreadable++; return; }
+      if (cur.length > 2000) { cur = null; onBad(); return; }
       cur.push(line);
     }
   };
@@ -328,6 +312,10 @@ export async function eventsOnDay(chunks: AsyncIterable<string> | Iterable<strin
   }
   if (buf) take(buf);
   if (last !== null) flushLine(last);
+}
+
+/** 候補から、動かした回・取り消した回の元の回を外し、同じ回を 1 つにして並べる */
+function finishEvents(cands: Cand[], overrides: Set<string>): DayEvent[] {
   const seen = new Set<string>();
   const events: DayEvent[] = [];
   for (const c of cands) {
@@ -338,11 +326,71 @@ export async function eventsOnDay(chunks: AsyncIterable<string> | Iterable<strin
     events.push(c.ev);
   }
   events.sort((a, b) => (a.all_day === b.all_day ? a.start.localeCompare(b.start) : a.all_day ? -1 : 1) || a.title.localeCompare(b.title, "ja"));
-  return { events, unreadable, scanned };
+  return events;
 }
 
-/** 非公開アドレスを読む。アドレスは返事・エラー文に出さない */
-export async function fetchDayEvents(url: string, day: string): Promise<DayResult & { bytes: number; http: number }> {
+/**
+ * 届いた順の文字の流れから、日本時間 day（YYYY-MM-DD）に重なる予定を返す
+ */
+export async function eventsOnDay(chunks: AsyncIterable<string> | Iterable<string>, day: string): Promise<DayResult> {
+  const target = dnOf(day);
+  const dayStart = zonedMs(target, 0, JST), dayEnd = zonedMs(target + 1, 0, JST);
+  const overrides = new Set<string>();          // 動かした回・取り消した回の元の時刻
+  const cands: Cand[] = [];
+  let unreadable = 0, scanned = 0;
+  await scanEvents(chunks, lines => {
+    scanned++;
+    const e = readEvent(lines);
+    if (e.recId) {
+      if (e.recRange === "THISANDFUTURE") { unreadable++; return; }
+      overrides.add(keyOf(e.uid, e.recId));
+    }
+    if (e.status === "CANCELLED") return;
+    const c = candidates(e, target, dayStart, dayEnd);
+    if (c === "bad") { unreadable++; return; }
+    // 動かした回は「元の回」を消す側にも、「新しい回」として出す側にも入る。元の回と区別するため鍵に印を付ける
+    for (const x of c) cands.push(e.recId ? { key: "override|" + x.key, ev: x.ev } : x);
+  }, () => { unreadable++; });
+  return { events: finishEvents(cands, overrides), unreadable, scanned };
+}
+
+/**
+ * v1.42.0：題名が keep に当たる予定を、days（日本時間の日付の並び・最大 92 日）の各日について返す。文字の流れは 1 回だけ読む。
+ * 動かした回・取り消した回は eventsOnDay と同じに扱う（元の回を消す印は、題名に関係なくすべての予定から集める）
+ */
+export async function eventsOnDays(chunks: AsyncIterable<string> | Iterable<string>, days: string[], keep: (title: string) => boolean): Promise<DayResult> {
+  if (days.length > 92) throw new Error("一度に調べられるのは 92 日までです");
+  const overrides = new Set<string>();
+  const kept: Ev[] = [];
+  let unreadable = 0, scanned = 0;
+  await scanEvents(chunks, lines => {
+    scanned++;
+    const e = readEvent(lines);
+    if (e.recId) {
+      if (e.recRange === "THISANDFUTURE") { unreadable++; return; }
+      overrides.add(keyOf(e.uid, e.recId));
+    }
+    if (e.status === "CANCELLED") return;
+    if (!keep(e.title)) return;
+    kept.push(e);
+  }, () => { unreadable++; });
+  const cands: Cand[] = [];
+  const bad = new Set<Ev>();
+  for (const day of days) {
+    const target = dnOf(day);
+    const dayStart = zonedMs(target, 0, JST), dayEnd = zonedMs(target + 1, 0, JST);
+    for (const e of kept) {
+      if (bad.has(e)) continue;
+      const c = candidates(e, target, dayStart, dayEnd);
+      if (c === "bad") { bad.add(e); continue; }
+      for (const x of c) cands.push(e.recId ? { key: "override|" + x.key, ev: x.ev } : x);
+    }
+  }
+  return { events: finishEvents(cands, overrides), unreadable: unreadable + bad.size, scanned };
+}
+
+/** 非公開アドレスの中身を、届いた順の文字の流れで返す。アドレスは返事・エラー文に出さない */
+async function openCalendar(url: string): Promise<{ chunks: AsyncIterable<string>; bytes: () => number; http: number }> {
   if (!/^https:\/\//.test(url)) throw new Error("保存したアドレスが https ではありません");
   const res = await fetch(url, { method: "GET", redirect: "manual", headers: { Accept: "text/calendar", "Cache-Control": "no-store" } });
   if (res.status !== 200 || !res.body) throw new Error("カレンダーが読めませんでした（HTTP " + res.status + "）");
@@ -357,6 +405,19 @@ export async function fetchDayEvents(url: string, day: string): Promise<DayResul
       yield dec.decode(value, { stream: true });
     }
   }
-  const r = await eventsOnDay(chunks(), day);
-  return { ...r, bytes, http: res.status };
+  return { chunks: chunks(), bytes: () => bytes, http: res.status };
+}
+
+/** 非公開アドレスを読む。アドレスは返事・エラー文に出さない */
+export async function fetchDayEvents(url: string, day: string): Promise<DayResult & { bytes: number; http: number }> {
+  const c = await openCalendar(url);
+  const r = await eventsOnDay(c.chunks, day);
+  return { ...r, bytes: c.bytes(), http: c.http };
+}
+
+/** v1.42.0：非公開アドレスを 1 回読み、題名が keep に当たる予定を days の各日について返す */
+export async function fetchEventsOnDays(url: string, days: string[], keep: (title: string) => boolean): Promise<DayResult & { bytes: number; http: number }> {
+  const c = await openCalendar(url);
+  const r = await eventsOnDays(c.chunks, days, keep);
+  return { ...r, bytes: c.bytes(), http: c.http };
 }
