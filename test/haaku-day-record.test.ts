@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { eventsOnDay, parseRule } from "../src/ical-day.js";
-import { splitTasks, calendarsOf, buildDayRecord, firestoreSafe } from "../src/haaku-day-record.js";
+import { splitTasks, calendarsOf, buildDayRecord, firestoreSafe, groupsMapOf, fillGroups } from "../src/haaku-day-record.js";
 import { dateColumnOf, ruleFkOf } from "../src/kiroku-read.js";
 import { tokyoNowIso } from "../src/taskmaster.js";
 
@@ -127,6 +127,32 @@ test("Firestore に置けない配列の中の配列は、その配列だけ文�
 
 test("終わった時刻は日本時間の ISO", () => {
   assert.equal(tokyoNowIso(new Date("2026-10-13T11:55:12.345Z")), "2026-10-13T20:55:12+09:00");
+});
+
+// ── v1.41.0：時間帯 ──
+test("時間帯：こなしたこと・残ったことに groupId と時間帯の題名が付く。時間帯なしは null。今ある欄はそのまま", () => {
+  const T = (id: string, o: Record<string, unknown>) => ({ id, title: "タスク" + id, completed: false, archived: false, ...o });
+  const groups = groupsMapOf([{ id: "g1", title: "routine" }, { id: "g2", title: "Side Quest" }, { title: "id なし" }]);
+  const r = splitTasks("2026-10-24", {
+    doneThatDay: [T("d1", { completed: true, doneAt: "2026-10-24", groupId: "g1" }), T("d2", { completed: true, doneAt: "2026-10-24" })],
+    open: [T("o1", { deadline: "2026-10-24", groupId: "g9" })], doneLater: [],
+    projects: new Map(), links: new Map(), milestones: new Map(), groups,
+  });
+  assert.deepEqual(r.done.map(t => [t.id, t.group_id, t.group_title]), [["d1", "g1", "routine"], ["d2", null, null]]);
+  assert.deepEqual(r.remaining.map(t => [t.id, t.group_id, t.group_title]), [["o1", "g9", null]]);
+  assert.deepEqual(Object.keys(r.done[0]).slice(0, 12), ["id", "title", "status", "priority", "project_id", "project_title", "milestone_id", "milestone_title", "start_date", "deadline", "done_at", "completed_at"]);
+  assert.equal(groupsMapOf(null).size, 0);
+});
+
+test("時間帯：前の記録（欄が無い行）だけに今のタスクから付ける。欄がある行と見つからないタスクは触らない", () => {
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, title: id, status: "done", priority: null, project_id: null, project_title: null, milestone_id: null, milestone_title: null, start_date: null, deadline: null, done_at: null, completed_at: null, ...extra });
+  const days = [{ date: "2026-10-24", done: [row("rw6l2o9"), row("x", { group_id: "g2", group_title: "Side Quest" }), row("gone")], remaining: [row("26yx1lz")] }] as any;
+  const n = fillGroups(days, new Map([["rw6l2o9", "g1"], ["26yx1lz", null], ["x", "g1"]]), new Map([["g1", "routine"]]));
+  assert.equal(n, 2);
+  assert.deepEqual([days[0].done[0].group_id, days[0].done[0].group_title], ["g1", "routine"]);
+  assert.deepEqual([days[0].done[1].group_id, days[0].done[1].group_title], ["g2", "Side Quest"]);
+  assert.equal("group_id" in days[0].done[2], false);
+  assert.deepEqual([days[0].remaining[0].group_id, days[0].remaining[0].group_title], [null, null]);
 });
 
 // ── 外に触る部分：偽の Firestore・Supabase・カレンダーで、組む・書く・変わらなければ書かない・読めない元は前を残す ──
