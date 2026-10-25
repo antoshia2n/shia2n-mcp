@@ -18,7 +18,7 @@ const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD で渡してく
 export function registerHaakuDayTools(server: McpServer, env: Env): void {
   server.tool(
     "haAku__get_day_records",
-    "haAku に残した「その日の記録」を日付の範囲で返す。読むだけ。1日1件で、日報（goal・achieved・reflection・improvement と KPI の数字）・こなしたこと（その日に完了したタスク。プロジェクトと結んだマス・完了の時刻 completed_at つき）・残ったこと（着手日か期限がその日以前でその日の終わりに未完了だったタスク）・予定（カレンダーの予定・時刻つき）・記録くん（その日の daily_logs の行と rule_checks）を持つ。sources にそれぞれの元が読めたかが入る。記録は毎日 JST 0 時台に前の日の分を組む。無い日は missing に並ぶ（haAku__build_day_record で組める）。最大62日。",
+    "haAku に残した「その日の記録」を日付の範囲で返す。読むだけ。1日1件で、日報（goal・achieved・reflection・improvement と KPI の数字）・こなしたこと（その日に完了したタスク。プロジェクトと結んだマス・完了の時刻 completed_at・TaskMaster の時間帯 group_id と group_title つき）・残ったこと（着手日か期限がその日以前でその日の終わりに未完了だったタスク。時間帯つき）・予定（カレンダーの予定・時刻つき）・記録くん（その日の daily_logs の行と rule_checks）を持つ。sources にそれぞれの元が読めたかが入る。記録は毎日 JST 0 時台に前の日の分を組む。無い日は missing に並ぶ（haAku__build_day_record で組める）。時間帯の欄が無い前の記録には、読むときに今のタスクから時間帯を付ける（groups_note に件数）。最大62日。",
     { from: DATE.describe("最初の日 YYYY-MM-DD（日本時間）"), to: DATE.optional().describe("最後の日 YYYY-MM-DD。省略時は from と同じ") },
     async args => asMcpTextResult(await readDayRecords(env, args.from, args.to ?? args.from))
   );
