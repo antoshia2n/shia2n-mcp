@@ -5,6 +5,7 @@ import type { Env } from "./index.js";
 import {
   type MNodes, ID_RE, addItems, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, pathOf, sameName, titleOf, toOutline,
 } from "./mindmap-core.js";
+import { reduceRows, countDays, datesBetween, nextDate, type Snap } from "./mindmap-activity.js";
 
 /**
  * 思考整理くん（mindmap.shia2n.jp・Naoki 個人用のマインドマップ）の道具。
@@ -25,6 +26,11 @@ import {
  *     同じ欄を同じ値で mm_maps に 1 行足す。拡張機能のパネル（src/panel.js）と同じく、フォルダの中の表（mm_settings の trows）には入れない
  *   ・同じフォルダに同じ名前のマップ（テンプレは除く）があれば作らず、そのマップを返す（呼び直しで 2 枚できないため）
  *   ・フォルダの名前は mm_settings から読む。読めないときは作らずに断る（標準の名前で別のフォルダへ入れないため）
+ *
+ * 2026-10-25 mindmap__activity を足した（開発部・週間レポートの口 便 2・Naoki「OK」19:34）。
+ *   ・期間の日ごと・マップごとに「足した枝・直した枝・消した枝」を数える。読むだけ
+ *   ・枝に時刻が無いので、毎朝の控え（保管庫 backup/日付/supabase/mm_maps.json）を隣の日と比べる（src/mindmap-activity.ts）。
+ *     今日と、今朝の控えがまだ無いときの昨日は、今の中身と比べる。控えがあるかを日ごとに返す
  */
 
 type Row = Record<string, any>;
@@ -305,6 +311,71 @@ export function registerMindmapTools(server: McpServer, env: Env): void {
           ok: true, id: m.id, 名前: m.title, フォルダ: folderName, 住所: `${APP_URL}/m/${m.id}`,
           足した枝の数: made.length,
           備考: "フォルダの中の「表に入っていないマップ」に出ます。開いたままの画面には、読み直すと出ます",
+        });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── mindmap__activity ───────────────────────────────────────────
+  server.tool(
+    "mindmap__activity",
+    "思考整理くんで、期間（from〜to・日本時間・最大 31 日）の日ごと・マップごとに「足した枝」「直した枝」「消した枝」の数を返す。読むだけ。枝には時刻が無いので、毎朝の控え（4〜6 時台に取る）を隣の日と比べて数える。1 日は「その日の朝の控え〜次の日の朝の控え」で、今日の分は今の中身と比べる。同じ日に何度直しても 1。マップの名前の枝とテンプレは数えない。控え に日ごとの控えの有無と時刻、数えられない に控えが無くて数えなかった日。map でマップの名前か id に絞れる。戻り値: { ok, 期間, 区切り, 控え, 日ごと: [{ 日, 足した, 直した, 消した, マップ }], マップごと: [{ id, 名前, 足した, 直した, 消した, 日ごと }], 数えられない }。",
+    {
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("最初の日 YYYY-MM-DD（日本時間）"),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("最後の日 YYYY-MM-DD。省略時は from と同じ"),
+      map: z.string().max(120).optional().describe("このマップだけ（名前の一部か id）"),
+    },
+    async ({ from, to, map }) => {
+      try {
+        const last = to ?? from;
+        if (last < from) return asMcpTextResult({ ok: false, message: "to は from 以後の日付にしてください" });
+        const days = datesBetween(from, last);
+        if (days.length > 31) return asMcpTextResult({ ok: false, message: "一度に数えられるのは 31 日までです" });
+        if (!env.BACKUP_BUCKET) return asMcpTextResult({ ok: false, message: "保管庫（R2）が結び付いていません" });
+        const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+        // 要る控え：from〜（to の次の日と今日の早いほう）。大きいので 1 日ずつ読んで縮める
+        const need = datesBetween(from, nextDate(last) < today ? nextDate(last) : today);
+        const snaps = new Map<string, Snap>(), at = new Map<string, string>();
+        const backups: Row[] = [];
+        for (const d of need) {
+          const obj = await env.BACKUP_BUCKET.get(`backup/${d}/supabase/${MAP_TABLE}.json`);
+          if (!obj) { backups.push({ 日: d, ある: false }); continue; }
+          const rows = JSON.parse(await obj.text());
+          if (!Array.isArray(rows)) { backups.push({ 日: d, ある: false, 理由: "控えの形が読めない" }); continue; }
+          snaps.set(d, reduceRows(rows, OWNER_UID));
+          at.set(d, jst(obj.uploaded.toISOString()));
+          backups.push({ 日: d, ある: true, 取った時刻: at.get(d) });
+        }
+        const useLive = nextDate(last) >= today;
+        const live = useLive ? reduceRows(await sbGet(env, `/${MAP_TABLE}?select=id,user_id,title,is_template,root,nodes&${own}`), OWNER_UID) : null;
+        const liveAt = jst(new Date().toISOString());
+        const q = map?.trim();
+        const pick = (id: string, title: string) => !q || id === q || title.includes(q);
+        const counted = countDays(days, today, snaps, at, live, liveAt);
+        const byMap = new Map<string, Row>();
+        const 日ごと: Row[] = [], 数えられない: Row[] = [];
+        for (const c of counted) {
+          if ("missing" in c) { 数えられない.push({ 日: c.day, 理由: c.missing }); continue; }
+          const ms = c.maps.filter(m => pick(m.id, m.title));
+          const sum = (k: "added" | "edited" | "removed") => ms.reduce((n, m) => n + m[k], 0);
+          日ごと.push({
+            日: c.day, 比べた: `${c.from} → ${c.to}`, 足した: sum("added"), 直した: sum("edited"), 消した: sum("removed"),
+            マップ: ms.map(m => ({ id: m.id, 名前: m.title, 足した: m.added, 直した: m.edited, 消した: m.removed, ...(m.created ? { 新しいマップ: true } : {}), ...(m.deleted ? { 消えたマップ: true } : {}) })),
+          });
+          for (const m of ms) {
+            const e = byMap.get(m.id) ?? { id: m.id, 名前: m.title, 足した: 0, 直した: 0, 消した: 0, 日ごと: [] as Row[], 住所: `${APP_URL}/m/${m.id}` };
+            e.名前 = m.title; e.足した += m.added; e.直した += m.edited; e.消した += m.removed;
+            e.日ごと.push({ 日: c.day, 足した: m.added, 直した: m.edited, 消した: m.removed });
+            byMap.set(m.id, e);
+          }
+        }
+        return asMcpTextResult({
+          ok: true, 期間: `${from}〜${last}`,
+          区切り: "1 日＝その日の朝の控え〜次の日の朝の控え（控えは毎朝 4〜6 時台）。今日の分は今の中身と比べる。同じ日に何度直しても 1",
+          控え: backups,
+          日ごと,
+          マップごと: [...byMap.values()].sort((a, b) => b.足した + b.直した - (a.足した + a.直した)),
+          数えられない,
         });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
