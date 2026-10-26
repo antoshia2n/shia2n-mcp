@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { actsSummary, currentWeekLabel, inMonth, itemsFor, layersOf, mergeMetrics, normItems, pickWeek, weekDays } from "../src/xbunseki-core.ts";
+import { actsSummary, currentWeekLabel, featOf, inMonth, itemsFor, layersOf, mergeMetrics, normItems, pickWeek, weekDays } from "../src/xbunseki-core.ts";
 
 const weeks = [
   { id: "a", month: "2026-09", label: "9月3週", sort: 2026093 },
@@ -52,4 +52,11 @@ test("行動：週の日・項目の引き継ぎ・まとめ", () => {
   assert.equal(s.項目[1].項目, "リプ"); // 項目に無い記録も落とさない
   assert.equal(s.項目[1].この回の項目にない, true);
   assert.deepEqual(s.相手ごと, [{ 相手: "うし部長", "@": "ushi", 記事: 4 }, { 相手: "相手なし", 記事: 2, リプ: 5 }]);
+});
+
+test("施策の特徴：メモがあればそのまま、無ければ層ごとに書いた分を並べる", () => {
+  assert.equal(featOf({ memo: "記事で伸ばす→メンシプへ", ly: { ocont: "記事で伸ばす" } }), "記事で伸ばす→メンシプへ");
+  assert.equal(featOf({ memo: "", ly: { goal: "メンシプ誘導", ostyle: "横長図解をテスト" } }), "アカウントの目的・意図：メンシプ誘導\n運用のスタイル：横長図解をテスト");
+  assert.equal(featOf({ memo: "  ", ly: {} }), "");
+  assert.equal(featOf(null), "");
 });
