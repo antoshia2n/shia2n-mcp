@@ -82,7 +82,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 2. xbunseki__get_week ───────────────────────────────────────
   server.tool(
     "xbunseki__get_week",
-    "X攻略くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（サイドパネルで押した数を、その回の行動の項目ごとに。1 日の目標・達成・日ごと・確かめる仮説・相手ごと）・相手ごとの評価と、書く窓の 3 段（施策の特徴・分析・仮説。2026-10-26 から。前の回の「層に分ける前のメモ」は施策の特徴、「分析結果」は分析、「生かすなら」は仮説として返す。層ごとに書いた分があれば添える）・この回に足した仮説・今週の計画（参考ポストと TaskMaster へ送ったタスクを添える）・今週の KPI。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
+    "X攻略くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（サイドパネルで押した数を、その回の行動の項目ごとに。1 日の目標・達成・日ごと・確かめる仮説・相手ごと）・相手ごとの評価と、書く窓の 3 段（施策の特徴・分析・仮説。2026-10-26 から。前の回の「層に分ける前のメモ」は施策の特徴、「分析結果」は分析、「生かすなら」は仮説として返す。層ごとに書いた分があれば添える）・この回に足した仮説・今週の計画（参考ポストと TaskMaster へ送ったタスクを添える）・今週の KPI・アナリティクスのスクショの住所（あれば）。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
     { week: z.string().max(40).optional().describe("「10月4週」「今週」など。省略でいちばん新しい回") },
     async ({ week }) => {
       try {
@@ -105,7 +105,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
         const order = new Map(accounts.map((a, i) => [a.handle, a.is_self ? -1 : i]));
         obs.sort((a, b) => (order.get(a.account) ?? 999) - (order.get(b.account) ?? 999));
         return asMcpTextResult({
-          ok: true, id: w.id, 週: w.label, 月: w.month, 方針: w.policy || "", タイムラインの気づき: w.timeline || "", 全体の仮説: w.overall || "", 自分の数字: metricsOut(w.metrics), 行動,
+          ok: true, id: w.id, 週: w.label, 月: w.month, 方針: w.policy || "", タイムラインの気づき: w.timeline || "", 全体の仮説: w.overall || "", 自分の数字: metricsOut(w.metrics), ...(Array.isArray(w.shots) && w.shots.length ? { スクショ: w.shots.map((x: Row) => x && x.url).filter(Boolean) } : {}), 行動,
           相手: obs.map(o => { const a = accounts.find(x => x.handle === o.account); return { 名前: accName(accounts, o.account), "@": o.account, 自分: !!a?.is_self, ラベル: a?.labels || [], 評価: o.score, 施策の特徴: featOf(o), 分析: o.ana || "", 仮説: o.use_text || "", ...(Object.keys(layersOf(o.ly)).length ? { 層ごとに書いた分: layersOf(o.ly) } : {}) }; }),
           この回に足した仮説: items.filter(i => i.kind !== "pl").map(itemOut),
           今週の計画: items.filter(i => i.kind === "pl").map(itemOut),
