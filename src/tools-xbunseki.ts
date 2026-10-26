@@ -56,7 +56,10 @@ const metricsOut = (m: Row | null | undefined) => Object.fromEntries(Object.entr
 const VERDICT: Record<string, string> = { keep: "続ける", fix: "直す", stop: "やめる" };
 // KPI（作業 36）：{ items: [{ l, goal, m, now }] }。m があれば実績は自分の数字のその欄、無ければ手入力の now
 const kpiOut = (k: Row | null | undefined, metrics: Row | null | undefined) => { const xs: Row[] = Array.isArray(k?.items) ? k!.items : []; return xs.length ? xs.map(x => ({ 名前: x.l || "", 目標: x.goal ?? "", 実績: x.m ? (metrics?.[x.m] ?? null) : (x.now ?? ""), 実績の出どころ: x.m ? (METRICS[x.m] || x.m) : "手入力" })) : null; };
-const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), ...(i.grade ? { 見込み: i.grade } : {}), ...(i.verdict ? { 振り返り: VERDICT[i.verdict] || i.verdict } : {}), いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
+// 参考ポスト（スワイプくん）と TaskMaster へ送ったタスクは src の中に 1 件ずつ入る（2026-10-26 4便目・画面の data.js と同じ形）
+const refsOf = (i: Row) => (i.src || []).filter((s: Row) => s && s.ref).map((s: Row) => ({ 題: s.ref.title || "", 投稿者: s.ref.author || "", URL: s.ref.url || "" }));
+const tasksOf = (i: Row) => (i.src || []).filter((s: Row) => s && s.task).map((s: Row) => ({ id: s.task.id, 題: s.task.title || "", 期限: s.task.deadline || null }));
+const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), ...(i.grade ? { 見込み: i.grade } : {}), ...(i.verdict ? { 振り返り: VERDICT[i.verdict] || i.verdict } : {}), ...(refsOf(i).length ? { 参考ポスト: refsOf(i) } : {}), ...(tasksOf(i).length ? { TaskMasterへ送ったタスク: tasksOf(i) } : {}), いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
 
 export function registerXbunsekiTools(server: McpServer, env: Env): void {
 
@@ -79,7 +82,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 2. xbunseki__get_week ───────────────────────────────────────
   server.tool(
     "xbunseki__get_week",
-    "X攻略くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（サイドパネルで押した数を、その回の行動の項目ごとに。1 日の目標・達成・日ごと・確かめる仮説・相手ごと）・相手ごとの評価と、書く窓の 3 段（施策の特徴・分析・仮説。2026-10-26 から。前の回の「層に分ける前のメモ」は施策の特徴、「分析結果」は分析、「生かすなら」は仮説として返す。層ごとに書いた分があれば添える）・この回に足した仮説。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
+    "X攻略くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（サイドパネルで押した数を、その回の行動の項目ごとに。1 日の目標・達成・日ごと・確かめる仮説・相手ごと）・相手ごとの評価と、書く窓の 3 段（施策の特徴・分析・仮説。2026-10-26 から。前の回の「層に分ける前のメモ」は施策の特徴、「分析結果」は分析、「生かすなら」は仮説として返す。層ごとに書いた分があれば添える）・この回に足した仮説・今週の計画（参考ポストと TaskMaster へ送ったタスクを添える）・今週の KPI。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
     { week: z.string().max(40).optional().describe("「10月4週」「今週」など。省略でいちばん新しい回") },
     async ({ week }) => {
       try {
