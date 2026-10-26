@@ -251,7 +251,7 @@ function tokyoToday(): string {
 
 type Item = Record<string, unknown>;
 
-function expandValue(doc: FSDoc): Item[] {
+export function expandValue(doc: FSDoc): Item[] {
   const fields = doc.fields ?? {};
 
   if (!("value" in fields)) {
