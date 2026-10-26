@@ -53,7 +53,7 @@ async function loadBase(env: Env) {
 }
 const accName = (accounts: Row[], h: string) => accounts.find(a => a.handle === h)?.name || h;
 const metricsOut = (m: Row | null | undefined) => Object.fromEntries(Object.entries(METRICS).filter(([k]) => m && m[k] != null).map(([k, l]) => [l, m![k]]));
-const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
+const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), ...(i.grade ? { 見込み: i.grade } : {}), いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
 
 export function registerXbunsekiTools(server: McpServer, env: Env): void {
 
