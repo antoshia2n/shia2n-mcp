@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.53.0（2026-10-26 開発部・note攻略くん 4便目）：note攻略くんのレポートに haAku の「メンシプ在籍数」を月ごとに出す受け口 GET /notekoryaku/members（notekoryaku-members-http.ts・note攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ・読むだけ）。今年と去年の日ごとの記録から月ごとの最新の値（haAku の「最新」の集計と同じ）と、KPI の目標・KGI の目標を返す。読めなかったときは空でなく理由を返す。試験は test/notekoryaku-members.test.ts。設定の追加 0 個。
  * v1.52.0（2026-10-26 開発部・note攻略くん 3便目）：TaskMaster へタスクを送る受け口 /xkoryaku/tasks を、note攻略くんの住所（https://note-koryaku.shia2n.jp）から開いた画面からも呼べるようにした。返す先（Access-Control-Allow-Origin）は呼んできた住所。Naoki 本人の Firebase ログインのときだけ・送る中身の決まりは同じ。変えたのは src/xkoryaku-task-http.ts と試験と src/version.ts のみ。設定の追加 0 個。
  * v1.51.0（2026-10-26 開発部・X攻略くん 5便目）：xbunseki__get_week がその回のアナリティクスのスクショの住所（xa_weeks.shots・作業 40）を「スクショ」として返す。列がまだ無いとき・0 枚のときは出さない。設定の追加 0 個。
  * v1.48.0（2026-10-26 開発部・X攻略くん 2便目）：xbunseki の道具が打ち手を返すとき、見込み（xa_items.grade・A・B・C・作業 35）が入っていれば「見込み」として添えるようにした。列が無いあいだは何も添えない。設定の追加 0 個。
@@ -586,6 +587,7 @@ import { registerHaakuTools } from "./tools-haaku.js";
 import { handleHaakuHumanApproval } from "./haaku-human-approval.js";
 import { handleHaakuTaskLinks, TASK_LINKS_PATH } from "./haaku-task-link-http.js";
 import { handleXkoryakuTasks, XKORYAKU_TASKS_PATH } from "./xkoryaku-task-http.js";
+import { handleNotekoryakuMembers, NOTEKORYAKU_MEMBERS_PATH } from "./notekoryaku-members-http.js";
 import { handleAnkenSheet, ANKEN_SHEET_PATH } from "./anken-sheet-http.js";
 import { registerKnowledgeTagTools } from "./tools-knowledge-tag.js";
 import { registerManabuTools } from "./tools-manabu.js";
@@ -874,6 +876,10 @@ export default {
     // v1.50.0：X攻略くんの画面から TaskMaster へタスクを送る受け口（Firebase のログインで守る・X攻略くんの住所だけ）
     if (url.pathname === XKORYAKU_TASKS_PATH) {
       return handleXkoryakuTasks(request, env);
+    }
+    // v1.53.0：note攻略くんのレポートに haAku のメンシプ在籍数を出す受け口（読むだけ・Firebase のログインで守る・note攻略くんの住所だけ）
+    if (url.pathname === NOTEKORYAKU_MEMBERS_PATH) {
+      return handleNotekoryakuMembers(request, env);
     }
     // v1.35.0：案件くんの画面から案件シートを読む・足す受け口（Firebase のログインで守る・案件くんの住所だけ）
     if (url.pathname === ANKEN_SHEET_PATH) {
