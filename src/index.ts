@@ -544,6 +544,7 @@
  * v1.32.0（2026-10-22 開発部・定期と並び）：taskmaster__add_task・update_task に繰り返し（repeat）を足し、繰り返しタスクを済みにしたら TaskMaster の画面と同じく次の回を作る。案件くんのホームの返事を「単発（Naoki が並べた順）」と「定期（次の日の順）」に分け、数の「やる」から定期を外した。anken__add_period・anken__remove_period（予定を 1 件ずつ）を追加し、GPT の入口にも出した。議事録の読み取りで今日より先の日付を見出しにしない。「最後のやりとり」は今日より先の日を数えない。設定の追加 0 個。
  * v1.43.0（2026-10-25 開発部・週間レポートの口 便 2）：mindmap__activity 追加。思考整理くんで期間（最大 31 日）の日ごと・マップごとに足した枝・直した枝・消した枝を数える。読むだけ。枝に時刻が無いので、毎朝の控え（保管庫 backup/日付/supabase/mm_maps.json）を隣の日と比べ、今日（と今朝の控えがまだ無いときの昨日）は今の中身と比べる。控えの有無と時刻を日ごとに返し、控えが無い日は数えずに理由を返す。中身は src/mindmap-activity.ts（計算だけ）と src/tools-mindmap.ts、試験は test/mindmap-activity.test.ts。依頼 https://app.notion.com/p/4049c6c1c439810e9935de14c976bf39。設定の追加 0 個（BACKUP_BUCKET は既存）。
  * v1.44.0（2026-10-25 開発部・決済受け口 便 1）：B（マーケくん）が定期の課金が通った月を売上管理で入金済みにする口 SalesWriter（markPaid だけ・サービスの結びでだけ呼べる・外からは呼べない）。道具 sales_manager__mark_paid と同じ sales-manager の入口 POST /api/sm-mark-paid を呼ぶだけで、書き方は持たない。断られたときも投げずに理由を返す。src/sales-writer.ts（口）と src/sales-writer-core.ts（引数の確かめ）、試験は test/sales-writer.test.ts。依頼 https://app.notion.com/p/4049c6c1c439812595c5d1f0975e6dcb。設定の追加 0 個（合言葉は既存の SALES_MANAGER_INTERNAL_SECRET と Access の合言葉）。
+ * v1.45.0（2026-10-26 開発部・AI の利用ログ）：ai_log__add（役割・使った場所・要件を受け取り、日本時間の時刻を付けて 1 件残す）と ai_log__list（日本時間の from〜to・最大 31 日で、一覧と日ごと・役割ごと・場所ごとの回数。読むだけ）。置き場は Supabase の新しいテーブル ai_log（sql/ai_log.sql・RLS あり・ブラウザからは読めない）。GPT の入口 /anken/mcp には ai_log__add だけを足した。中身は src/tools-ai-log.ts と src/ai-log-core.ts（計算だけ）、試験は test/ai-log-core.test.ts。依頼 https://www.notion.so/4059c6c1c43981ec88d5cfdedb66132a。設定の追加 0 個（SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY は既存）。
  * v1.42.0（2026-10-25 開発部・週間レポートの口 便 3）：案件くんの次の MTG を予定表から取る。haAku につないだ非公開アドレス（メイン・UTAGE）を読み、予定の名前に案件名と「定例」の両方が入る次の回（動かした回は動かした時刻）を使う。見つからない案件は今までどおり記録から AI が書いたもの。anken__get_home の 次のMTG.when と 元、anken__list_cases の 次のMTG と 次のMTGの元・予定表、期限の無い候補の仮の期限（add_candidates・ai_update_case）、ai_update_case が書く次の MTG の日時、ai_case_context の 予定表の次の定例 に使う。今ある欄の名前と型は変えていない。予定表を何日分も 1 回で読む eventsOnDays・fetchEventsOnDays を src/ical-day.ts に足した（1 日分の eventsOnDay は読み方の部品を分けただけで動きは同じ）。中身は src/anken-calendar.ts、試験は test/anken-calendar.test.ts。依頼 https://app.notion.com/p/4049c6c1c439810e9935de14c976bf39。設定の追加 0 個。
  * v1.41.0（2026-10-25 開発部・週間レポートの口 便 1）：haAku__get_day_records の done と remaining の各タスクに、TaskMaster の時間帯 group_id と group_title（app_data/groups の題名）を足した。今ある欄の名前と型は変えていない。毎日組む記録にも入る。時間帯の欄が無い前の記録には、読むときに今のタスク（tm_tasks の groupId）から付け、記録は書き換えない（groups_note に件数）。中身は src/haaku-day-record.ts の groupsMapOf・fillGroups、試験は test/haaku-day-record.test.ts。依頼 https://app.notion.com/p/4049c6c1c439810e9935de14c976bf39。設定の追加 0 個。
  * v1.40.0（2026-10-24 開発部・思考整理くんの新しいマップ）：mindmap__create_map 追加（統括の依頼・Naoki「OK」19:56）。名前・フォルダ（名前か id・「未分類」も可）・最初の枝（省略可・mindmap__add_branches と同じ書き方で、足した枝は by: "ai"）を渡すと mm_maps に 1 行足す。書く欄と値は画面の「新しいマップを作る」（antoshia2n/mindmap の src/lib/api.js の createMap）と同じで、フォルダの中の表（mm_settings の trows）には入れない（拡張機能のパネルと同じ）。同じフォルダに同じ名前のマップがあれば作らずにそれを返す・フォルダの設定が読めなければ作らない。中身は src/tools-mindmap.ts と src/mindmap-core.ts の newMapTree・試験は test/mindmap-core.test.ts。設定の追加 0 個。
@@ -618,6 +619,7 @@ import { registerMindmapTools } from "./tools-mindmap.js";
 import { registerSozaiTools } from "./tools-sozai.js";
 import { registerAnkenTools } from "./tools-anken.js";
 import { registerXbunsekiTools } from "./tools-xbunseki.js";
+import { registerAiLogTools } from "./tools-ai-log.js";
 import { handleLineWebhook, cleanupLineInbox } from "./line-inbox.js";
 
 export interface Env {
@@ -778,6 +780,7 @@ function createMcpServer(env: Env): McpServer {
   registerSozaiTools(server, env);
   registerAnkenTools(server, env);
   registerXbunsekiTools(server, env);
+  registerAiLogTools(server, env);
   return server;
 }
 
@@ -813,6 +816,9 @@ function createAnkenMcpServer(env: Env): McpServer {
   // registerAnkenTools は server.tool しか使わない。許した名前だけを本物へ渡す
   const gate = { tool: (name: string, ...rest: unknown[]) => (ANKEN_GPT_TOOLS.has(name) ? (server.tool as any)(name, ...rest) : undefined) };
   registerAnkenTools(gate as unknown as McpServer, env);
+  // v1.45.0：GPT からも AI の利用ログを書けるように、書く道具 1 本だけを出す（読む道具は出さない）
+  const logGate = { tool: (name: string, ...rest: unknown[]) => (name === "ai_log__add" ? (server.tool as any)(name, ...rest) : undefined) };
+  registerAiLogTools(logGate as unknown as McpServer, env);
   return server;
 }
 
