@@ -7,6 +7,7 @@ import {
   handleTaskmasterUpdateTask,
   handleTaskmasterCreateProject,
   handleTaskmasterDeleteProject,
+  handleTaskmasterTemplates,
 } from "./taskmaster.js";
 import { getFirestoreToken } from "./taskmaster.js";
 import { readAllTasks, summarizeTasks } from "./taskmaster-census.js";
@@ -46,9 +47,21 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
     }
   );
 
+  // v1.46.0：タスクのテンプレ（TaskMaster の画面で Naoki が作る進め方とチェックの型）を読む
+  server.tool(
+    "taskmaster__list_templates",
+    "TaskMasterのタスクのテンプレ（同じ形の仕事の進め方・チェックの並びの型）の一覧を読む。読むだけ。taskmaster__add_task の前に呼び、足すタスクと系統が合うテンプレがあれば、その id を add_task の template_id に渡す。合うか迷うときは付けない。戻り値は { ok: true, count, templates: [{id, title, keywords, howto（頭の300字）, subtasks（名前）, priority, groupId, projectId}] }。0 件なら Naoki がまだ作っていない。",
+    {},
+    async () => {
+      const res = await handleTaskmasterTemplates(env);
+      const data = await res.json();
+      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
+    }
+  );
+
   server.tool(
     "taskmaster__add_task",
-    "TaskMasterに新しいタスクを追加する。Firestoreのtasksドキュメントにタスクを書き込む。repeat で繰り返しタスク（毎週土曜の速報など）を 1 行で入れられる。戻り値は { ok: true, task: {id, title, status, priority, deadline, groupId, projectId, repeat?} }。",
+    "TaskMasterに新しいタスクを追加する。Firestoreのtasksドキュメントにタスクを書き込む。repeat で繰り返しタスク（毎週土曜の速報など）を 1 行で入れられる。足す前に taskmaster__list_templates を見て、系統が合うテンプレがあれば template_id を付ける（迷えば付けない）。付けると TaskMaster の画面の「テンプレで足す」と同じく、テンプレの重要度・まっさらのチェック・リンク・進め方が入る。戻り値は { ok: true, task: {id, title, status, priority, deadline, groupId, projectId, repeat?, templateId?} }。template_id が見つからなければ { error: 'template not found' } で、タスクは足さない。",
     {
       title: z.string().describe("タスクのタイトル（必須）"),
       status: z.string().optional().describe("ステータス。例: \"todo\" / \"in_progress\" / \"done\"。省略時は \"todo\""),
@@ -57,6 +70,7 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
       groupId: z.string().nullable().optional().describe("グループ ID。省略・null 可"),
       projectId: z.string().nullable().optional().describe("プロジェクト ID。省略・null 可"),
       repeat: z.enum(["daily", "weekday", "weekly", "monthly"]).optional().describe("繰り返し（daily＝毎日／weekday＝平日／weekly＝毎週／monthly＝毎月）。deadline が最初の回。済みにすると次の回が自動で入る。終わりの日は持てないので、終わる回を済みにしたあとに次の回を廃案にする。省略で繰り返しなし"),
+      template_id: z.string().optional().describe("テンプレの id（taskmaster__list_templates の id）。重要度・時間帯・プロジェクトを指定しなければテンプレのものが入る。省略でテンプレなし"),
     },
     async (args) => {
       const res = await handleTaskmasterAddTask(

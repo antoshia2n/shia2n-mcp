@@ -295,6 +295,7 @@ type TaskRecord = {
   groupId: string | null;
   projectId: string | null;
   repeat?: string;
+  templateId?: string;
 };
 
 type ProjectRecord = {
@@ -324,6 +325,7 @@ function toTask(t: Item): TaskRecord {
     groupId:   nullStr(t.groupId),
     projectId: nullStr(t.projectId),
     ...(typeof t.repeat === "string" && t.repeat ? { repeat: t.repeat } : {}),
+    ...(typeof t.templateId === "string" && t.templateId ? { templateId: t.templateId } : {}),
   };
 }
 
@@ -385,6 +387,8 @@ export type AddTaskInput = {
   projectId?: string | null;
   /** 繰り返し（TaskMaster の画面と同じ値：daily／weekday／weekly／monthly。2026-10-22） */
   repeat?: string;
+  /** テンプレの id（taskmaster__list_templates の id・2026-10-26）。画面の「テンプレで足す」と同じ中身で入る */
+  template_id?: string;
 };
 
 /** TaskMaster の繰り返しの値（taskmaster の src/lib/util.js の REPEAT と同じ・2026-10-22） */
@@ -411,7 +415,9 @@ export function nextRepeatTask(t: Item, todayStr: string): Item | null {
   if (!nd) return null;
   const subs = Array.isArray(t.subtasks) ? (t.subtasks as Item[]).map((x) => ({ ...x, done: false })) : [];
   return { ...t, id: crypto.randomUUID(), deadline: nd, completed: false, status: "todo", doneAt: "", completedAt: "",
-    order: typeof t.order === "number" ? t.order + 1 : t.order, subtasks: subs };
+    order: typeof t.order === "number" ? t.order + 1 : t.order, subtasks: subs,
+    // テンプレ付きはメモ＝その回の記録なので、次の回はまっさら（画面の toggleDone と同じ・2026-10-26）
+    ...(typeof t.templateId === "string" && t.templateId ? { notes: "" } : {}) };
 }
 
 // v1.16.0：新しいタスクの形はここ 1 か所で作る（taskmaster__add_task と LINE タスク秘書が同じ形で書くため）
@@ -432,8 +438,66 @@ export function buildNewTask(body: AddTaskInput, now = new Date()): Item {
 }
 
 // v1.16.0：1 本ずつの置き場（v2）へ書く文書の中身。メモ以外の空の欄は add_task と同じ
+// v1.46.0：テンプレで足したときはチェックの並びとリンクを持つので、渡された分は残す
 export function newTaskDocFields(task: Item, notes = ""): Item {
-  return { ...task, doneAt: "", subtasks: [], notes, links: [] };
+  return { ...task, doneAt: "", subtasks: Array.isArray(task.subtasks) ? task.subtasks : [], notes, links: Array.isArray(task.links) ? task.links : [] };
+}
+
+// ─────────────────────────────────────────────
+// テンプレ（2026-10-26・TaskMaster の app_data/templates。画面の src/lib/templates.js と同じ中身）
+// ─────────────────────────────────────────────
+const PRIORITIES = ["high", "medium", "low"];
+const tplStr = (v: unknown) => (typeof v === "string" ? v : "");
+const subTitleOf = (s: unknown): string => {
+  if (typeof s === "string") return s;
+  if (s && typeof s === "object") { const o = s as Item; return tplStr(o.title) || tplStr(o.text) || tplStr(o.name); }
+  return "";
+};
+
+/** テンプレの一覧を読む。文書が無ければ空（画面でまだ 1 つも作っていない） */
+export async function readTemplates(token: string, uid: string): Promise<Item[]> {
+  const doc = await fsGetOrNull(token, `users/${uid}/app_data/templates`);
+  if (!doc) return [];
+  return expandValue(doc).filter((t) => t && typeof t.id === "string" && !t.archived);
+}
+
+/** Claude に見せる形（進め方は頭の 300 字・チェックは名前だけ） */
+export function templateSummary(t: Item) {
+  const subs = Array.isArray(t.subtasks) ? t.subtasks.map(subTitleOf).filter((x) => x.trim()) : [];
+  const howto = tplStr(t.howto);
+  return {
+    id: tplStr(t.id), title: tplStr(t.title), keywords: tplStr(t.keywords),
+    howto: howto.length > 300 ? howto.slice(0, 300) + "…" : howto,
+    subtasks: subs, priority: PRIORITIES.includes(tplStr(t.priority)) ? tplStr(t.priority) : "medium",
+    groupId: tplStr(t.groupId) || null, projectId: tplStr(t.projectId) || null,
+  };
+}
+
+/** 新しいタスクにテンプレの中身を入れる（画面の fieldsFromTemplate と同じ：重要度・まっさらのチェック・リンク・進め方の写し。
+ *  重要度・時間帯・プロジェクトは呼んだ側が指定していればそちらを使う） */
+export function withTemplate(task: Item, tpl: Item, body: AddTaskInput): Item {
+  const subs = (Array.isArray(tpl.subtasks) ? tpl.subtasks : []).map(subTitleOf).filter((x) => x.trim())
+    .map((title) => ({ id: crypto.randomUUID().slice(0, 7), title, done: false }));
+  const links = (Array.isArray(tpl.links) ? tpl.links : [])
+    .filter((l): l is Item => !!l && typeof l === "object" && typeof (l as Item).url === "string" && !!(l as Item).url)
+    .map((l) => ({ url: tplStr(l.url), label: tplStr(l.label) }));
+  const out: Item = { ...task, templateId: tplStr(tpl.id), howto: tplStr(tpl.howto), subtasks: subs, links };
+  if (body.priority === undefined && PRIORITIES.includes(tplStr(tpl.priority))) out.priority = tplStr(tpl.priority);
+  if (body.groupId === undefined && tplStr(tpl.groupId)) out.groupId = tplStr(tpl.groupId);
+  if (body.projectId === undefined && tplStr(tpl.projectId)) out.projectId = tplStr(tpl.projectId);
+  return out;
+}
+
+export async function handleTaskmasterTemplates(env: Env): Promise<Response> {
+  const uid = env.NAOKI_UID;
+  if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) return Response.json({ error: "env not configured" }, { status: 500 });
+  let token: string;
+  try { token = await getFirestoreToken(env); } catch (e) { return Response.json({ error: "Firebase auth failed", detail: String(e) }, { status: 500 }); }
+  try {
+    const list = await readTemplates(token, uid);
+    const rows = list.map(templateSummary).sort((a, b) => a.title.localeCompare(b.title, "ja"));
+    return Response.json({ ok: true, count: rows.length, templates: rows });
+  } catch (e) { return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 }); }
 }
 
 export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<Response> {
@@ -465,7 +529,16 @@ export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<R
   if (layout === "migrating") return Response.json(MIGRATING, { status: 503 });
 
   // 新規タスクオブジェクト（v1.16.0：形は buildNewTask の 1 か所）
-  const newTask = buildNewTask(body);
+  let newTask = buildNewTask(body);
+
+  // v1.46.0：テンプレを指定したら、その中身を入れる。見つからなければ足さずに知らせる（黙ってテンプレ無しで入れない）
+  if (body.template_id !== undefined && body.template_id !== null && body.template_id !== "") {
+    let tpl: Item | undefined;
+    try { tpl = (await readTemplates(token, uid)).find((t) => t.id === body.template_id); }
+    catch (e) { return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 }); }
+    if (!tpl) return Response.json({ error: "template not found", detail: "taskmaster__list_templates の id を渡してください。タスクは足していません" }, { status: 400 });
+    newTask = withTemplate(newTask, tpl, body);
+  }
 
   try {
     if (layout === "v2") {
