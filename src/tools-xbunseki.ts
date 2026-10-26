@@ -53,7 +53,10 @@ async function loadBase(env: Env) {
 }
 const accName = (accounts: Row[], h: string) => accounts.find(a => a.handle === h)?.name || h;
 const metricsOut = (m: Row | null | undefined) => Object.fromEntries(Object.entries(METRICS).filter(([k]) => m && m[k] != null).map(([k, l]) => [l, m![k]]));
-const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), ...(i.grade ? { 見込み: i.grade } : {}), いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
+const VERDICT: Record<string, string> = { keep: "続ける", fix: "直す", stop: "やめる" };
+// KPI（作業 36）：{ items: [{ l, goal, m, now }] }。m があれば実績は自分の数字のその欄、無ければ手入力の now
+const kpiOut = (k: Row | null | undefined, metrics: Row | null | undefined) => { const xs: Row[] = Array.isArray(k?.items) ? k!.items : []; return xs.length ? xs.map(x => ({ 名前: x.l || "", 目標: x.goal ?? "", 実績: x.m ? (metrics?.[x.m] ?? null) : (x.now ?? ""), 実績の出どころ: x.m ? (METRICS[x.m] || x.m) : "手入力" })) : null; };
+const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), ...(i.grade ? { 見込み: i.grade } : {}), ...(i.verdict ? { 振り返り: VERDICT[i.verdict] || i.verdict } : {}), いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
 
 export function registerXbunsekiTools(server: McpServer, env: Env): void {
 
@@ -101,7 +104,9 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
         return asMcpTextResult({
           ok: true, id: w.id, 週: w.label, 月: w.month, 方針: w.policy || "", タイムラインの気づき: w.timeline || "", 全体の仮説: w.overall || "", 自分の数字: metricsOut(w.metrics), 行動,
           相手: obs.map(o => { const a = accounts.find(x => x.handle === o.account); return { 名前: accName(accounts, o.account), "@": o.account, 自分: !!a?.is_self, ラベル: a?.labels || [], 評価: o.score, 施策の特徴: featOf(o), 分析: o.ana || "", 仮説: o.use_text || "", ...(Object.keys(layersOf(o.ly)).length ? { 層ごとに書いた分: layersOf(o.ly) } : {}) }; }),
-          この回に足した仮説: items.map(itemOut),
+          この回に足した仮説: items.filter(i => i.kind !== "pl").map(itemOut),
+          今週の計画: items.filter(i => i.kind === "pl").map(itemOut),
+          ...(kpiOut(w.kpi, w.metrics) ? { 今週のKPI: kpiOut(w.kpi, w.metrics) } : {}),
           住所: APP_URL,
         });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
@@ -150,7 +155,10 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
         const items = await sbGet(env, `/xa_items?select=*&${own}&order=sort.asc`);
         const live = items.filter(i => inMonth(i, m) && !(i.archived && m >= String(i.until_month || "")));
         const byLayer = LAYERS.map(([id, name]) => ({ 層: name, ...Object.fromEntries(Object.entries(KINDS).map(([k, l]) => [l, live.filter(i => i.layer === id && i.kind === k).map(i => i.body)])) }));
-        return asMcpTextResult({ ok: true, 月: m, 件数: live.length, 層ごと: byLayer, ...(include_archived ? { アーカイブ: items.filter(i => i.archived).map(itemOut) } : {}), 住所: APP_URL });
+        // 月の方針と KPI（作業 36）。表がまだ無いときは出さない。KPI の実績は、その月の週の自分の数字のうち新しいもの
+        let mon: Row | null = null, mm: Row = {};
+        try { mon = (await sbGet(env, `/xa_months?select=*&${own}&month=eq.${m}`))[0] || null; (await sbGet(env, `/xa_weeks?select=metrics,sort&${own}&month=eq.${m}&order=sort.asc`)).forEach((w: Row) => Object.entries(w.metrics || {}).forEach(([k, v]) => { if (v !== null && v !== "") mm[k] = v; })); } catch (_) { mon = null; }
+        return asMcpTextResult({ ok: true, 月: m, ...(mon ? { 月の方針: mon.policy || "", ...(kpiOut(mon.kpi, mm) ? { 月のKPI: kpiOut(mon.kpi, mm) } : {}) } : {}), 件数: live.length, 層ごと: byLayer, ...(include_archived ? { アーカイブ: items.filter(i => i.archived).map(itemOut) } : {}), 住所: APP_URL });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
