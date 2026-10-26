@@ -2,10 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { KINDS, LAYERS, METRICS, type Row, actsSummary, inMonth, itemsFor, layerName, layersOf, mergeMetrics, pickWeek, weekDays } from "./xbunseki-core.js";
+import { KINDS, LAYERS, METRICS, type Row, actsSummary, featOf, inMonth, itemsFor, layerName, layersOf, mergeMetrics, pickWeek, weekDays } from "./xbunseki-core.js";
 
 /**
- * X分析くん（x-koryaku.shia2n.jp・Naoki の X の定点観測）の道具。
+ * X攻略くん（x-koryaku.shia2n.jp・Naoki の X の定点観測）の道具。
  * Supabase の xa_weeks・xa_obs・xa_accounts・xa_items を直接見る（思考整理くんの道具と同じ形）。
  * 命名規約：xbunseki__<action>
  *
@@ -60,7 +60,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 1. xbunseki__list_weeks ─────────────────────────────────────
   server.tool(
     "xbunseki__list_weeks",
-    "X分析くんの回（週）の一覧を新しい順で返す。各回の方針・全体の仮説の有無・書いた相手の数・自分の数字。1 回の中身は xbunseki__get_week で読む。戻り値: { ok, 件数, 一覧: [{ id, 週, 月, 方針, 全体の仮説, 書いた相手, 自分の数字 }] }。",
+    "X攻略くんの回（週）の一覧を新しい順で返す。各回の方針・全体の仮説の有無・書いた相手の数・自分の数字。1 回の中身は xbunseki__get_week で読む。戻り値: { ok, 件数, 一覧: [{ id, 週, 月, 方針, 全体の仮説, 書いた相手, 自分の数字 }] }。",
     { limit: z.number().int().min(1).max(60).optional().describe("何回分まで（省略時 12）") },
     async ({ limit }) => {
       try {
@@ -76,7 +76,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 2. xbunseki__get_week ───────────────────────────────────────
   server.tool(
     "xbunseki__get_week",
-    "X分析くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（X分析くんパネルで押した数を、その回の行動の項目ごとに。1 日の目標・達成・日ごと・確かめる仮説・相手ごと）・相手ごとの評価と 5 つの層（アカウントの目的・意図／運用のスタイル／運用の内容／投稿のスタイル／投稿の内容）と分析結果・生かすなら・この回に足した仮説。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
+    "X攻略くんの 1 回（週）の中身を返す：方針・タイムラインの気づき・全体の仮説・自分の数字・行動（サイドパネルで押した数を、その回の行動の項目ごとに。1 日の目標・達成・日ごと・確かめる仮説・相手ごと）・相手ごとの評価と、書く窓の 3 段（施策の特徴・分析・仮説。2026-10-26 から。前の回の「層に分ける前のメモ」は施策の特徴、「分析結果」は分析、「生かすなら」は仮説として返す。層ごとに書いた分があれば添える）・この回に足した仮説。週は「10月4週」「2026-10 10月4週」「今週」か id。省略でいちばん新しい回。全体の仮説に問いを返す・生徒向けに言い回しを整えるときの材料。",
     { week: z.string().max(40).optional().describe("「10月4週」「今週」など。省略でいちばん新しい回") },
     async ({ week }) => {
       try {
@@ -100,7 +100,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
         obs.sort((a, b) => (order.get(a.account) ?? 999) - (order.get(b.account) ?? 999));
         return asMcpTextResult({
           ok: true, id: w.id, 週: w.label, 月: w.month, 方針: w.policy || "", タイムラインの気づき: w.timeline || "", 全体の仮説: w.overall || "", 自分の数字: metricsOut(w.metrics), 行動,
-          相手: obs.map(o => { const a = accounts.find(x => x.handle === o.account); return { 名前: accName(accounts, o.account), "@": o.account, 自分: !!a?.is_self, ラベル: a?.labels || [], 評価: o.score, 層: layersOf(o.ly), ...(o.memo ? { 層に分ける前のメモ: o.memo } : {}), 分析結果: o.ana || "", 生かすなら: o.use_text || "" }; }),
+          相手: obs.map(o => { const a = accounts.find(x => x.handle === o.account); return { 名前: accName(accounts, o.account), "@": o.account, 自分: !!a?.is_self, ラベル: a?.labels || [], 評価: o.score, 施策の特徴: featOf(o), 分析: o.ana || "", 仮説: o.use_text || "", ...(Object.keys(layersOf(o.ly)).length ? { 層ごとに書いた分: layersOf(o.ly) } : {}) }; }),
           この回に足した仮説: items.map(itemOut),
           住所: APP_URL,
         });
@@ -111,7 +111,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 3. xbunseki__get_account ────────────────────────────────────
   server.tool(
     "xbunseki__get_account",
-    "X分析くんで見ている相手 1 人の記録を返す：基本情報（どんな人か・ジャンル・誘導先・フォロワー数・メモ）・ラベル・回ごとの評価と層と分析結果（新しい順）・その人が根拠になっている打ち手。分析を書く前に「前の自分」を呼び出すときに使う（前に同じことを書いた／逆を書いた、を知らせる材料）。handle は @ を付けても付けなくてもよい。名前でも引ける。",
+    "X攻略くんで見ている相手 1 人の記録を返す：基本情報（どんな人か・ジャンル・誘導先・フォロワー数・メモ）・ラベル・回ごとの評価と施策の特徴・分析・仮説（新しい順）・その人が根拠になっている打ち手。分析を書く前に「前の自分」を呼び出すときに使う（前に同じことを書いた／逆を書いた、を知らせる材料）。handle は @ を付けても付けなくてもよい。名前でも引ける。",
     { handle: z.string().max(60).describe("相手の @ID か名前（例: ushi_butyo／うし部長）"), limit: z.number().int().min(1).max(60).optional().describe("何回分まで（省略時 12）") },
     async ({ handle, limit }) => {
       try {
@@ -129,7 +129,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
         return asMcpTextResult({
           ok: true, 名前: a.name, "@": a.handle, 自分: !!a.is_self, 休んでいる: !!a.archived, ラベル: a.labels || [],
           基本情報: { どんな人か: info.who || "", ジャンル: info.genre || "", 誘導先: info.dest || "", フォロワー数: info.fol ?? null, フォロワー数を入れた日: info.fol_at || "", メモ: info.memo || "" },
-          記録: recs.map(o => ({ 週: wk.get(o.week_id)!.label, 評価: o.score, 層: layersOf(o.ly), ...(o.memo ? { 層に分ける前のメモ: o.memo } : {}), 分析結果: o.ana || "", 生かすなら: o.use_text || "" })),
+          記録: recs.map(o => ({ 週: wk.get(o.week_id)!.label, 評価: o.score, 施策の特徴: featOf(o), 分析: o.ana || "", 仮説: o.use_text || "", ...(Object.keys(layersOf(o.ly)).length ? { 層ごとに書いた分: layersOf(o.ly) } : {}) })),
           根拠の打ち手: items.filter(i => (i.src || []).some((s: Row) => s.account === a.handle)).map(itemOut),
           X: `https://x.com/${a.handle}`,
         });
@@ -140,7 +140,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 4. xbunseki__get_strategy ───────────────────────────────────
   server.tool(
     "xbunseki__get_strategy",
-    "X分析くんの「戦略と計画」を、5 つの層ごとに 分析 → 仮説 → 戦略 → 計画 の順で返す。month（例 2026-10）の時点で使っている打ち手。省略で今月。include_archived で、やめた打ち手（アーカイブ）も一緒に返す。",
+    "X攻略くんの「戦略と計画」を、5 つの層ごとに 分析 → 仮説 → 戦略 → 計画 の順で返す。month（例 2026-10）の時点で使っている打ち手。省略で今月。include_archived で、やめた打ち手（アーカイブ）も一緒に返す。",
     { month: z.string().regex(/^\d{4}-\d{2}$/).optional().describe("例 2026-10。省略で今月（日本時間）"), include_archived: z.boolean().optional() },
     async ({ month, include_archived }) => {
       try {
@@ -158,7 +158,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
   // ─── 5. xbunseki__put_metrics ────────────────────────────────────
   server.tool(
     "xbunseki__put_metrics",
-    "X分析くんの 1 回（週）に、自分のアカウントの数字を写す（X のアナリティクスのスクショを Claude が読んだときに使う）。渡した欄だけを入れ、ほかの欄・層・分析結果には触らない。数字は実物の写しだけ（推定しない）。欄：imp 平均インプ／fol フォロワー／kiji 記事の本数／qt 引用された数。週は省略で今週（無ければ止まる）。戻り値: { ok, 週, 前, 後, 直した欄 }。",
+    "X攻略くんの 1 回（週）に、自分のアカウントの数字を写す（X のアナリティクスのスクショを Claude が読んだときに使う）。渡した欄だけを入れ、ほかの欄・層・分析結果には触らない。数字は実物の写しだけ（推定しない）。欄：imp 平均インプ／fol フォロワー／kiji 記事の本数／qt 引用された数。週は省略で今週（無ければ止まる）。戻り値: { ok, 週, 前, 後, 直した欄 }。",
     {
       week: z.string().max(40).optional().describe("「10月4週」「今週」など。省略で今週"),
       imp: z.number().min(0).optional(), fol: z.number().min(0).optional(), kiji: z.number().min(0).optional(), qt: z.number().min(0).optional(),
@@ -167,7 +167,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
       try {
         const { own, weeks } = await loadBase(env);
         const w = pickWeek(weeks, week ?? "今週");
-        if (!w) return asMcpTextResult({ ok: false, message: `週「${week ?? "今週"}」が X分析くんにまだありません。画面で開くと今週のページができます`, 住所: APP_URL });
+        if (!w) return asMcpTextResult({ ok: false, message: `週「${week ?? "今週"}」が X攻略くんにまだありません。画面で開くと今週のページができます`, 住所: APP_URL });
         const { next, changed } = mergeMetrics(w.metrics, { imp, fol, kiji, qt });
         if (!changed.length) return asMcpTextResult({ ok: true, 週: w.label, 直した欄: [], 前: metricsOut(w.metrics), message: "入れる数字がありませんでした（同じ値か、欄の指定が無い）" });
         const rows = await sbPatch(env, `/xa_weeks?id=eq.${w.id}&${own}&select=id,metrics`, { metrics: next, updated_at: new Date().toISOString() });

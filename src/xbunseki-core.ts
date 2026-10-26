@@ -30,6 +30,16 @@ export function layersOf(ly: Row | null | undefined): Record<string, string> {
   return out;
 }
 
+/**
+ * 施策の特徴（2026-10-26 v1.47.0）：画面の書く窓の 1 段目と同じ文。
+ * memo（施策の特徴）があればそのまま。無い回は、層ごとに書いた分を「層の名前：文」で並べる（書いたまま・要約しない）
+ */
+export function featOf(o: Row | null | undefined): string {
+  const memo = String(o?.memo ?? "").trim();
+  if (memo) return String(o?.memo);
+  return Object.entries(layersOf(o?.ly)).map(([k, v]) => `${k}：${v}`).join("\n");
+}
+
 /** 日本時間の今日から、画面と同じ「10月4週」の名前を作る */
 export function currentWeekLabel(now = new Date()): { month: string; label: string } {
   const d = new Date(now.getTime() + 9 * 3600 * 1000);
