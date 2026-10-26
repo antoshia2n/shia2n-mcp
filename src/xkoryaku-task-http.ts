@@ -7,7 +7,7 @@
  *   POST /xkoryaku/tasks         … { title, projectId, deadline } を 1 件。taskmaster__add_task と同じ 1 本（handleTaskmasterAddTask）を通す
  *
  * 守り方は TaskMaster の受け口（haaku-task-link-http.ts）・案件くんの受け口（anken-sheet-http.ts）と同じ
- *   ・呼べるのは X攻略くんの住所（https://x-koryaku.shia2n.jp）から開いた画面だけ
+ *   ・呼べるのは X攻略くんの住所（https://x-koryaku.shia2n.jp）と note攻略くんの住所（https://note-koryaku.shia2n.jp・v1.52.0 から）から開いた画面だけ
  *   ・Firebase のログインの札を確かめ、Naoki 本人（NAOKI_UID）のときだけ読む・書く
  *   ・失敗は黙らずに理由の文を返す（画面はそのまま出す）
  */
@@ -17,10 +17,13 @@ import { expandValue, fsGet, getFirestoreToken, handleTaskmasterAddTask, readLay
 import { readTasksById } from "./taskmaster-by-id.js";
 
 export const XKORYAKU_ORIGIN = "https://x-koryaku.shia2n.jp";
+// v1.52.0（2026-10-26 開発部・note攻略くん 3便目）：note攻略くんの戦略と計画からも同じ口で送る。中身の決まりは同じ
+export const NOTE_KORYAKU_ORIGIN = "https://note-koryaku.shia2n.jp";
+export const TASKS_ORIGINS: readonly string[] = [XKORYAKU_ORIGIN, NOTE_KORYAKU_ORIGIN];
 export const XKORYAKU_TASKS_PATH = "/xkoryaku/tasks";
 
-const headers = { "Access-Control-Allow-Origin": XKORYAKU_ORIGIN, "Vary": "Origin", "Cache-Control": "no-store" };
-const reply = (body: unknown, status = 200) => Response.json(body, { status, headers });
+// 返す先は、呼んできた住所（許した 2 つのどちらか）だけ
+const headersFor = (origin: string) => ({ "Access-Control-Allow-Origin": origin, "Vary": "Origin", "Cache-Control": "no-store" });
 
 export type SendBody = { title: string; projectId: string | null; deadline: string | null };
 
@@ -64,7 +67,10 @@ async function activeProjects(env: Env, token: string): Promise<Proj[]> {
 }
 
 export async function handleXkoryakuTasks(request: Request, env: Env): Promise<Response> {
-  if (request.headers.get("Origin") !== XKORYAKU_ORIGIN) return Response.json({ error: "origin_not_allowed" }, { status: 403 });
+  const origin = request.headers.get("Origin") || "";
+  if (!TASKS_ORIGINS.includes(origin)) return Response.json({ error: "origin_not_allowed" }, { status: 403 });
+  const headers = headersFor(origin);
+  const reply = (body: unknown, status = 200) => Response.json(body, { status, headers });
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: { ...headers,
       "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Authorization,Content-Type", "Access-Control-Max-Age": "300" } });
