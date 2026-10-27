@@ -32,6 +32,7 @@
  */
 
 import type { Env } from "./index.js";
+import { getFirestoreToken, FIRESTORE_BASE } from "./taskmaster.js";
 
 const FIREBASE_PROJECT_ID = "gen-lang-client-0371348401";
 
@@ -73,6 +74,48 @@ async function sbGet(env: Env, path: string): Promise<Row[]> {
     throw new Error(`Supabase GET ${res.status}: ${await res.text()}`);
   }
   return (await res.json()) as Row[];
+}
+
+export async function syncPortalPremium(env: Env, uid: string, memberId: string): Promise<string> {
+  try {
+    const subscriptions = await sbGet(env,
+      `/member_subscription?select=id&member_id=eq.${memberId}&plan=eq.premium&status=eq.active&limit=1`,
+    );
+    if (subscriptions.length === 0) return "not_premium";
+
+    const token = await getFirestoreToken(env);
+    const url = FIRESTORE_BASE + "/users/" + uid;
+    const profileRes = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (profileRes.status === 404) return "no_profile";
+    if (!profileRes.ok) return "error";
+    const profile = await profileRes.json() as {
+      fields?: { role?: { stringValue?: string }; paymentStatus?: { stringValue?: string } };
+    };
+    const role = profile.fields?.role?.stringValue;
+    const paymentStatus = profile.fields?.paymentStatus?.stringValue;
+    if (role === "admin" || paymentStatus === "premium" || paymentStatus === "monitor") {
+      return "already";
+    }
+
+    const patchRes = await fetch(
+      url + "?updateMask.fieldPaths=paymentStatus&updateMask.fieldPaths=updatedAt",
+      {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fields: {
+            paymentStatus: { stringValue: "premium" },
+            updatedAt: { timestampValue: new Date().toISOString() },
+          },
+        }),
+      },
+    );
+    return patchRes.ok ? "synced" : "error";
+  } catch {
+    return "error";
+  }
 }
 
 async function sbPatch(env: Env, path: string, body: Row): Promise<Row[]> {
@@ -408,6 +451,8 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
     result: "ok", app, detail: { entitlements: keys.length },
   });
 
+  const premium_sync = await syncPortalPremium(env, user.uid, memberId);
+
   return Response.json(
     {
       ok: true,
@@ -421,6 +466,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
       },
       entitlements: keys,
       apps,
+      premium_sync,
       matched_by: matchedBy,
       logged,
     },
@@ -472,7 +518,7 @@ export async function handleGateAttempts(request: Request, env: Env): Promise<Re
 // ───────── GET /gate/diag（立っているかだけ・値は返さない） ─────────
 
 export async function handleGateDiag(env: Env): Promise<Response> {
-  const out: Record<string, unknown> = { ok: true, version: "gate v1.3.0" };
+  const out: Record<string, unknown> = { ok: true, version: "gate v1.4.0" };
 
   out.supabase_configured = Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
   out.firebase_project_id = FIREBASE_PROJECT_ID;
