@@ -17,7 +17,7 @@
  * 対象は 3 つ。どれか 1 つが壊れても、残りから取り出せる形にする。
  *   1. Supabase   … 全アプリのデータ（環境変数の「値」だけ除く）
  *   2. Notion     … 経営 OS の 7 つの管理表（履歴が 7 日で消えるため）
- *   3. Firestore  … TaskMaster のタスクとプロジェクト
+ *   3. Firestore  … TaskMaster のタスクとプロジェクト・ポータルの利用者（users のまるごと・2026-10-28 から）
  *
  * 置き場は Cloudflare の保管庫（R2）。Supabase の外に置くことが要件なので、
  * Supabase Storage には置かない。
@@ -56,6 +56,7 @@ import { runAndRecord } from "./cron-log.js";
  * 下の 12 本は仕分けで「履歴」の印が付いたもの。量だけが増え、
  * 消えても事業は止まらない。控えの大きさの 69% をこの 12 本が占めていた。
  * 2026-10-27：daily_logs は記録くんの毎日の記録（Naoki の 1 日 1 行）で履歴ではないため、外す一覧から戻した
+ * 2026-10-28：mn_view_logs は学ぶくんの生徒の「進み具合」「連続日数」のもとなので、外す一覧から戻した（Naoki「OK」08:46・会員公開の関門 6）
  *
  * 表そのものは消さない。控えに入れないだけ。
  * 外したことは目録にも残す（黙って欠けるのを防ぐため）。
@@ -71,7 +72,6 @@ const EXCLUDED_TABLES = new Set<string>([
   "mm_import_log",
   "cnt_notion_sync_log",
   "dv_deploy_logs",
-  "mn_view_logs",
   "xm_analytics",
 ]);
 
@@ -428,6 +428,30 @@ async function backupOneFirestoreDoc(
     budget.used += 1;
     const token = await getFirestoreToken(env);
 
+    // 2026-10-28：ポータルの利用者（users の表の段の文書をまるごと。下の段は写さない）
+    if (name === "users") {
+      const docs: unknown[] = [];
+      let pageToken = "";
+      for (let i = 0; i < 20; i++) {
+        budget.used += 1;
+        const r = await fetch(
+          `${FIRESTORE_BASE}/users?pageSize=300${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!r.ok) {
+          return { key, ok: false, rows: null, total: null, truncated: false, error: `users の取得に失敗（${r.status}）` };
+        }
+        const j = (await r.json()) as { documents?: unknown[]; nextPageToken?: string };
+        docs.push(...(j.documents ?? []));
+        if (!j.nextPageToken) { pageToken = ""; break; }
+        pageToken = j.nextPageToken;
+      }
+      const body = JSON.stringify({ collection: "users", documents: docs });
+      budget.used += 1;
+      await env.BACKUP_BUCKET.put(key, body, { httpMetadata: { contentType: "application/json; charset=utf-8" } });
+      return { key, ok: true, rows: docs.length, total: docs.length, truncated: pageToken !== "", parts: 1, bytes: byteSize(body) };
+    }
+
     // タスクが 1 本ずつの置き場（tm_tasks）に移っていたら、そちらを全部写す（2026-10-02 開発部）
     if (name === "tasks") {
       budget.used += 1;
@@ -529,6 +553,8 @@ async function buildItems(
     ...NOTION_DATA_SOURCES.map((s) => ({ kind: "notion" as const, name: s.name, id: s.id })),
     { kind: "firestore" as const, name: "tasks" },
     { kind: "firestore" as const, name: "projects" },
+    // 2026-10-28 開発部（ポータルの関門 6）：利用者の利用区分（role・paymentStatus・allowedApps）。それまでは Naoki の分しか控えに無かった
+    { kind: "firestore" as const, name: "users" },
   ];
 
   return { items, 表の一覧の取得, 外した表 };
