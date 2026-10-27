@@ -389,6 +389,20 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
 
   const keys = [...new Set(ents.map((e) => String(e.key)))];
 
+  // 5. v1.55.0：権利 × 開くものの対応表（member_access・作業 47）から、この人が開けるものを返す。
+  //    アプリは権利の名前を持たず、apps に自分の名前があるかだけを見る（組み合わせは表 1 か所で変える）。
+  //    表が読めなかったときは apps を null にし、入場の判定（ok）は変えない（entitlements で動いているアプリを止めないため）
+  let apps: string[] | null = [];
+  const askKeys = keys.filter((k) => /^[a-z0-9_]{2,60}$/.test(k));
+  if (askKeys.length) {
+    try {
+      const rows = await sbGet(env, `/member_access?select=target&entitlement_key=in.(${askKeys.join(",")})`);
+      apps = [...new Set(rows.map((r) => String(r.target)))].sort();
+    } catch {
+      apps = null;
+    }
+  }
+
   const logged = await logAttempt(env, {
     auth_uid: user.uid, email: verifiedEmail, matched_by: matchedBy, member_id: memberId,
     result: "ok", app, detail: { entitlements: keys.length },
@@ -406,6 +420,7 @@ export async function handleGateResolve(request: Request, env: Env): Promise<Res
         legacy_id: member.legacy_shr_id ?? null,
       },
       entitlements: keys,
+      apps,
       matched_by: matchedBy,
       logged,
     },
@@ -457,7 +472,7 @@ export async function handleGateAttempts(request: Request, env: Env): Promise<Re
 // ───────── GET /gate/diag（立っているかだけ・値は返さない） ─────────
 
 export async function handleGateDiag(env: Env): Promise<Response> {
-  const out: Record<string, unknown> = { ok: true, version: "gate v1.2.0" };
+  const out: Record<string, unknown> = { ok: true, version: "gate v1.3.0" };
 
   out.supabase_configured = Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
   out.firebase_project_id = FIREBASE_PROJECT_ID;
