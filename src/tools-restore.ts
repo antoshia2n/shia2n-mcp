@@ -15,6 +15,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Env } from "./index.js";
+import { getFirestoreToken } from "./taskmaster.js";
+import { restoreFirestoreUsers } from "./restore-firestore.js";
 
 /** 1 回で書き戻せる上限。これを超える表は断る */
 const MAX_ROWS = 5000;
@@ -67,9 +69,18 @@ export function registerRestoreTools(server: McpServer, env: Env): void {
         .string()
         .optional()
         .describe("控えの日付（YYYY-MM-DD）。省略すると今日"),
+      source: z
+        .enum(["supabase", "firestore"])
+        .optional()
+        .describe("控えの種類（省略時 supabase）。firestore は table に users だけを受ける（ポータルの利用者）。試しの置き場 users_restore_test に書き戻して数え、数えたら消す"),
     },
-    async ({ table, date }) => {
+    async ({ table, date, source }) => {
       const 対象日 = date ?? jstDate(new Date());
+      // 2026-10-28 開発部（ポータルの関門 6）：Firestore の利用者の戻す試し
+      if (source === "firestore") {
+        const out = await restoreFirestoreUsers({ env, table, date: 対象日, getToken: () => getFirestoreToken(env) });
+        return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
+      }
       const key = `backup/${対象日}/supabase/${table}.json`;
       const 戻す先 = `${table}${TEST_SUFFIX}`;
 
