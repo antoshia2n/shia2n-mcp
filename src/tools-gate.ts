@@ -54,6 +54,11 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Env } from "./index.js";
 import { handleGateAttempts, handleGateDiag } from "./gate.js";
+import { getGoogleTokenForScope } from "./google-token.js";
+import { planBind, BIND_REASON_TEXT } from "./gate-bind.js";
+
+/** Firebase の計画（src/gate.ts・src/cron-backup.ts と同じ値） */
+const FIREBASE_PROJECT_ID = "gen-lang-client-0371348401";
 
 type Row = Record<string, unknown>;
 
@@ -84,7 +89,7 @@ async function sbSelect(env: Env, path: string): Promise<Row[]> {
 /** 書いた行そのものを返させる（何が変わったかを目で見るため） */
 async function sbWrite(
   env: Env,
-  method: "POST" | "DELETE",
+  method: "POST" | "DELETE" | "PATCH",
   path: string,
   body?: Row,
 ): Promise<{ status: number; rows: Row[]; raw: string }> {
@@ -556,6 +561,68 @@ export function registerGateTools(server: McpServer, env: Env): void {
         });
       } catch (e) {
         return errorResult("gate__member_create", e);
+      }
+    },
+  );
+
+  // ============================================================
+  // gate__bind_login（2026-10-28 開発部・統括の依頼 00:05・Naoki「OK」00:34）
+  // 登録のメールと違う Google で入る人を、その人として入れる。中身の決め方は src/gate-bind.ts
+  // ============================================================
+  server.tool(
+    "gate__bind_login",
+    "登録のメールと違う Google アカウントで入る会員を、その人として入れるようにする。google_email の Google のログインの番号を Firebase から引き、会員の行（member_id）の空の auth_uid に書く。次から門番は番号でその人を見つける。1 人につき Google 1 つ：auth_uid がもう埋まっている行・その番号がほかの会員に結ばれているときは書かない。その Google で一度もログインしていない人は Firebase に居ないので、先に本人に一度ログインしてもらう（門番は not_found で断るが、利用者は Firebase に残る）。既定は下見（preview: true）で、実際に書くときだけ preview を false にする。返すのは member_id とメールのドメインと結んだかどうかだけ。",
+    {
+      member_id: z.string().uuid().describe("結ぶ会員（member の id）"),
+      google_email: z.string().min(3).describe("本人が入るのに使う Google のメール"),
+      reason: z.string().min(1).describe("なぜ結ぶか（例：登録は Yahoo・Google は Gmail）"),
+      preview: z.boolean().optional().describe("true で書かずに結果だけ返す（省略時 true）"),
+    },
+    async ({ member_id, google_email, reason, preview }) => {
+      const dryRun = preview !== false;
+      const gmail = google_email.trim().toLowerCase();
+      const domain = gmail.includes("@") ? gmail.split("@")[1] : null;
+      try {
+        const [member] = await sbSelect(env, `/member?select=id,auth_uid&id=eq.${encodeURIComponent(member_id)}&limit=1`);
+
+        const token = await getGoogleTokenForScope(env, "https://www.googleapis.com/auth/identitytoolkit");
+        const res = await fetch(`https://identitytoolkit.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/accounts:lookup`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ email: [gmail] }),
+        });
+        const body = await res.text();
+        if (!res.ok) return textResult({ ok: false, error: "lookup_failed", where: "accounts:lookup", status: res.status, detail: body.slice(0, 300) });
+        const users = ((JSON.parse(body) as { users?: { localId?: string }[] }).users ?? []);
+        const uid = users.length === 1 && users[0].localId ? String(users[0].localId) : null;
+
+        const holders = uid ? await sbSelect(env, `/member?select=id&auth_uid=eq.${encodeURIComponent(uid)}&limit=5`) : [];
+        const plan = planBind(member ? { id: String(member.id), auth_uid: (member.auth_uid as string | null) ?? null } : null, uid, holders.map((h) => ({ id: String(h.id) })));
+
+        if (!plan.ok) {
+          return textResult({ ok: true, applied: false, member_id, google_domain: domain, reason_not_applied: plan.reason, explain: BIND_REASON_TEXT[plan.reason], other_member_id: plan.detail ?? null });
+        }
+        if (plan.action === "already") {
+          return textResult({ ok: true, applied: false, member_id, google_domain: domain, already_bound: true, note: "もう結ばれている。何も書いていない" });
+        }
+        if (dryRun) {
+          return textResult({ ok: true, preview: true, applied: false, member_id, google_domain: domain, would_write: "auth_uid（いまは空）", reason, note: "実際に書くときは preview を false にして同じ呼び出しをする" });
+        }
+
+        const wrote = await sbWrite(env, "PATCH", `/member?id=eq.${encodeURIComponent(member_id)}&auth_uid=is.null`, { auth_uid: plan.uid, updated_at: new Date().toISOString() });
+        const [after] = await sbSelect(env, `/member?select=id,auth_uid&id=eq.${encodeURIComponent(member_id)}&limit=1`);
+        const bound = !!after && String(after.auth_uid ?? "") === plan.uid;
+        return textResult({
+          ok: bound,
+          applied: bound,
+          member_id,
+          google_domain: domain,
+          http_status: wrote.status,
+          reason,
+          note: bound ? "結んだ。次からその Google でログインすると、門番は番号でこの会員を見つける（入場の記録は ok・matched_by は auth_uid）" : "書けなかった。行の auth_uid が先に埋まった可能性がある。下見からやり直す",
+        });
+      } catch (e) {
+        return errorResult("gate__bind_login", e);
       }
     },
   );
