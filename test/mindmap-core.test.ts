@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addItems, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, sameName, titleOf, toOutline, type MNodes } from "../src/mindmap-core.ts";
+import { addItems, splitLink, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, sameName, titleOf, toOutline, type MNodes } from "../src/mindmap-core.ts";
 
 const base = (): MNodes => ({
   r: { id: "r", text: "26年の戦略", children: ["a", "b"], parent: null, collapsed: false, color: null, side: null },
@@ -81,4 +81,32 @@ test("名前：改行は空白に・同じ名前は空白の違いを見ない",
   assert.ok(sameName("26年11月3日｜リサーチ", " 26年11月3日｜リサーチ "));
   assert.ok(sameName("a  b", "a b"));
   assert.ok(!sameName("26年11月3日｜リサーチ", "26年11月10日｜リサーチ"));
+});
+
+test("行の末尾のリンク：(リンク …)・素の URL・get_map の行をそのまま書き戻す", () => {
+  const it = parseBullets([
+    "- 自己紹介のポスト (リンク https://x.com/antoshia2n/status/1)",
+    "- 伸ばし方の例 https://x.com/antoshia2n/status/2",
+    "  - 子の枝 (AI) (リンク https://x.com/a/status/3) {n1a2b3c4}",
+    "- https://x.com/a/status/4",
+    "- 文の途中の https://x.com/a/status/5 は外さない",
+    "- [x] 済みの枝（リンク https://example.com/a）",
+    "- 壊れたリンク (リンク javascript:alert(1))",
+  ].join("\n"));
+  assert.deepEqual(it.map((x) => [x.text, x.link]), [
+    ["自己紹介のポスト", "https://x.com/antoshia2n/status/1"],
+    ["伸ばし方の例", "https://x.com/antoshia2n/status/2"],
+    ["https://x.com/a/status/4", "https://x.com/a/status/4"],
+    ["文の途中の https://x.com/a/status/5 は外さない", undefined],
+    ["済みの枝", "https://example.com/a"],
+    ["壊れたリンク (リンク javascript:alert(1))", undefined],
+  ]);
+  assert.deepEqual([it[1].children[0].text, it[1].children[0].link], ["子の枝", "https://x.com/a/status/3"]);
+  assert.equal(it[4].check, "done");
+  const n = base(); const made = addItems("r", n, "r", it.slice(0, 1));
+  assert.equal(n[made[0]].link, "https://x.com/antoshia2n/status/1");
+  const o = toOutline("r", n); assert.match(o, /- 自己紹介のポスト \(AI\) \(リンク https:\/\/x\.com\/antoshia2n\/status\/1\) \{/);
+  // 書き戻しても同じ文字とリンクになる
+  const line = o.split("\n").find((l) => l.includes("自己紹介のポスト"))!;
+  assert.deepEqual(splitLink(line.replace(/^\s*- /, "")), { text: "自己紹介のポスト", link: "https://x.com/antoshia2n/status/1" });
 });
