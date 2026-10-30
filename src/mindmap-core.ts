@@ -77,7 +77,32 @@ export function findRequests(root: string, nodes: MNodes) {
 }
 
 /** 箇条書きの文字（字下げ 2 つか全角の空白 1 つで 1 段・「・」「-」・[ ] でチェック）を木の並びにする */
-export type Item = { text: string; check?: "todo" | "done"; memo?: string; children: Item[] };
+export type Item = { text: string; check?: "todo" | "done"; memo?: string; link?: string; children: Item[] };
+
+/**
+ * 行の末尾からリンクを取り出す（2026-10-30 シアニン担当の依頼）。
+ * 「… (リンク https://…)」（mindmap__get_map が返す形）と、末尾の素の https://… の両方を link にして、文字からは外す。
+ * get_map の行をそのまま書き戻せるよう、末尾の (AI)・(TaskMaster に入れた)・(画像)・{id} の印も外す（枝の印は道具が付け直す）。
+ * 行が URL だけのときは、画面と同じく文字も URL のまま残す。
+ */
+const TAIL_MARKS = /\s*(?:\(AI\)|\(TaskMaster に入れた\)|\(画像\)|\{[A-Za-z0-9_-]{1,40}\})$/;
+const TAIL_LINK = /\s*[(（]リンク\s+(https?:\/\/[^\s)）]+)\s*[)）]$/i;
+const TAIL_URL = /(?:^|\s+)(https?:\/\/\S+)$/i;
+const okUrl = (u: string) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) && u.length <= 2000 ? x.href : null; } catch { return null; } };
+export function splitLink(line: string): { text: string; link?: string } {
+  let t = line.trim(), link: string | undefined;
+  for (let i = 0; i < 8; i++) {
+    const before = t;
+    t = t.replace(TAIL_MARKS, "").trim();
+    if (!link) {
+      const m = t.match(TAIL_LINK) || t.match(TAIL_URL);
+      const u = m && okUrl(m[1]);
+      if (u) { link = u; const rest = t.slice(0, t.length - m![0].length).trim(); t = rest || m![1]; }
+    }
+    if (t === before) break;
+  }
+  return link ? { text: t, link } : { text: t };
+}
 export function parseBullets(text: string): Item[] {
   const top: Item[] = []; const stack: { ind: number; item: Item }[] = [];
   for (const raw of String(text || "").split(/\r?\n/)) {
@@ -87,8 +112,8 @@ export function parseBullets(text: string): Item[] {
     let check: Item["check"];
     const ck = t.match(CHECK);
     if (ck) { check = /x/i.test(ck[1] || "") ? "done" : "todo"; t = t.slice(ck[0].length); }
-    t = t.trim(); if (!t) continue;
-    const item: Item = { text: t.slice(0, 500), children: [] }; if (check) item.check = check;
+    const sp = splitLink(t); t = sp.text.trim(); if (!t) continue;
+    const item: Item = { text: t.slice(0, 500), children: [] }; if (check) item.check = check; if (sp.link) item.link = sp.link;
     while (stack.length && stack[stack.length - 1].ind >= ind) stack.pop();
     (stack.length ? stack[stack.length - 1].item.children : top).push(item);
     stack.push({ ind, item });
@@ -112,6 +137,7 @@ export function addItems(root: string, nodes: MNodes, parent: string, items: Ite
       const n: MNode = { id, text: it.text, children: [], parent: pid, collapsed: false, color: top ? PAL[k % PAL.length] : null, side: top ? (k % 2 ? "l" : "r") : null, by: "ai" };
       if (it.check) n.check = it.check;
       if (it.memo) n.memo = it.memo.slice(0, 5000);
+      if (it.link) n.link = it.link;
       nodes[id] = n; nodes[pid].children.push(id); made.push(id);
       put(id, it.children);
     }
