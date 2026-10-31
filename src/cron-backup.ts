@@ -73,6 +73,9 @@ const EXCLUDED_TABLES = new Set<string>([
   "cnt_notion_sync_log",
   "dv_deploy_logs",
   "xm_analytics",
+  // 2026-10-31：旧の members を閉じた（members_retired_20261030・読みの許可を外した）ときに残った見え方。控えが読むと 403 で落ちる。
+  // 元の行は members_archive_20261030 と members_retired_20261030 が控えに入るので、外しても復旧に要るものは欠けない
+  "members_decrypted",
 ]);
 
 /** 1 回の取得で取る行数。これを超える表は part に分けて書き出す */
