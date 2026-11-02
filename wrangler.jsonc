@@ -31,6 +31,14 @@
   ],
   // 2026-08-05 追加：データの控えの置き場。
   // Supabase の外に置くことが要件なので Supabase Storage は使わない。
+  // 2026-11-02：zoom-to-youtube の録画の一覧を読む（ArchiveApi・RPC。外の住所を通らない）
+  "services": [
+    {
+      "binding": "ZOOM_ARCHIVE",
+      "service": "zoom-to-youtube",
+      "entrypoint": "ArchiveApi"
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "BACKUP_BUCKET",

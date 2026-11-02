@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.62.0（2026-11-02 開発部・経理系の依頼 1 便 1）：zoom_archive__list 追加（Zoom の録画の自動保管の一覧。録画ごとに R2・YouTube・Zoom から消したか・名前の付け方を並べ、失敗は別の欄で返す）。中身は zoom-to-youtube 第18版の ArchiveApi（RPC）が持ち、こちらはサービスの結び ZOOM_ARCHIVE で呼ぶだけ。src/tools-zoom-archive.ts・wrangler.jsonc の services。設定の追加 0 個（合言葉は要らない）。zoom-to-youtube を先に本番へ出すこと。
  * v1.61.0（2026-11-02 開発部・経理系の依頼 2）：sales_manager__set_paid_date 追加（入金済みの行に入金日だけを入れる・直す。入金済みの印と金額には触らない。未入金は not_paid で断る）。書き方は sales-manager 側の POST /api/sm-set-paid-date が持つ。src/tools-sales-manager-payments.ts のみ。設定の追加 0 個。
  * v1.60.0（2026-10-31 開発部）：毎日の控えの外す一覧に members_decrypted を足した（10/30 に旧の members を閉じて読みの許可を外したため、10/31 の控えが 403 で 1 件落ちていた）。src/cron-backup.ts・src/version.ts。設定の追加 0 個。
  * v1.59.0（2026-10-28 開発部・すでに生徒に開いている 2 本の穴）：①毎日の控えに Firestore の利用者（users の表の段をまるごと・ポータルの利用区分）を足した（cron-backup.ts）。②学ぶくんの mn_view_logs（生徒の進み具合・連続日数のもと）を外す一覧から戻した（Naoki「OK」08:46）。③munikis__restore_test に source: "firestore"（table は users だけ）。試しの置き場 users_restore_test に書き戻して数え、数えたら消す（src/restore-firestore.ts・試験は test/restore-firestore.test.ts）。設定の追加 0 個。
@@ -585,6 +586,7 @@ import { registerPayKunTools } from "./tools-pay-kun.js";
 import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerSalesManagerPaymentTools } from "./tools-sales-manager-payments.js";
+import { registerZoomArchiveTools } from "./tools-zoom-archive.js";
 import { registerSalesManagerLedgerTools } from "./tools-sales-manager-ledger.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerContentSheetTools } from "./tools-content-sheet.js";
@@ -649,6 +651,8 @@ export interface Env {
   OAUTH_KV: KVNamespace;
   // データの控えの置き場（R2）。wrangler.jsonc の r2_buckets で結び付ける
   BACKUP_BUCKET: R2Bucket;
+  // 2026-11-02：zoom-to-youtube の録画の一覧（ArchiveApi・RPC）。wrangler.jsonc の services で結び付ける
+  ZOOM_ARCHIVE?: { list(): Promise<unknown> };
   // Zeus
   ZEUS_API_BASE: string;
   ZEUS_INTERNAL_SECRET: string;
@@ -771,6 +775,7 @@ function createMcpServer(env: Env): McpServer {
   registerTaskmasterTools(server, env);
   registerSalesManagerTools(server, env);
   registerSalesManagerPaymentTools(server, env);
+  registerZoomArchiveTools(server, env);
   registerSalesManagerLedgerTools(server, env);
   registerContentOsTools(server, env);
   registerContentSheetTools(server, env);
