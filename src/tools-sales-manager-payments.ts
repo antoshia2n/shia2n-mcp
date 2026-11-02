@@ -159,4 +159,31 @@ export function registerSalesManagerPaymentTools(server: McpServer, env: Env): v
       return asMcpTextResult(data);
     }
   );
+
+  // 2026-11-02 追加（v1.61.0・経理系の依頼 2）：入金済みの行に入金日だけを入れる・直す。
+  server.tool(
+    "sales_manager__set_paid_date",
+    "sales-manager で、契約 1 件の指定した月の入金済みの行に、入金日だけを入れる（空欄を埋める・違う日を直す）。書く道具。書くのは入金日の 1 列だけで、入金済みの印と金額（予定の額・実際に入った額）には触らない。その月の行がちょうど 1 行で、入金済みのときだけ書く。0 行（not_found。入金のタブに予定として出ているだけの月も含む）・2 行以上（ambiguous）・未入金（not_paid。入金済みにするのは sales_manager__mark_paid）のときは何も書かずに断る（断るときは理由と該当の行を返す）。同じ呼び出しを 2 回送っても結果は同じ（2 回目は changed が false）。返り値: { ok, changed（入金日が変わったか）, before: 書く前の行, after: 書いたあとの行 }（行の形は sales_manager__mark_paid と同じ）",
+    {
+      contract_id: z
+        .union([z.string(), z.number()])
+        .describe("契約の番号。sales_manager__list_payments などで見える contract_id をそのまま渡す。必須"),
+      year_month: z.string().describe("どの月の支払いか。YYYY-MM の形（例: 2026-10）。必須"),
+      paid_date: z.string().describe("入金日。YYYY-MM-DD の形（例: 2026-10-02）。通帳に記帳された日。必須"),
+    },
+    async (args) => {
+      checkYearMonth(args.year_month);
+      checkDate(args.paid_date);
+      const contractId = String(args.contract_id).trim();
+      if (!contractId) {
+        throw new Error("contract_id が空です。契約の番号をそのまま渡してください");
+      }
+      const data = await callSalesManager(env, "POST", "/api/sm-set-paid-date", {
+        contract_id: contractId,
+        year_month: args.year_month,
+        paid_date: args.paid_date,
+      });
+      return asMcpTextResult(data);
+    }
+  );
 }
