@@ -56,12 +56,13 @@ async function haakuMembers(env: Env, from: string, to: string): Promise<Map<str
   const kpis = await read("os_kpis");
   const kpi = Array.isArray(kpis) ? (kpis as any[]).find((k) => String(k?.title || "").trim() === MEM_KPI_TITLE) : null;
   if (!kpi?.id) return out;
-  for (let y = +from.slice(0, 4); y <= +to.slice(0, 4); y++) {
+  // 手入れは毎日ではないので、期間の前の年から読み、その日までで最後に入れた値を使えるようにする
+  for (let y = +from.slice(0, 4) - 1; y <= +to.slice(0, 4); y++) {
     const daily = await read(`os_daily_${y}`);
     if (!daily || typeof daily !== "object") continue;
     for (const [d, rec] of Object.entries(daily as Record<string, any>)) {
       const v = rec?.kpiValues?.[kpi.id];
-      if (d >= from && d <= to && typeof v === "number" && Number.isFinite(v) && v !== 0) out.set(d, v);
+      if (d <= to && typeof v === "number" && Number.isFinite(v) && v !== 0) out.set(d, v);
     }
   }
   return out;
@@ -94,6 +95,13 @@ export function registerNoteCountTools(server: McpServer, env: Env): void {
           try { refreshed = (await recordNoteSnap(env)).detail; } catch (e) { refreshed = `取れませんでした：${e instanceof Error ? e.message : String(e)}`; }
         }
         const mem = await haakuMembers(env, a, b).catch(() => new Map<string, number>());
+        const memDays = [...mem.keys()].sort();
+        // その日までで最後に入れた haAku の値（2026-11-04：手入れの無い日が null になっていた）
+        const memOn = (d: string): { v: number; at: string } | null => {
+          let at = "";
+          for (const k of memDays) { if (k <= d) at = k; else break; }
+          return at ? { v: mem.get(at) as number, at } : null;
+        };
         const rows = [];
         for (const d of days) {
           const obj = await env.BACKUP_BUCKET.get(KEY(d));
@@ -101,8 +109,8 @@ export function registerNoteCountTools(server: McpServer, env: Env): void {
           const m = s?.members ?? null;
           rows.push({
             日: d, フォロワー: s?.followers ?? null,
-            メンシプ: m ?? mem.get(d) ?? null,
-            メンシプの出どころ: m != null ? "note" : mem.has(d) ? "haAku（手入れ）" : null,
+            メンシプ: m ?? memOn(d)?.v ?? null,
+            メンシプの出どころ: m != null ? "note" : memOn(d) ? `haAku（手入れ・${memOn(d)?.at} に入れた値）` : null,
             取った時刻: s ? new Date(Date.parse(s.at) + 9 * 3600 * 1000).toISOString().slice(0, 16).replace("T", " ") : null,
             ...(s && Object.keys(s.found || {}).length ? { 見つけた欄: s.found } : {}),
           });
