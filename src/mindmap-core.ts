@@ -22,6 +22,25 @@ export type MNodes = Record<string, MNode>;
 
 export const PAL = ["b1", "b2", "b3", "b4", "b5", "b6", "b7"];
 export const ID_RE = /^[\w-]{1,64}$/;
+
+/**
+ * 2026-11-03：get_map に渡されたものを読み分ける（コンテンツ担当の申し送り 2）。
+ * マップの番号そのもの／https://mindmap.shia2n.jp/m/番号／https://mindmap.shia2n.jp/s/共有の印 の 3 通り。
+ * 分からなければ null
+ */
+export function parseMapRef(input: string): { kind: "id" | "share"; value: string } | null {
+  const t = String(input || "").trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) {
+    let u: URL;
+    try { u = new URL(t); } catch { return null; }
+    if (!/(^|\.)mindmap\.shia2n\.jp$/i.test(u.hostname)) return null;
+    const m = u.pathname.match(/^\/(m|s)\/([\w-]{1,64})\/?$/);
+    if (!m) return null;
+    return { kind: m[1] === "s" ? "share" : "id", value: m[2] };
+  }
+  return ID_RE.test(t) ? { kind: "id", value: t } : null;
+}
 const BULLET = /^(・\s*|[-*•]\s+|\d+[.)]\s+)/;
 const CHECK = /^(?:\[( |x|X)?\]|［(\s?)］|「」|【】)\s*/;
 

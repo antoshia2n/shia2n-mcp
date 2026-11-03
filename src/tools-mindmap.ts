@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import {
-  type MNodes, ID_RE, addItems, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, pathOf, sameName, titleOf, toOutline,
+  type MNodes, ID_RE, addItems, parseMapRef, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, pathOf, sameName, titleOf, toOutline,
 } from "./mindmap-core.js";
 import { reduceRows, countDays, datesBetween, nextDate, type Snap } from "./mindmap-activity.js";
 
@@ -167,14 +167,23 @@ export function registerMindmapTools(server: McpServer, env: Env): void {
   // ─── 2. mindmap__get_map ─────────────────────────────────────────
   server.tool(
     "mindmap__get_map",
-    "思考整理くんのマップ 1 枚を、入れ子の箇条書きの文字で返す。各行の末尾の {id} が枝の印で、mindmap__add_branches の足し先や mindmap__mark_done の宛先に使う。行の印：[ ] 未完了のチェック／[x] 済み／(AI) Claude が足してまだ Naoki が残すか決めていない枝。メモと「AI への指示」は次の行に字下げして出る。from_node を渡すとその枝から下だけ。戻り値: { ok, id, 名前, 版, 最終更新, 住所, 箇条書き, AI への指示 }。",
+    "思考整理くんのマップ 1 枚を、入れ子の箇条書きの文字で返す。map_id には共有リンク（/s/…）やマップの住所（/m/…）も渡せる。各行の末尾の {id} が枝の印で、mindmap__add_branches の足し先や mindmap__mark_done の宛先に使う。行の印：[ ] 未完了のチェック／[x] 済み／(AI) Claude が足してまだ Naoki が残すか決めていない枝。メモと「AI への指示」は次の行に字下げして出る。from_node を渡すとその枝から下だけ。戻り値: { ok, id, 名前, 版, 最終更新, 住所, 箇条書き, AI への指示 }。",
     {
-      map_id: z.string().max(64).describe("マップの id（mindmap__list_maps の id）"),
+      map_id: z.string().max(300).describe("マップの id（mindmap__list_maps の id）。マップの住所（https://mindmap.shia2n.jp/m/…）や共有リンク（https://mindmap.shia2n.jp/s/…）をそのまま渡してもよい"),
       from_node: z.string().max(64).optional().describe("この枝から下だけ読む（{id}）"),
     },
     async ({ map_id, from_node }) => {
       try {
-        const r = await getFull(env, map_id);
+        // 2026-11-03：共有リンクとマップの住所も受ける（読むだけ。探すのは Naoki のマップの中だけ）
+        const ref = parseMapRef(map_id);
+        if (!ref) return asMcpTextResult({ ok: false, message: "map_id の形が違います（mindmap__list_maps の id か、mindmap.shia2n.jp の /m/… か /s/… の住所を渡してください）" });
+        let id = ref.value;
+        if (ref.kind === "share") {
+          const hit = await sbGet(env, `/${MAP_TABLE}?select=id&share_token=eq.${encodeURIComponent(ref.value)}&${own}&limit=1`);
+          if (!hit[0]?.id) return asMcpTextResult({ ok: false, message: "この共有リンクのマップは見つかりませんでした（共有を止めたか、リンクが違います）" });
+          id = String(hit[0].id);
+        }
+        const r = await getFull(env, id);
         if (!r) return asMcpTextResult({ ok: false, message: "このマップは見つかりませんでした" });
         const nodes = (r.nodes || {}) as MNodes;
         return asMcpTextResult({
