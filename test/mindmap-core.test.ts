@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addItems, splitLink, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, sameName, titleOf, toOutline, type MNodes } from "../src/mindmap-core.ts";
+import { addItems, parseMapRef, splitLink, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, sameName, titleOf, toOutline, type MNodes } from "../src/mindmap-core.ts";
 
 const base = (): MNodes => ({
   r: { id: "r", text: "26年の戦略", children: ["a", "b"], parent: null, collapsed: false, color: null, side: null },
@@ -109,4 +109,14 @@ test("行の末尾のリンク：(リンク …)・素の URL・get_map の行�
   // 書き戻しても同じ文字とリンクになる
   const line = o.split("\n").find((l) => l.includes("自己紹介のポスト"))!;
   assert.deepEqual(splitLink(line.replace(/^\s*- /, "")), { text: "自己紹介のポスト", link: "https://x.com/antoshia2n/status/1" });
+});
+
+test("parseMapRef：番号・/m/ の住所・/s/ の共有リンクを読み分ける（2026-11-03）", () => {
+  assert.deepEqual(parseMapRef("abc-123"), { kind: "id", value: "abc-123" });
+  assert.deepEqual(parseMapRef("https://mindmap.shia2n.jp/m/abc-123"), { kind: "id", value: "abc-123" });
+  assert.deepEqual(parseMapRef(" https://mindmap.shia2n.jp/s/Xy_z-9AbC/ "), { kind: "share", value: "Xy_z-9AbC" });
+  assert.equal(parseMapRef("https://example.com/s/abc"), null);
+  assert.equal(parseMapRef("https://mindmap.shia2n.jp/other/abc"), null);
+  assert.equal(parseMapRef("a b"), null);
+  assert.equal(parseMapRef(""), null);
 });
