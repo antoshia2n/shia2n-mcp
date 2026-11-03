@@ -194,3 +194,47 @@ export function markChecks(nodes: MNodes, ids: string[], done: boolean): { 変�
   }
   return { 変えた: changed, 見つからない: missing };
 }
+
+/**
+ * 2026-11-03 mindmap__move_branch（コンテンツ担当の申し送り 3）：Claude が足した枝（by: "ai"）だけを、同じマップの別の枝の下へ動かす。
+ * 下の枝はいっしょに動く。nodes は書き換える。中心の直下へ動かすときは、画面と同じく色を順に回し左右を交互に置く。
+ * index を渡すとその位置（0 が先頭）、省略で最後。動かせないときは理由の文字を throw する
+ */
+export function moveNode(root: string, nodes: MNodes, id: string, to: string, index?: number): void {
+  const n = nodes[id];
+  if (!n) throw new Error("動かす枝が見つかりません（mindmap__get_map の {id} を使ってください）");
+  if (id === root) throw new Error("中心の枝は動かせません");
+  if (n.by !== "ai") throw new Error("Naoki が書いた枝は動かせません（動かせるのは (AI) の印の枝だけ）");
+  if (!nodes[to]) throw new Error("動かし先の枝が見つかりません（mindmap__get_map の {id} を使ってください）");
+  for (let cur: string | null = to, g = 0; cur && g < 500; cur = nodes[cur]?.parent ?? null, g++) {
+    if (cur === id) throw new Error("動かす枝の下（子や孫）へは動かせません");
+  }
+  const from = n.parent && nodes[n.parent] ? nodes[n.parent] : null;
+  if (from) from.children = from.children.filter((c) => c !== id);
+  const kids = nodes[to].children;
+  const at = index == null ? kids.length : Math.max(0, Math.min(kids.length, Math.floor(index)));
+  kids.splice(at, 0, id);
+  n.parent = to;
+  if (to === root) { const k = at; n.color = PAL[k % PAL.length]; n.side = k % 2 ? "l" : "r"; }
+  else { n.color = null; n.side = null; }
+  if (nodes[to].collapsed) nodes[to].collapsed = false;
+}
+
+/** 設定（mm_settings の data）の中の表。画面の normTables と同じ見分け方 */
+export type MTable = { id: string; fid: string; name: string };
+export function tablesOf(data: any): MTable[] {
+  const a = Array.isArray(data?.tables) ? data.tables : [];
+  return a.filter((t: any) => t && ID_RE.test(String(t.id || "")) && typeof t.name === "string" && t.fid)
+    .map((t: any) => ({ id: String(t.id), fid: String(t.fid), name: t.name }));
+}
+/** 表の名前か id を、そのフォルダの中から探す。無ければ null */
+export function findTable(data: any, fid: string, table: string): MTable | null {
+  const q = String(table || "").trim();
+  return tablesOf(data).find((t) => t.fid === fid && (t.id === q || t.name.trim() === q)) ?? null;
+}
+/** 設定の trows にマップを表へ入れる 1 行を置く（列の値は残す）。data は書き換える */
+export function putTrow(data: any, mapId: string, tableId: string): void {
+  if (!data.trows || typeof data.trows !== "object") data.trows = {};
+  const r = data.trows[mapId];
+  data.trows[mapId] = { t: tableId, v: r && r.v && typeof r.v === "object" ? r.v : {} };
+}
