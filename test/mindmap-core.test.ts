@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addItems, parseMapRef, splitLink, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, sameName, titleOf, toOutline, type MNodes } from "../src/mindmap-core.ts";
+import { addItems, parseMapRef, moveNode, findTable, putTrow, splitLink, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, sameName, titleOf, toOutline, type MNodes } from "../src/mindmap-core.ts";
 
 const base = (): MNodes => ({
   r: { id: "r", text: "26年の戦略", children: ["a", "b"], parent: null, collapsed: false, color: null, side: null },
@@ -119,4 +119,34 @@ test("parseMapRef：番号・/m/ の住所・/s/ の共有リンクを読み分�
   assert.equal(parseMapRef("https://mindmap.shia2n.jp/other/abc"), null);
   assert.equal(parseMapRef("a b"), null);
   assert.equal(parseMapRef(""), null);
+});
+
+test("moveNode：AI の枝だけ動かす・子や孫へは動かさない・中心の直下は色と左右（2026-11-03）", () => {
+  const nodes: MNodes = {
+    r: { id: "r", text: "中心", children: ["a", "b"], parent: null },
+    a: { id: "a", text: "Naoki", children: ["c"], parent: "r", color: "b1", side: "r" },
+    b: { id: "b", text: "AI 1", children: ["d"], parent: "r", color: "b2", side: "l", by: "ai" },
+    c: { id: "c", text: "Naoki の子", children: [], parent: "a" },
+    d: { id: "d", text: "AI 2", children: [], parent: "b", by: "ai" },
+  };
+  moveNode("r", nodes, "b", "a", 0);
+  assert.deepEqual(nodes.a.children, ["b", "c"]);
+  assert.deepEqual(nodes.r.children, ["a"]);
+  assert.equal(nodes.b.parent, "a"); assert.equal(nodes.b.color, null); assert.equal(nodes.b.side, null);
+  assert.deepEqual(nodes.b.children, ["d"]);
+  assert.throws(() => moveNode("r", nodes, "c", "r"), /Naoki/);
+  assert.throws(() => moveNode("r", nodes, "b", "d"), /子や孫/);
+  assert.throws(() => moveNode("r", nodes, "r", "a"), /中心/);
+  moveNode("r", nodes, "d", "r");
+  assert.deepEqual(nodes.r.children, ["a", "d"]); assert.equal(nodes.d.color, "b2"); assert.equal(nodes.d.side, "l");
+});
+
+test("findTable と putTrow：同じフォルダの表だけ・列の値は残す（2026-11-03）", () => {
+  const data: any = { tables: [{ id: "t1", fid: "f1", name: "攻略" }, { id: "t2", fid: "f2", name: "攻略" }], trows: { m1: { t: null, v: { c1: "済み" } } } };
+  assert.equal(findTable(data, "f1", "攻略")?.id, "t1");
+  assert.equal(findTable(data, "f2", " 攻略 ")?.id, "t2");
+  assert.equal(findTable(data, "f1", "t2"), null);
+  putTrow(data, "m1", "t1"); putTrow(data, "m2", "t1");
+  assert.deepEqual(data.trows.m1, { t: "t1", v: { c1: "済み" } });
+  assert.deepEqual(data.trows.m2, { t: "t1", v: {} });
 });
