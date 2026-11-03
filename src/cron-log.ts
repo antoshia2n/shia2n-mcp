@@ -60,6 +60,8 @@ export const KNOWN_JOBS = [
   "haaku_day_record",
   // 2026-10-14 追加（v1.16.0）：LINE タスク秘書の後片付け（毎日 JST 1:00）
   "line_inbox_cleanup",
+  // 2026-11-03 追加（v1.66.0）：note のフォロワー数とメンシプ人数を毎朝 1 回残す（JST 07:30）
+  "note_counts",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];

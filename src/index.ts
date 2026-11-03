@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.66.0（2026-11-03 開発部・コンテンツ担当の申し送り 4）：note__counts 追加（シアニンの note の日ごとのフォロワー数とメンシプ人数）。毎朝 JST 07:30 に note の /api/v2/creators/shia2n を読み、保管庫の note-counts/日付.json に残す（cron-log の note_counts）。メンシプ人数が note から取れない日は haAku の KPI「メンシプ在籍数」の値を出どころつきで返す。src/note-counts.ts・src/index.ts・src/cron-log.ts・src/version.ts。試験は test/note-counts.test.ts。設定の追加 0 個（BACKUP_BUCKET は既存）。
  * v1.65.0（2026-11-03 開発部・コンテンツ担当の申し送り 3）：思考整理くんの道具を 3 つ足した。mindmap__move_branch（Claude が足した (AI) の枝だけを同じマップの別の枝の下へ動かす）・mindmap__set_table（マップをそのフォルダの中の表へ入れる。mm_settings の trows。3 分以内に画面で保存された設定には書かない・読んだときの updated_at の行だけ書く）・mindmap__delete_map（confirm が無ければ下見だけ。Naoki の「消してよい」のあと confirm: true）。mindmap__create_map に table を足した。決め方は src/mindmap-core.ts の moveNode・findTable・putTrow、試験は test/mindmap-core.test.ts。設定の追加 0 個。
  * v1.64.0（2026-11-03 開発部・コンテンツ担当の申し送り 2）：mindmap__get_map の map_id に、共有リンク（https://mindmap.shia2n.jp/s/共有の印）とマップの住所（/m/番号）も渡せるようにした。共有の印は mm_maps の share_token を Naoki の行の中だけで引く。読むだけ。src/mindmap-core.ts の parseMapRef・src/tools-mindmap.ts・src/version.ts。試験は test/mindmap-core.test.ts。設定の追加 0 個。
  * v1.63.0（2026-11-02 開発部・経理系の依頼 1 便 4）：zoom_archive__search（録画を探す・多くても 50 件・文字起こしの中の言葉でも）と zoom_archive__delete（R2 から 1 本消す・confirm が無ければ下見だけ）を足した。zoom_archive__list は既定で数と失敗だけを返す（include_rows で全部の行）。中身は zoom-to-youtube 第21版の ArchiveApi が持つ。src/tools-zoom-archive.ts のみ。設定の追加 0 個。zoom-to-youtube を先に本番へ出すこと。
@@ -639,6 +640,7 @@ import { registerInspectTools } from "./tools-inspect.js";
 import { registerImpactTools } from "./tools-impact.js";
 import { registerLineInboxTools } from "./tools-line-inbox.js";
 import { registerMindmapTools } from "./tools-mindmap.js";
+import { registerNoteCountTools, recordNoteSnap } from "./note-counts.js";
 import { registerSozaiTools } from "./tools-sozai.js";
 import { registerAnkenTools } from "./tools-anken.js";
 import { registerXbunsekiTools } from "./tools-xbunseki.js";
@@ -808,6 +810,7 @@ function createMcpServer(env: Env): McpServer {
   registerImpactTools(server, env);
   registerLineInboxTools(server, env);
   registerMindmapTools(server, env);
+  registerNoteCountTools(server, env);
   registerSozaiTools(server, env);
   registerAnkenTools(server, env);
   registerXbunsekiTools(server, env);
@@ -1151,6 +1154,11 @@ export default {
             return { count: r.counts.done, detail: r.detail };
           });
         })());
+      }
+
+      // 2026-11-03（v1.66.0）：note のフォロワー数とメンシプ人数を毎朝 1 回残す（UTC 22:30 = JST 07:30・控えの 04:00〜06:45 のあと）
+      if (utcMinute === 30 && utcHour === 22) {
+        tasks.push(runAndRecord(env, "note_counts", async () => await recordNoteSnap(env)));
       }
 
       // 2026-10-14（v1.16.0）：LINE タスク秘書の後片付け（UTC 16:00 = JST 1:00 のみ・鍵が入っているときだけ）
