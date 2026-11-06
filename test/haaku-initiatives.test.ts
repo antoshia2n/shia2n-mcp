@@ -136,3 +136,19 @@ test("プレビューは書かず、承認のあと取り組みの文書だけ�
   assert.equal((docs.get("os_initiatives_v1")!.value as any).records[0].revisions[0].number, 1);
   assert.equal(docs.get("os_kpis")!.version, "2026-10-11T09:00:00.000Z", "KPI の文書は書いていない");
 });
+
+test("v1.67.0：見るだけの KPI（viewKpiIds）を持てる。結ぶ KPI と重なれば断る・省けば前の版のまま", () => {
+  const kpis2 = [...kpis, { id: "kpi_mendan_01", title: "新規面談獲得", unit: "名", monthlyTarget: 5 }];
+  const st = () => ({ os_roadmap_v1: null, os_initiatives_v1: null, os_kpis: kpis2 } as Record<string, unknown>);
+  assert.throws(() => buildManagementChangePlan(make([milestone, { ...first, data: { ...first.data, viewKpiIds: JSON.stringify(["kpi_imp_0001"]) } }]), st(), at), /両方には置けません/);
+  assert.throws(() => buildManagementChangePlan(make([milestone, { ...first, data: { ...first.data, viewKpiIds: JSON.stringify(["kpi_nothing"]) } }]), st(), at), /見るだけの KPI が見つかりません/);
+  const base = buildManagementChangePlan(make([milestone, first]), st(), at).next;
+  const upd = { kind: "initiative", request_id: "init-view-000001", data: { initiativeNo: "01", linkedKpiIds: "[]", viewKpiIds: JSON.stringify(["kpi_imp_0001", "kpi_mendan_01"]), reason: "KPI は 1 事業に 1 本（2026-11-06）" } };
+  const p1 = buildManagementChangePlan(make([upd]), base, at);
+  const r1 = (p1.next.os_initiatives_v1 as any).records[0].revisions.at(-1);
+  assert.deepEqual(r1.linkedKpiIds, []); assert.deepEqual(r1.viewKpiIds, ["kpi_imp_0001", "kpi_mendan_01"]);
+  assert.match(String(p1.steps[0].after?.viewKpiIds), /新規面談獲得/);
+  const p2 = buildManagementChangePlan(make([{ kind: "initiative", request_id: "init-view-000002", data: { initiativeNo: "01", progress: "進めた", reason: "進捗" } }]), p1.next, at);
+  assert.deepEqual((p2.next.os_initiatives_v1 as any).records[0].revisions.at(-1).viewKpiIds, ["kpi_imp_0001", "kpi_mendan_01"], "省けば前の版のまま");
+  assert.throws(() => buildManagementChangePlan(make([{ ...upd, request_id: "init-view-000003" }]), p1.next, at), /変わっていません/);
+});

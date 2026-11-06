@@ -34,6 +34,8 @@ export interface HaakuMilestone {
   linksBad: number;
   /** v1.19.0：所属フェーズの id（os_roadmap_v1 の phases[].id・空可） */
   phaseId: string;
+  /** v1.67.0：達成した時刻（haAku の画面が書く・空可）。get_home の「今週に達成した状態」を見分けるだけに使う */
+  doneAt: string;
 }
 
 /** v1.19.0：フェーズ（os_roadmap_v1 の phases）。書くのは preview／apply の kind phase と haAku の画面 */
@@ -181,6 +183,7 @@ export function parseHaakuRoadmap(input: unknown): HaakuRoadmap | null {
       ...(() => { const l = milestoneLinksOf(r.links); return { links: l.links, linksBad: l.bad }; })(),
       // v1.19.0：ほかの道具（get_home・期限の写し）も通る所なので、形が違っても止めずに空にする
       phaseId: typeof r.phaseId === "string" ? r.phaseId : "",
+      doneAt: typeof r.doneAt === "string" ? r.doneAt : "",
     };
   });
   if (new Set(milestones.map(x => x.id)).size !== milestones.length) {

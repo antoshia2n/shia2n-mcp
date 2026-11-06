@@ -9,6 +9,8 @@
  *   版：{ id, number, savedAt, requestId, source, reason, name, stage, overview,
  *         ideals, conditions, kpis, approaches, plans, obstacles（どれも [{ text, theme }]・theme は空を許す）,
  *         progress, linkedMilestoneIds, linkedKpiIds, taskmasterProjectId }
+ *   viewKpiIds（v1.67.0）：見るだけの KPI（ほかの取り組みが持ち主の KPI を、この取り組みの札に出すだけ。成果の率には数えない）。
+ *     linkedKpiIds と重ならないこと。1 つの KPI は 1 つの取り組みの成果として数える（2026-11-06 Naoki OK・13 週の統合 ②）
  *   taskmasterProjectId（v1.12.0）：組にする TaskMaster のプロジェクト（users/{uid}/app_data/projects の id）。空なら組なし。
  *     1 つのプロジェクトは 1 つの取り組みにだけ（束を当て終えた形で確かめる）。付けるときはプロジェクトが在って status が active のこと
  *
@@ -126,6 +128,7 @@ function display(rev: Obj | null, milestones: Item[], kpis: Item[], projects: It
   for (const f of LIST_FIELDS) out[f] = entriesText(rev[f]);
   out.linkedMilestoneIds = linksText(rev.linkedMilestoneIds, milestones);
   out.linkedKpiIds = linksText(rev.linkedKpiIds, kpis);
+  if (Array.isArray(rev.viewKpiIds) && rev.viewKpiIds.length) out.viewKpiIds = linksText(rev.viewKpiIds, kpis);
   // v1.12.0：承認の画面では「名前（id）」で見せる。古い版で欄が無ければ空として扱う（空同士なら差分に出ない）
   const pid = str(rev.taskmasterProjectId);
   out.taskmasterProjectId = pid ? linksText([pid], projects) : "";
@@ -173,7 +176,7 @@ export function assertUniqueProjects(raw: unknown, projects: Item[] = []): void 
 }
 
 function sameContent(a: Obj, b: Obj): boolean {
-  const keys = ["name", "stage", "overview", "progress", ...LIST_FIELDS, "linkedMilestoneIds", "linkedKpiIds"];
+  const keys = ["name", "stage", "overview", "progress", ...LIST_FIELDS, "linkedMilestoneIds", "linkedKpiIds", "viewKpiIds"];
   // v1.12.0：taskmasterProjectId は欄が無い古い版と空を同じとみなす
   return keys.every(k => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null)) &&
     str(a.taskmasterProjectId) === str(b.taskmasterProjectId);
@@ -211,6 +214,9 @@ export function writeInitiative(
     parseIds(op.data.linkedMilestoneIds, "結ぶマイルストーン") : (previous?.linkedMilestoneIds ?? []);
   next.linkedKpiIds = op.data.linkedKpiIds !== undefined ?
     parseIds(op.data.linkedKpiIds, "結ぶ KPI") : (previous?.linkedKpiIds ?? []);
+  // v1.67.0：指定が無ければ前の版の値を引き継ぐ。前の版にも無ければ欄を作らない（古い版と同じ中身のまま）
+  if (op.data.viewKpiIds !== undefined) next.viewKpiIds = parseIds(op.data.viewKpiIds, "見るだけの KPI");
+  else if (Array.isArray(previous?.viewKpiIds)) next.viewKpiIds = previous!.viewKpiIds;
   // v1.12.0：指定が無ければ前の版の値を引き継ぐ。指定があるときだけ確かめる（在る・進行中）。重なりは束の最後に見る
   if (op.data.taskmasterProjectId !== undefined) {
     next.taskmasterProjectId = str(op.data.taskmasterProjectId);
@@ -228,6 +234,10 @@ export function writeInitiative(
   }
   for (const kid of next.linkedKpiIds as string[]) {
     if (!kpis.some(k => k.id === kid)) throw new Error("結ぶ KPI が見つかりません：" + kid);
+  }
+  for (const kid of (next.viewKpiIds as string[] | undefined) ?? []) {
+    if (!kpis.some(k => k.id === kid)) throw new Error("見るだけの KPI が見つかりません：" + kid);
+    if ((next.linkedKpiIds as string[]).includes(kid)) throw new Error("同じ KPI を「結ぶ」と「見るだけ」の両方には置けません：" + linksText([kid], kpis));
   }
   if (records.some(r => r.id !== id &&
       str(((r.revisions as Obj[]).at(-1))?.name).toLocaleLowerCase("ja") === str(next.name).toLocaleLowerCase("ja"))) {
@@ -356,6 +366,10 @@ export function buildInitiativesView(
       linked_kpis: ((last.linkedKpiIds as string[] | undefined) ?? []).map(kid => {
         const k = kpis.find(x => x.id === kid);
         return k ? { id: kid, title: k.title, unit: k.unit ?? "", monthlyTarget: k.monthlyTarget ?? null } : { id: kid, missing: true };
+      }),
+      view_kpis: ((last.viewKpiIds as string[] | undefined) ?? []).map(kid => {
+        const k = kpis.find(x => x.id === kid);
+        return k ? { id: kid, title: k.title, unit: k.unit ?? "" } : { id: kid, missing: true };
       }),
       ...(opts.includeHistory ? {
         history: [...revs].reverse().map(rev => ({

@@ -15,7 +15,7 @@ import { DRIVE_API, KINDS, SCENES, checkLook, putSozaiRows, resolveSheetId, toBa
  *     SOZAI_SHEET_ID（任意）があればそちらを使う
  *   ・中身は src/sozai-core.ts。試験は test/sozai-core.test.ts
  *
- * 2026-10-20 追加（v1.23.0）：sozai__look
+ * 2026-10-20 追加（v1.67.0）：sozai__look
  *   ・受け箱の画面写真を、振り分けが目で見るための道具。読むだけ
  *   ・Google ドライブの道具の read_file_content は画像の文字しか返さず、空で返る写真があったため（10/20 の試しで 4 枚中 3 枚）
  *   ・機械用の身分に共有されたファイルだけ見える（受け箱を閲覧者で共有している）

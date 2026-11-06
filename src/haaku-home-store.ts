@@ -114,7 +114,8 @@ type Ctx = { token: string; uid: string };
 async function loadSteps({ token, uid }: Ctx): Promise<Step[]> {
   const road = parseHaakuRoadmap((await readValue(token, uid, "os_roadmap_v1")).value);
   return (road?.milestones ?? []).map(m => ({ id: m.id, title: m.title, status: m.status, dueDate: m.dueDate,
-    dependsOn: m.dependsOn, dependsOnIds: m.dependsOnIds, dependsMismatch: m.dependsMismatch }));
+    dependsOn: m.dependsOn, dependsOnIds: m.dependsOnIds, dependsMismatch: m.dependsMismatch,
+    startDate: m.startDate, doneAt: m.doneAt }));
 }
 
 async function loadTasks({ token, uid }: Ctx): Promise<Task[]> {
@@ -170,7 +171,8 @@ async function loadInitiatives({ token, uid }: Ctx): Promise<Initiative[]> {
     const last = (r.revisions as Obj[]).at(-1) as Obj;
     return { no: String(r.initiativeNo), name: String(last.name ?? ""),
       linkedMilestoneIds: (last.linkedMilestoneIds as string[] | undefined) ?? [],
-      linkedKpiIds: (last.linkedKpiIds as string[] | undefined) ?? [] };
+      linkedKpiIds: (last.linkedKpiIds as string[] | undefined) ?? [],
+      viewKpiIds: (last.viewKpiIds as string[] | undefined) ?? [] };
   });
 }
 
@@ -184,7 +186,7 @@ export async function buildHome(ctx: Ctx, today = jstToday()) {
     ok: true, readonly: true, ...home,
     links: { state: linksDoc.value === null ? "not_configured" : "ready", count: store.links.length,
       stale: store.links.filter(l => !tasks.some(t => t.id === l.taskId) || !steps.some(s => s.id === l.milestoneId)).length },
-    note: "行動の率＝結んだタスクの完了÷全部（アーカイブして未完了は数えない）。成果の率＝取り組みに結んだ KPI の今月の率（1 本ずつ 100 で頭打ちにして平均）。KPI の数え方は haAku__get_kpi_progress と同じ。",
+    note: "ステップの行動の率＝結んだタスクの完了÷全部（アーカイブして未完了は数えない）。取り組みの行動の率（v1.67.0）＝帯が今週にかかる未達成のステップと今週に達成したステップ（week_steps）に結んだタスクだけで数える。今週のステップが無ければ null・action_note「今週の状態が無い」、タスク 0 なら null・「やることが結ばれていない」。全部のタスクは all_tasks_total／all_tasks_done。成果の率＝取り組みが持ち主の KPI（linkedKpiIds）の今月の率（1 本ずつ 100 で頭打ちにして平均）。見るだけの KPI は view_kpis に出すが数えない。KPI の数え方は haAku__get_kpi_progress と同じ。",
   };
 }
 

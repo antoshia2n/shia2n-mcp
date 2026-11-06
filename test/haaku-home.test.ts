@@ -50,7 +50,7 @@ test("行動の率：0 件なら空（0％ と書かない）。完了÷全部�
 });
 
 test("取り組み：行動 100％・成果 100％ 未満なら「打ち手を足す」。KPI が無ければ空と明示", () => {
-  const steps = [S("A")];
+  const steps = [S("A", "", "todo", "2026-10-15")]; // v1.67.0：帯が今週（10/12〜10/18）にかかる状態だけで数える
   const tasks = [T("t1", true)];
   const links = [{ taskId: "t1", milestoneId: "A" }];
   const kpis = [{ id: "k1", title: "インプ", unit: "万", monthlyTarget: 100, monthlyActual: 40, pct: 40 }, { id: "k2", title: "x", unit: "", monthlyTarget: 10, monthlyActual: 20, pct: 200 }];
@@ -115,4 +115,23 @@ test("期限の数：時間帯を読めないときは、ルーティンを除�
   assert.equal(none.next_week.count, null);
   assert.equal(routineGroupsOf({ a: 1 }), null);
   assert.deepEqual(routineGroupsOf([]), []);
+});
+
+test("v1.67.0：行動の率は帯が今週にかかる状態のタスクだけ。成果は持ち主の KPI だけ（haaku の homeProgress と同じ）", () => {
+  const M = (id: string, start: string, due: string, status = "todo", doneAt = "") => ({ id, title: id, status, dueDate: due, dependsOn: "", startDate: start, doneAt });
+  const steps = [M("old", "2026-10-13", "2026-10-18"), M("now", "2026-11-02", "2026-11-08"), M("next", "2026-11-09", "2026-11-15"),
+    M("doneNow", "2026-10-26", "2026-11-01", "done", "2026-11-04T03:00:00Z"), M("doneOld", "2026-10-26", "2026-11-01", "done", "2026-10-30T03:00:00Z")];
+  const tasks = [T("a", true), T("b", false), T("c", true), T("d", true)];
+  const links = [{ taskId: "a", milestoneId: "old" }, { taskId: "b", milestoneId: "old" }, { taskId: "c", milestoneId: "doneNow" }, { taskId: "d", milestoneId: "doneOld" }];
+  const kpis = [{ id: "k1", title: "在籍", unit: "名", monthlyTarget: 89, monthlyActual: 25, pct: 28 }, { id: "k2", title: "面談", unit: "名", monthlyTarget: 5, monthlyActual: 0, pct: 0 }];
+  const home = computeHome({ steps, tasks, links, kpis, today: "2026-11-06", initiatives: [
+    { no: "09", name: "メンシプ", linkedMilestoneIds: ["old", "now", "doneNow", "doneOld"], linkedKpiIds: ["k1"] },
+    { no: "10", name: "BWBC", linkedMilestoneIds: ["now"], linkedKpiIds: [], viewKpiIds: ["k1", "k2"] },
+    { no: "11", name: "新規", linkedMilestoneIds: ["next"], linkedKpiIds: ["k2"] }] });
+  const [m, b, n] = home.initiatives;
+  assert.deepEqual(m.week_steps, ["now", "doneNow"]);
+  assert.equal(m.tasks_total, 1); assert.equal(m.action_pct, 100); assert.equal(m.all_tasks_total, 4);
+  assert.equal(b.action_pct, null); assert.equal(b.action_note, "やることが結ばれていない");
+  assert.equal(b.outcome_pct, null); assert.deepEqual(b.view_kpis.map(k => k.id), ["k1", "k2"]);
+  assert.equal(n.action_note, "今週の状態が無い"); assert.equal(n.outcome_pct, 0);
 });

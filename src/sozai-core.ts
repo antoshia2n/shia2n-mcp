@@ -213,7 +213,7 @@ export async function putSozaiRows(sheets: SheetsJson, id: string, input: PutSoz
   return { ok: true, written: true, dry_run: false, tab, added: plan, skipped };
 }
 
-// ── 画像を見る（2026-10-20 追加・v1.23.0）
+// ── 画像を見る（2026-10-20 追加・v1.67.0）
 // Google ドライブの道具の read_file_content は画像の文字しか返さず、文字が拾えない画面写真は空で返る。
 // 振り分けが画面写真の中身を見て種類を決められるよう、機械用の身分で画像そのものを取って渡す。
 
