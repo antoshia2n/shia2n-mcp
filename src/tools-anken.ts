@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { parseLine, parseMinutes, maskMessages, withHashes, SELF_NAMES } from "./anken-core.js";
+import { parseLine, parseMinutes, maskMessages, maskSecrets, withHashes, SELF_NAMES } from "./anken-core.js";
 import { pickQuote } from "./anken-quote.js";
 import { addLinks, readSheet, sheetIdOf } from "./anken-sheet-io.js";
 import { memoOf, keepMemo } from "./anken-memo.js";
@@ -58,6 +58,12 @@ import { calendarMeetings, type CalendarMeeting } from "./anken-calendar.js";
  *   ・次の MTG は、haAku につないだ予定表（メイン・UTAGE）の「案件名＋定例」の予定から取る（src/anken-calendar.ts）。
  *     見つからない案件だけ、今までどおり記録から AI が書いたもの（ak_cases.mtg.when）
  *   ・get_home・list_cases の表示、期限の無い候補の仮の期限、ai_update_case が書く次の MTG の日時、ai_case_context の材料に使う
+ *
+ * 2026-11-06 v1.69.0 AI チャットの目次（Naoki 直の依頼・作る前の 1 枚に「OK」21:44）：
+ *   ・クライアントの ChatGPT・Claude の共有リンクは、サーバーから読むと中身が空になる。Claude が Naoki の Chrome で開いて全文を読み、
+ *     要約・目次・各回の全文を anken__put_chat で ak_chats に書く（同じ案件・同じ共有リンクなら上書き）。画面（案件くんの「AI チャット」タブ）は読むだけ
+ *   ・アプリの中で AI に癖を分析させない（Naoki は画面の「AI に読ませる用」をコピーして自分の Claude に貼る）
+ *   ・保存する前に ID・パスワードらしき値を伏せる（maskSecrets）
  */
 
 type Row = Record<string, any>;
@@ -1042,6 +1048,64 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const next = list.flatMap((p) => (hit.includes(p) ? (p.by === "ai" ? [{ ...p, hidden: true }] : []) : [p]));
         await sbPatch(env, `/ak_cases?id=eq.${enc(c.id)}&${own}`, { periods: next, updated_at: new Date().toISOString() });
         return asMcpTextResult({ ok: true, 案件: c.name, 消した: hit.length, 住所: `${APP_URL}/c/${c.id}` });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 17. anken__put_chat（v1.69.0・2026-11-06）──────────────────
+  server.tool(
+    "anken__put_chat",
+    "案件くんに、クライアントの AI チャット（ChatGPT・Claude の共有リンク）の目次を 1 本書く。共有リンクはサーバーから読むと中身が空なので、先に Naoki の Chrome で開いて全文を読み、要約と、往復ごとの題・種類の札・1 行の要約・クライアントの発言の全文・AI の返事・その回の下書きをまとめて渡す。同じ案件・同じ共有リンクなら上書きする。ID・パスワードらしき値は伏せて保存する。発言と返事は言い換えず、読めたとおりに入れる。戻り値: { ok, 案件, 題, やり取り, 伏せた, 上書き, 住所 }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      url: z.string().url().max(500).describe("共有リンク（例 https://chatgpt.com/share/…）"),
+      title: z.string().min(1).max(80).describe("チャットの題（共有ページの題か、中身から 20 字ほど）"),
+      service: z.enum(["chatgpt", "claude", "other"]).describe("どの AI のチャットか"),
+      who: z.string().max(40).optional().describe("クライアントの呼び名（例 るーみんさん）。省略時は案件名"),
+      period: z.string().max(60).optional().describe("やり取りの期間（例 11/05 夜〜11/06 朝）。読めなければ省略"),
+      summary: z.array(z.string().min(1).max(300)).min(1).max(8).describe("全体の要約（4 行前後。目的・途中の流れ・直しの回数と中身・出来上がり）"),
+      turns: z.array(z.object({
+        title: z.string().min(1).max(80).describe("その回の題（何を頼んだか・何が起きたか）"),
+        tag: z.string().max(20).optional().describe("種類の札（例 依頼・削る直し・進め方の相談・自分の文を持ち込み）"),
+        line: z.string().max(300).optional().describe("1 行の要約（何を言って、AI がどう返したか）"),
+        user: z.string().min(1).max(40000).describe("クライアントの発言の全文"),
+        reply: z.string().max(60000).describe("AI の返事（下書きの本文を除いた部分）"),
+        draft: z.string().max(60000).optional().describe("その回に AI が出した下書き・成果物（あれば）"),
+      })).min(1).max(300).describe("往復ごと（クライアントの 1 発言と、それへの AI の返事で 1 つ）。上から順に"),
+    },
+    async ({ case: q, url, title, service, who, period, summary, turns }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        let masked = 0;
+        const m = (v: string | undefined) => { const r = maskSecrets(v ?? ""); masked += r.count; return r.text; };
+        const clean = turns.map((t) => ({ title: t.title.trim(), tag: (t.tag ?? "").trim(), line: m(t.line).trim(), user: m(t.user), reply: m(t.reply), draft: m(t.draft) }));
+        const sum = summary.map((s) => m(s).trim()).filter(Boolean);
+        const before = await sbGet(env, `/ak_chats?select=id&case_id=eq.${enc(c.id)}&${own}&url=eq.${enc(url)}`);
+        const now = new Date().toISOString();
+        const [row] = await sbPost(env, `/ak_chats?on_conflict=case_id,url`, [{
+          user_id: OWNER_UID, case_id: c.id, url, title: title.trim(), service, who: who?.trim() || null, period: period?.trim() || null,
+          summary: sum, turns: clean, masked, updated_at: now,
+        }], "resolution=merge-duplicates,return=representation");
+        return asMcpTextResult({ ok: true, 案件: c.name, 題: row.title, やり取り: clean.length, 伏せた: masked, 上書き: before.length > 0, 住所: `${APP_URL}/c/${c.id}?chat=${row.id}` });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 18. anken__list_chats（v1.69.0・2026-11-06）────────────────
+  server.tool(
+    "anken__list_chats",
+    "案件くんに入っている AI チャットの目次の一覧（新しく入れた順）。題・共有リンク・往復の数・要約の 1 行目・入れた日を返す。同じ共有リンクをもう入れたかを確かめるときに使う。戻り値: { ok, 案件, 一覧: [{ 題, 共有リンク, AI, やり取り, 要約, 入れた日, 住所 }] }。",
+    { case: z.string().min(1).max(80).describe("案件の名前か id") },
+    async ({ case: q }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const rows = await sbGet(env, `/ak_chats?select=id,title,url,service,summary,turns,updated_at&case_id=eq.${enc(c.id)}&${own}&order=updated_at.desc`);
+        return asMcpTextResult({ ok: true, 案件: c.name, 一覧: rows.map((r) => ({
+          題: r.title, 共有リンク: r.url, AI: r.service, やり取り: Array.isArray(r.turns) ? r.turns.length : 0,
+          要約: Array.isArray(r.summary) ? r.summary[0] ?? "" : "", 入れた日: r.updated_at ? jstDay(String(r.updated_at)) : "", 住所: `${APP_URL}/c/${c.id}?chat=${r.id}`,
+        })) });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
