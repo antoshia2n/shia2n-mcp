@@ -64,6 +64,11 @@ import { calendarMeetings, type CalendarMeeting } from "./anken-calendar.js";
  *     要約・目次・各回の全文を anken__put_chat で ak_chats に書く（同じ案件・同じ共有リンクなら上書き）。画面（案件くんの「AI チャット」タブ）は読むだけ
  *   ・アプリの中で AI に癖を分析させない（Naoki は画面の「AI に読ませる用」をコピーして自分の Claude に貼る）
  *   ・保存する前に ID・パスワードらしき値を伏せる（maskSecrets）
+ *
+ * 2026-11-06 v1.70.0 全文はシアニンパネルから（Naoki「OK」22:13）：
+ *   ・Claude が全文を書き写すと長いチャットで無理なので、全文はシアニンパネルの「この AI チャットを案件くんへ」が入れる（案件くんの /api/chats）
+ *   ・Claude は anken__get_chat で全文を読み、anken__put_chat_index で要約と往復ごとの題・札・1 行だけを書く（全文は書き換えない）
+ *   ・anken__put_chat は短いチャットを Claude が丸ごと入れるときだけに残す
  */
 
 type Row = Record<string, any>;
@@ -150,6 +155,16 @@ async function findCase(env: Env, nameOrId: string): Promise<Row | null> {
   const all = await sbGet(env, `/ak_cases?select=*&${own}&order=sort.asc`);
   const q = nameOrId.trim();
   return all.find((c) => c.id === q) ?? all.find((c) => c.name === q) ?? all.find((c) => String(c.name).includes(q) || q.includes(String(c.name))) ?? null;
+}
+/** AI チャット 1 本を id・共有リンク・題（同じか含む）で探す（v1.70.0） */
+async function findChat(env: Env, c: Row, q: string, strict = false): Promise<Row | null> {
+  const all = await sbGet(env, `/ak_chats?select=*&case_id=eq.${enc(c.id)}&${own}&order=updated_at.desc`);
+  const k = q.trim();
+  const key = k.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  const exact = all.find((x) => x.id === k) ?? all.find((x) => x.url === k || x.url === key) ?? all.find((x) => x.title === k);
+  if (exact || strict) return exact ?? null; // 書く道具は id・共有リンク・題の完全一致だけ（別のチャットに書かないため）
+  const loose = all.filter((x) => String(x.title).includes(k) || k.includes(String(x.title)));
+  return loose.length === 1 ? loose[0] : null;
 }
 const notFound = async (env: Env, q: string) => {
   const all = await sbGet(env, `/ak_cases?select=name&${own}`);
@@ -1104,8 +1119,86 @@ export function registerAnkenTools(server: McpServer, env: Env): void {
         const rows = await sbGet(env, `/ak_chats?select=id,title,url,service,summary,turns,updated_at&case_id=eq.${enc(c.id)}&${own}&order=updated_at.desc`);
         return asMcpTextResult({ ok: true, 案件: c.name, 一覧: rows.map((r) => ({
           題: r.title, 共有リンク: r.url, AI: r.service, やり取り: Array.isArray(r.turns) ? r.turns.length : 0,
+          目次: (Array.isArray(r.summary) && r.summary.length > 0) ? "あり" : "まだ（anken__get_chat → anken__put_chat_index）",
           要約: Array.isArray(r.summary) ? r.summary[0] ?? "" : "", 入れた日: r.updated_at ? jstDay(String(r.updated_at)) : "", 住所: `${APP_URL}/c/${c.id}?chat=${r.id}`,
         })) });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 19. anken__get_chat（v1.70.0・2026-11-06）──────────────────
+  server.tool(
+    "anken__get_chat",
+    "案件くんに入っている AI チャット 1 本の全文を読む（目次を付ける前に使う）。chat は一覧（anken__list_chats）の題か共有リンクか id。往復ごとに番号・今の題・札・1 行・クライアントの発言・AI の返事・下書きを返す。長いときは from・to で往復の範囲を指定して分けて読む（1 回 12 万字まで。超えた往復は字を切って「続きあり」を付ける）。戻り値: { ok, 案件, id, 題, 共有リンク, AI, 呼び名, 期間, 要約, 往復の数, 往復: [{ n, 題, 札, 一行, 発言, 返事, 下書き }], 次の_from（続きがあるとき） }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      chat: z.string().min(1).max(500).describe("チャットの題・共有リンク・id のどれか"),
+      from: z.number().int().min(1).optional().describe("何往復目から（省略時 1）"),
+      to: z.number().int().min(1).optional().describe("何往復目まで（省略時 最後まで）"),
+    },
+    async ({ case: q, chat, from, to }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const x = await findChat(env, c, chat);
+        if (!x) return asMcpTextResult({ ok: false, message: `AI チャット「${chat}」が見つかりません`, 一覧: (await sbGet(env, `/ak_chats?select=title,url&case_id=eq.${enc(c.id)}&${own}`)).map((r) => `${r.title}（${r.url}）`) });
+        const turns: Row[] = Array.isArray(x.turns) ? x.turns : [];
+        const a = Math.max(1, from ?? 1), b = Math.min(turns.length, to ?? turns.length);
+        if (a > turns.length) return asMcpTextResult({ ok: false, message: `${a} 往復目はありません（このチャットは ${turns.length} 往復）` });
+        const MAX = 120000, PER = 40000;
+        let used = 0, next: number | null = null;
+        const out: Row[] = [];
+        for (let i = a - 1; i < b; i++) {
+          const t = turns[i] ?? {};
+          const cut = (v: unknown) => { const s = String(v ?? ""); return s.length > PER ? s.slice(0, PER) + "…（続きあり）" : s; };
+          const row = { n: i + 1, 題: t.title || "", 札: t.tag || "", 一行: t.line || "", 発言: cut(t.user), 返事: cut(t.reply), 下書き: cut(t.draft) };
+          const size = row.発言.length + row.返事.length + row.下書き.length;
+          if (out.length && used + size > MAX) { next = i + 1; break; }
+          used += size; out.push(row);
+        }
+        return asMcpTextResult({ ok: true, 案件: c.name, id: x.id, 題: x.title, 共有リンク: x.url, AI: x.service, 呼び名: x.who ?? "", 期間: x.period ?? "",
+          要約: Array.isArray(x.summary) ? x.summary : [], 往復の数: turns.length, 往復: out, ...(next ? { 次の_from: next } : {}),
+          次: "読み終えたら anken__put_chat_index で要約と往復ごとの題・札・1 行を書く" });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 20. anken__put_chat_index（v1.70.0・2026-11-06）────────────
+  server.tool(
+    "anken__put_chat_index",
+    "案件くんの AI チャット 1 本に、要約と目次（往復ごとの題・種類の札・1 行の要約）を書く。全文は書き換えない（全文はシアニンパネルが入れたもの）。先に anken__get_chat で全文を読んでから使う。turns は番号（n）で指し、書いた回だけ直す。題名・呼び名・期間も直せる。戻り値: { ok, 案件, 題, 書いた回, 目次の無い回, 住所 }。",
+    {
+      case: z.string().min(1).max(80).describe("案件の名前か id"),
+      chat: z.string().min(1).max(500).describe("チャットの題・共有リンク・id のどれか"),
+      title: z.string().min(1).max(80).optional().describe("チャットの題（20 字ほど。直すときだけ）"),
+      who: z.string().max(40).optional().describe("クライアントの呼び名（例 るーみんさん）"),
+      period: z.string().max(60).optional().describe("やり取りの期間（例 11/05 夜〜11/06 朝）"),
+      summary: z.array(z.string().min(1).max(300)).min(1).max(8).describe("全体の要約（4 行前後。目的・途中の流れ・直しの回数と中身・出来上がり）"),
+      turns: z.array(z.object({
+        n: z.number().int().min(1).describe("何往復目か（anken__get_chat の n）"),
+        title: z.string().min(1).max(80).describe("その回の題（何を頼んだか・何が起きたか）"),
+        tag: z.string().max(20).optional().describe("種類の札（例 依頼・削る直し・進め方の相談・自分の文を持ち込み）"),
+        line: z.string().max(300).optional().describe("1 行の要約（何を言って、AI がどう返したか）"),
+      })).min(1).max(400),
+    },
+    async ({ case: q, chat, title, who, period, summary, turns }) => {
+      try {
+        const c = await findCase(env, q);
+        if (!c) return notFound(env, q);
+        const x = await findChat(env, c, chat, true);
+        if (!x) return asMcpTextResult({ ok: false, message: `AI チャット「${chat}」が見つかりません（書くときは anken__get_chat が返した id か共有リンクで指す）` });
+        const list: Row[] = Array.isArray(x.turns) ? x.turns.map((t: Row) => ({ ...t })) : [];
+        const bad = turns.filter((t) => t.n > list.length).map((t) => t.n);
+        if (bad.length) return asMcpTextResult({ ok: false, message: `${bad.join("・")} 往復目はありません（このチャットは ${list.length} 往復）` });
+        for (const t of turns) Object.assign(list[t.n - 1], { title: maskSecrets(t.title).text.trim(), tag: (t.tag ?? "").trim(), line: maskSecrets(t.line ?? "").text.trim() });
+        const patch: Row = { summary: summary.map((s) => maskSecrets(s).text.trim()).filter(Boolean), turns: list, updated_at: new Date().toISOString() };
+        if (title) patch.title = title.trim();
+        if (who !== undefined) patch.who = who.trim() || null;
+        if (period !== undefined) patch.period = period.trim() || null;
+        // 読んだあとにシアニンパネルで入れ直されていたら、古い全文で上書きしない
+        const done = await sbPatch(env, `/ak_chats?id=eq.${enc(x.id)}&${own}&updated_at=eq.${enc(String(x.updated_at))}`, patch);
+        if (!done.length) return asMcpTextResult({ ok: false, message: "読んだあとに全文が入れ直されました。anken__get_chat で読み直してから、もう一度書いてください" });
+        return asMcpTextResult({ ok: true, 案件: c.name, 題: patch.title ?? x.title, 書いた回: turns.length, 目次の無い回: list.map((t, i) => (t.title ? 0 : i + 1)).filter(Boolean), 住所: `${APP_URL}/c/${c.id}?chat=${x.id}` });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
