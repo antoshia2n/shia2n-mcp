@@ -594,7 +594,7 @@ function line(it: Item): string {
 
 function grouped(items: Item[]): string {
   const by = new Map<string, Item[]>();
-  for (const it of items) by.set(it.path || "(上の段)", [...(by.get(it.path || "(上の段)") ?? []), it]);
+  for (const it of items) by.set(it.path || "一覧", [...(by.get(it.path || "一覧") ?? []), it]);
   return [...by]
     .map(([p, xs]) => `### ${p}\n${xs.map(line).join("\n")}`)
     .join("\n\n");
@@ -603,7 +603,8 @@ function grouped(items: Item[]): string {
 export function buildDocs(state: State): Record<string, string> {
   const K = (...ks: string[]) => state.items.filter((x) => ks.includes(x.k));
   const n = (k: string) => state.items.filter((x) => x.k === k).length;
-  const head = (t: string) => `# UTAGE の写し：${t}\n\n回 ${state.run}（読み終えた ${state.finishedAt ?? "途中"}）。全文は utage_archive__get に \`種類:番号\` を渡す。\n\n`;
+  const jst = (iso?: string) => (iso ? new Date(Date.parse(iso) + 9 * 3600_000).toISOString().slice(0, 16).replace("T", " ") + "（日本時間）" : "途中");
+  const head = (t: string) => `# UTAGE の写し：${t}\n\n回 ${state.run}（読み終えた ${jst(state.finishedAt)}）。全文は utage_archive__get に \`種類:番号\` を渡す。\n\n`;
   const counts = (k: string) => Object.entries(state.counts[k] ?? {}).map(([g, v]) => `- ${g}：${v}`).join("\n") || "- 0";
   const docs: Record<string, string> = {};
   docs.overview =
