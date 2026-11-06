@@ -24,7 +24,7 @@
 import { ancestorsOf } from "./haaku-deps.js";
 
 /** dependsOnIds を省くと dependsOn 1 つ（空なら 0 件）として読む（古い呼び出し・試験のため） */
-export type Step = { id: string; title: string; status: string; dueDate: string; dependsOn: string; dependsOnIds?: string[]; dependsMismatch?: boolean };
+export type Step = { id: string; title: string; status: string; dueDate: string; dependsOn: string; dependsOnIds?: string[]; dependsMismatch?: boolean; startDate?: string; doneAt?: string };
 export type Task = { id: string; title: string; completed: boolean; archived: boolean; deadline: string; priority: string; groupId?: string };
 
 /**
@@ -47,7 +47,7 @@ export function routineGroupsOf(groups: unknown): { id: string; title: string }[
     .map(g => ({ id: g.id as string, title: g.title as string }));
 }
 export type Link = { taskId: string; milestoneId: string };
-export type Initiative = { no: string; name: string; linkedMilestoneIds: string[]; linkedKpiIds: string[] };
+export type Initiative = { no: string; name: string; linkedMilestoneIds: string[]; linkedKpiIds: string[]; viewKpiIds?: string[] };
 export type KpiMonth = { id: string; title: string; unit: string; monthlyTarget: number; monthlyActual: number; pct: number | null };
 
 export type StepState = "100%" | "待ち" | "動ける" | "進行中";
@@ -116,6 +116,32 @@ export function findBlocker(stepList: Step[]): { id: string; blocks: number } | 
   return ranked.length ? { id: ranked[0].id, blocks: counts.get(ranked[0].id)! } : null;
 }
 
+/**
+ * v1.67.0（2026-11-06 haAku 13 週の統合 ②・haaku src/lib/homeProgress.js と同じ）：
+ *   取り組みの行動の率は、帯が今週にかかる状態（未達成か、今週に達成したもの）に結んだタスクの完了 ÷ 全部。
+ *   帯＝着手日〜期限（着手日が無ければ期限の 1 日）。今週の状態が無い → null「今週の状態が無い」／タスク 0 → null「やることが結ばれていない」
+ *   成果の率は持ち主の KPI（linkedKpiIds）だけ。viewKpiIds（見るだけ）は view_kpis に出すが数えない
+ */
+const isDay = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+export function weekOf(today: string): { from: string; to: string } {
+  const t = new Date(today + "T00:00:00Z");
+  const monday = new Date(t.getTime() - ((t.getUTCDay() + 6) % 7) * 864e5);
+  return { from: monday.toISOString().slice(0, 10), to: new Date(monday.getTime() + 6 * 864e5).toISOString().slice(0, 10) };
+}
+function doneDay(raw: unknown): string {
+  if (typeof raw !== "string" || !raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const d = new Date(raw);
+  return Number.isFinite(d.getTime()) ? new Date(d.getTime() + 9 * 36e5).toISOString().slice(0, 10) : "";
+}
+function inWeek(s: Step, week: { from: string; to: string }): boolean {
+  // 達成したものは、今週に達成したかだけで見る（遅れて今週に届いたものも今週の行動）
+  if (s.status === "done") { const d = doneDay(s.doneAt); return !!d && d >= week.from && d <= week.to; }
+  if (!isDay(s.dueDate)) return false;
+  const start = isDay(s.startDate) ? s.startDate : s.dueDate;
+  return start <= week.to && s.dueDate >= week.from;
+}
+
 export function computeHome(input: {
   steps: Step[]; tasks: Task[]; links: Link[]; initiatives: Initiative[]; kpis: KpiMonth[]; today: string;
   /** v1.20.0：省くと「読んでいない」（ルーティンを除いた数は null） */
@@ -150,22 +176,32 @@ export function computeHome(input: {
   // 取り組みごと
   const kpiById = new Map(kpis.map(k => [k.id, k]));
   const taskById = new Map(tasks.map(t => [t.id, t]));
+  const week = weekOf(today);
+  const live = (t: Task | undefined): t is Task => !!t && !(t.archived && !t.completed);
+  const kpiView = (k: KpiMonth) => ({ id: k.id, title: k.title, unit: k.unit, monthly_target: k.monthlyTarget, monthly_actual: k.monthlyActual, pct: k.pct });
   const initiativeRows = initiatives.map(ini => {
     const mids = new Set(ini.linkedMilestoneIds.filter(id => steps.has(id)));
-    const ts = links.filter(l => mids.has(l.milestoneId)).map(l => taskById.get(l.taskId))
-      .filter((t): t is Task => !!t && !(t.archived && !t.completed));
+    const ts = links.filter(l => mids.has(l.milestoneId)).map(l => taskById.get(l.taskId)).filter(live);
     const done = ts.filter(t => t.completed).length;
+    const weekIds = [...mids].filter(id => inWeek(steps.get(id)!, week));
+    const weekSet = new Set(weekIds);
+    const wts = links.filter(l => weekSet.has(l.milestoneId)).map(l => taskById.get(l.taskId)).filter(live);
+    const wdone = wts.filter(t => t.completed).length;
     const ks = ini.linkedKpiIds.map(id => kpiById.get(id)).filter((k): k is KpiMonth => !!k);
+    const views = (ini.viewKpiIds ?? []).filter(id => !ini.linkedKpiIds.includes(id)).map(id => kpiById.get(id)).filter((k): k is KpiMonth => !!k);
     const pcts = ks.map(k => k.pct).filter((p): p is number => p !== null);
     const outcome = pcts.length ? Math.round(pcts.reduce((s, p) => s + Math.min(p, 100), 0) / pcts.length) : null;
-    const action = rate(done, ts.length);
+    const action = rate(wdone, wts.length);
     return {
       no: ini.no, name: ini.name,
       steps: [...mids], missing_steps: ini.linkedMilestoneIds.filter(id => !steps.has(id)),
-      tasks_total: ts.length, tasks_done: done, action_pct: action,
+      week_steps: weekIds,
+      tasks_total: wts.length, tasks_done: wdone, all_tasks_total: ts.length, all_tasks_done: done, action_pct: action,
+      action_note: !weekIds.length ? "今週の状態が無い" : !wts.length ? "やることが結ばれていない" : null,
       outcome_pct: outcome,
       outcome_note: ks.length ? (pcts.length ? null : "結んだ KPI に月の目標がありません") : "KPI が結ばれていない",
-      kpis: ks.map(k => ({ id: k.id, title: k.title, unit: k.unit, monthly_target: k.monthlyTarget, monthly_actual: k.monthlyActual, pct: k.pct })),
+      kpis: ks.map(kpiView),
+      view_kpis: views.map(kpiView),
       missing_kpis: ini.linkedKpiIds.filter(id => !kpiById.has(id)),
       signal: action === 100 && outcome !== null && outcome < 100 ? "打ち手を足す" : null,
     };

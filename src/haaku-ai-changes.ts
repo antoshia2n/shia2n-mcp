@@ -23,7 +23,7 @@ const FIELDS: Record<ChangeKind, readonly string[]> = {
     "evidence", "note", "changeReason"],
   // v1.9.0：取り組み（13 の取り組み）。一覧の欄と結びの欄は JSON の文字列で受ける（中身は haaku-initiatives.ts で検める）
   initiative: ["initiativeNo", "name", "stage", "overview", "ideals", "conditions", "kpis",
-    "approaches", "plans", "obstacles", "progress", "linkedMilestoneIds", "linkedKpiIds", "reason",
+    "approaches", "plans", "obstacles", "progress", "linkedMilestoneIds", "linkedKpiIds", "viewKpiIds", "reason",
     // v1.12.0：組にする TaskMaster のプロジェクトの id（空・null で外す）
     "taskmasterProjectId"],
   // v1.11.0：消すマイルストーンの ID と理由（どちらも必須）
