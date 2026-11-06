@@ -407,15 +407,35 @@ export function nextRepeatDate(dl: string, repeat: string): string | null {
   else return null;
   return d.toISOString().slice(0, 10);
 }
-/** 済みにした繰り返しタスクの次の回（taskmaster の toggleDone と同じ形：期限だけ進め、完了の印とサブタスクの済みを戻す） */
-export function nextRepeatTask(t: Item, todayStr: string): Item | null {
+const isDay = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+const dayGap = (from: string, to: string) => Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000);
+const shiftDay = (s: string, n: number) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+/** 次の回の着手日と期限（taskmaster の nextRepeatDates と同じ決まり・2026-11-07 にそろえた）。
+ *  今日以前になるときは今日より後まで進める。着手日と期限のあいだの日数を保つ。着手日だけなら着手日だけ進める */
+export function nextRepeatDates(t: Item, todayStr: string): { deadline: string; startDate: string } | null {
   const repeat = typeof t.repeat === "string" ? t.repeat : "";
-  if (!repeat) return null;
-  const nd = nextRepeatDate(typeof t.deadline === "string" && t.deadline ? t.deadline : todayStr, repeat);
+  const hasDl = isDay(t.deadline), hasStart = isDay(t.startDate);
+  const anchor = hasDl ? (t.deadline as string) : hasStart ? (t.startDate as string) : todayStr;
+  let d = nextRepeatDate(anchor, repeat);
+  if (!d) return null;
+  for (let i = 0; d && d <= todayStr && i < 1000; i++) d = nextRepeatDate(d, repeat);
+  if (!d) return null;
+  if (!hasDl && hasStart) return { deadline: "", startDate: d };
+  if (!hasStart) return { deadline: d, startDate: typeof t.startDate === "string" ? t.startDate : "" };
+  const gap = Math.max(0, dayGap(t.startDate as string, t.deadline as string));
+  return { deadline: d, startDate: shiftDay(d, -gap) };
+}
+/** 次の回の名前（taskmaster の repeatNextId と同じ・2026-11-07）。元の名前＋日付で決まるので、2 回作っても 1 件 */
+export const seriesOf = (t: Item) => String((typeof t.seriesId === "string" && t.seriesId) || t.id);
+export const repeatNextId = (t: Item, nd: { deadline: string; startDate: string }) => `${seriesOf(t)}__r${nd.deadline || nd.startDate}`;
+/** 済みにした繰り返しタスクの次の回（taskmaster の toggleDone と同じ形） */
+export function nextRepeatTask(t: Item, todayStr: string): Item | null {
+  const nd = nextRepeatDates(t, todayStr);
   if (!nd) return null;
   const subs = Array.isArray(t.subtasks) ? (t.subtasks as Item[]).map((x) => ({ ...x, done: false })) : [];
-  return { ...t, id: crypto.randomUUID(), deadline: nd, completed: false, status: "todo", doneAt: "", completedAt: "",
-    order: typeof t.order === "number" ? t.order + 1 : t.order, subtasks: subs,
+  return { ...t, id: repeatNextId(t, nd), seriesId: seriesOf(t), spawnedFrom: String(t.id), deadline: nd.deadline, startDate: nd.startDate,
+    completed: false, status: "todo", doneAt: "", completedAt: "", archived: false,
+    order: typeof t.order === "number" ? t.order + 1 : t.order, subtasks: subs, labels: [], waitFor: "", doneWhen: "",
     // テンプレ付きはメモ＝その回の記録なので、次の回はまっさら（画面の toggleDone と同じ・2026-10-26）
     ...(typeof t.templateId === "string" && t.templateId ? { notes: "" } : {}) };
 }
@@ -627,7 +647,12 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
     if (body.status === "done" && !(curItem.completed === true || curItem.status === "done")) {
       nextTask = nextRepeatTask({ ...curItem, ...fields, id: body.task_id }, tokyoToday());
       if (nextTask) {
-        try { await patchTask(token, uid, nextTask.id as string, nextTask); }
+        // 2026-11-07：同じ名前の次の回がもうあれば作らない（画面と道具の両方から完了にしても 1 件）
+        try {
+          const exists = await fsGetOrNull(token, `users/${uid}/tm_tasks/${encodeURIComponent(nextTask.id as string)}`);
+          if (exists) nextTask = docToItem(exists);
+          else await patchTask(token, uid, nextTask.id as string, nextTask);
+        }
         catch (e) { return Response.json({ error: "next repeat write failed", detail: String(e) }, { status: 500 }); }
       }
     }
@@ -663,7 +688,7 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
   // 2026-10-22：繰り返しタスクを済みにしたら次の回を足す（古い置き場でも同じ）
   const wasDone = existingItems[targetIndex].completed === true || existingItems[targetIndex].status === "done";
   const legacyNext = body.status === "done" && !wasDone ? nextRepeatTask(updated, tokyoToday()) : null;
-  if (legacyNext) updatedItems.push(legacyNext);
+  if (legacyNext && !existingItems.some((t) => t.id === legacyNext.id)) updatedItems.push(legacyNext);
 
   // Firestore に書き戻す（value フィールドのみ updateMask）
   try {
