@@ -244,6 +244,7 @@ interface KpiGoalPatch {
   new_title?: string;
   monthly_target?: string; // "" ＝ 目標を外す
   unit?: string;
+  aggregation?: "sum" | "latest";
 }
 
 function parseJsonArray(raw: string, field: string): Record<string, unknown>[] {
@@ -342,7 +343,13 @@ function parseKpiGoals(raw?: string): KpiGoalPatch[] {
       if (typeof o.unit !== "string") throw new Error(`${nth} の unit は文字で渡してください`);
       patch.unit = o.unit;
     }
-    const touched = ["new_title", "monthly_target", "unit"].some((k) => k in patch);
+    if ("aggregation" in o) {
+      if (o.aggregation !== "sum" && o.aggregation !== "latest") {
+        throw new Error(`${nth} の aggregation は sum か latest で渡してください`);
+      }
+      patch.aggregation = o.aggregation;
+    }
+    const touched = ["new_title", "monthly_target", "unit", "aggregation"].some((k) => k in patch);
     if (!touched) throw new Error(`${nth} に変更する項目がありません`);
     return patch;
   });
@@ -710,7 +717,7 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
   // ─── 4. haAku__update_goals ───────────────────────────────────────────────
   server.tool(
     "haAku__update_goals",
-    "haAku の目標値（上位の目標の目標値・手前の数字の月次目標）を書き換える。実績や現在値ではなく「目標そのもの」を直すときに使う。日報の口（haAku__update_daily_report）では目標値は変えられないため、こちらを使う。渡した項目だけ更新し、渡さなかった項目はもとの値を保つ。対象が見つからない・同じ名前が複数ある場合は、何も書かずに止める。月次目標を外すときは monthly_target に null を渡す。戻り値: { ok, updated, kgis: [{id, title, target, unit, period, deadline, current}], kpis: [{id, title, unit, monthlyTarget, kgiId}] }（すべて書き込んだあとに読み直した値）",
+    "haAku の目標値（上位の目標の目標値・手前の数字の月次目標）を書き換える。実績や現在値ではなく「目標そのもの」を直すときに使う。日報の口（haAku__update_daily_report）では目標値は変えられないため、こちらを使う。渡した項目だけ更新し、渡さなかった項目はもとの値を保つ。対象が見つからない・同じ名前が複数ある場合は、何も書かずに止める。月次目標を外すときは monthly_target に null を渡す。戻り値: { ok, updated, kgis: [{id, title, target, unit, period, deadline, current}], kpis: [{id, title, unit, monthlyTarget, aggregation, kgiId}] }（すべて書き込んだあとに読み直した値）",
     {
       kgi_goals_json: z
         .string()
@@ -725,8 +732,9 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
         .optional()
         .describe(
           '手前の数字の月次目標の書き換え。JSON 配列で渡す。例: [{"title":"しあらぼ新規契約","monthly_target":2}]。' +
-          "id か title のどちらかで相手を指定する。変えられるのは new_title / monthly_target / unit。" +
-          "monthly_target に null を渡すと月次目標を外す（実績だけをためる形になる）"
+          "id か title のどちらかで相手を指定する。変えられるのは new_title / monthly_target / unit / aggregation。" +
+          "monthly_target に null を渡すと月次目標を外す（実績だけをためる形になる）。" +
+          "aggregation は数え方で sum（月の合計）か latest（月の最新の値・人数など）"
         ),
     },
     async (args) => {
@@ -780,8 +788,9 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           if (patch.new_title !== undefined) hit.title = patch.new_title;
           if (patch.monthly_target !== undefined) hit.monthlyTarget = patch.monthly_target;
           if (patch.unit !== undefined) hit.unit = patch.unit;
+          if (patch.aggregation !== undefined) hit.aggregation = patch.aggregation;
           updated.push(
-            `kpi:${before}${patch.monthly_target === "" ? "（月次目標を外した）" : ""}`
+            `kpi:${before}${patch.monthly_target === "" ? "（月次目標を外した）" : ""}${patch.aggregation ? `（数え方を ${patch.aggregation}）` : ""}`
           );
         }
         await fsPatch(token, kpiPath, { value: toFVal(next) }, ["value"]);
@@ -812,6 +821,7 @@ export function registerHaakuTools(server: McpServer, env: Env): void {
           title:         k.title,
           unit:          k.unit,
           monthlyTarget: k.monthlyTarget ?? "",
+          aggregation:   k.aggregation === "latest" ? "latest" : "sum",
           kgiId:         k.kgiId,
         })),
       });
