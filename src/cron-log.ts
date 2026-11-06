@@ -62,6 +62,8 @@ export const KNOWN_JOBS = [
   "line_inbox_cleanup",
   // 2026-11-03 追加（v1.66.0）：note のフォロワー数とメンシプ人数を毎朝 1 回残す（JST 07:30）
   "note_counts",
+  // 2026-11-06 追加（v1.68.0）：UTAGE の写し（毎晩 JST 3 時台に始め、15 分ごとに進める・動いた回だけ記録）
+  "utage_archive",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];

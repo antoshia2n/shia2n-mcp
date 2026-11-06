@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.68.0（2026-11-06 開発部・UTAGE 解約の便 U1「UTAGE の写し」）：UTAGE の中身（ファネル・ページ・シナリオとメッセージ・LINE・読者・イベント・会員サイト・商品・売上）を UTAGE の MCP の読む道具で全部読み、保管庫の utage-archive/ に写す。毎晩 JST 3 時台に新しい回を始め、cron の 15 分ごとに少しずつ進める（cron-log の utage_archive・動いた回だけ記録）。AI が読む形：棚ごとの読み物（Markdown）・品目の一覧・ページやメールの文だけを抜いたもの。道具 utage_archive__status・run・read・search・get。個人の情報は raw にだけ置き、道具には数しか出さない。マーケくんからは UtageReader の archive_* で読む。src/utage-archive.ts・src/tools-utage-archive.ts・src/utage-reader.ts・src/cron-log.ts。試験は test/utage-archive.test.ts。設定の追加 0 個（UTAGE_MCP_TOKEN・BACKUP_BUCKET は既存）。Naoki OK 2026-11-06 19:47・19:56。
  * v1.67.0（2026-11-06 開発部・haAku 13 週の統合 ②）：haAku__get_home の取り組みの行動の率を「帯が今週にかかる未達成のステップと今週に達成したステップ」のタスクだけで数える（week_steps・action_note・all_tasks_total）。成果の率は持ち主の KPI だけ・見るだけの KPI（取り組みの新しい欄 viewKpiIds）は view_kpis に出すが数えない。preview_management_changes の取り組みが viewKpiIds を受ける。haAku の src/lib/homeProgress.js と同じ計算。src/haaku-home.ts・src/haaku-home-store.ts・src/haaku-initiatives.ts・src/haaku-ai-changes.ts・src/haaku-plan-summary.ts（doneAt を読む）・src/tools-haaku-home.ts・src/tools-haaku-write.ts。試験は test/haaku-home.test.ts・test/haaku-initiatives.test.ts。
  * v1.66.0（2026-11-03 開発部・コンテンツ担当の申し送り 4）：note__counts 追加（シアニンの note の日ごとのフォロワー数とメンシプ人数）。毎朝 JST 07:30 に note の /api/v2/creators/shia2n を読み、保管庫の note-counts/日付.json に残す（cron-log の note_counts）。メンシプ人数が note から取れない日は haAku の KPI「メンシプ在籍数」の値を出どころつきで返す。src/note-counts.ts・src/index.ts・src/cron-log.ts・src/version.ts。試験は test/note-counts.test.ts。設定の追加 0 個（BACKUP_BUCKET は既存）。
  * v1.65.0（2026-11-03 開発部・コンテンツ担当の申し送り 3）：思考整理くんの道具を 3 つ足した。mindmap__move_branch（Claude が足した (AI) の枝だけを同じマップの別の枝の下へ動かす）・mindmap__set_table（マップをそのフォルダの中の表へ入れる。mm_settings の trows。3 分以内に画面で保存された設定には書かない・読んだときの updated_at の行だけ書く）・mindmap__delete_map（confirm が無ければ下見だけ。Naoki の「消してよい」のあと confirm: true）。mindmap__create_map に table を足した。決め方は src/mindmap-core.ts の moveNode・findTable・putTrow、試験は test/mindmap-core.test.ts。設定の追加 0 個。
@@ -592,6 +593,8 @@ import { registerTaskmasterTools } from "./tools-taskmaster.js";
 import { registerSalesManagerTools } from "./tools-sales-manager.js";
 import { registerSalesManagerPaymentTools } from "./tools-sales-manager-payments.js";
 import { registerZoomArchiveTools } from "./tools-zoom-archive.js";
+import { registerUtageArchiveTools } from "./tools-utage-archive.js";
+import { tick as utageArchiveTick } from "./utage-archive.js";
 import { registerSalesManagerLedgerTools } from "./tools-sales-manager-ledger.js";
 import { registerContentOsTools } from "./tools-content-os.js";
 import { registerContentSheetTools } from "./tools-content-sheet.js";
@@ -620,7 +623,7 @@ import { handleUtagePolling } from "./cron-utage-polling.js";
 import { handleUtageBackfill } from "./handle-utage-backfill.js";
 import { handleUtageDiag } from "./handle-utage-diag.js";
 import { handleGateResolve, handleGateAttempts, handleGateDiag } from "./gate.js";
-import { runAndRecord, recordSkipped, readAllRuns } from "./cron-log.js";
+import { runAndRecord, recordSkipped, readAllRuns, appendRun } from "./cron-log.js";
 import { handleContentOsMetricsSync } from "./cron-contentos-metrics.js";
 import { handleHaakuFill } from "./cron-haaku-fill.js";
 import { snapshotWeekly } from "./haaku-home-store.js";
@@ -786,6 +789,7 @@ function createMcpServer(env: Env): McpServer {
   registerSalesManagerTools(server, env);
   registerSalesManagerPaymentTools(server, env);
   registerZoomArchiveTools(server, env);
+  registerUtageArchiveTools(server, env);
   registerSalesManagerLedgerTools(server, env);
   registerContentOsTools(server, env);
   registerContentSheetTools(server, env);
@@ -1242,6 +1246,23 @@ export default {
         JSON.stringify({ cron: controller.cron })
       );
     }
+
+    // v1.68.0（2026-11-06）：UTAGE の写し。毎晩 JST 3 時台に始め、15 分ごとに少しずつ進める（どちらの cron でも呼ぶ）。
+    // 動いた回（読んだ・読み終えた・止まった）だけ記録する（何もしない 15 分ごとの記録で、ほかの記録が押し出されないため）
+    tasks.push(
+      (async () => {
+        const t0 = Date.now();
+        try {
+          const r = await utageArchiveTick(env);
+          if (r.did || r.finished || r.stopped) {
+            await appendRun(env, "utage_archive", { at: new Date().toISOString(), status: "success", count: r.did, detail: `回 ${r.run}・読んだ ${r.did}・残り ${r.left}${r.finished ? "・読み終えた" : ""}${r.stopped ? "・" + r.stopped : ""}`, duration_ms: Date.now() - t0 });
+          }
+        } catch (e) {
+          await appendRun(env, "utage_archive", { at: new Date().toISOString(), status: "failure", count: null, detail: e instanceof Error ? e.message : String(e), duration_ms: Date.now() - t0 });
+          throw e;
+        }
+      })()
+    );
 
     // エラーを握りつぶさず再 throw して Cron Events に失敗記録
     const results = await Promise.allSettled(tasks);

@@ -13,6 +13,7 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./index.js";
+import { archiveDoc, archiveItem, archiveSearch, archiveStatus } from "./utage-archive.js";
 
 const DEFAULT_UTAGE_API_BASE = "https://api.utage-system.com/v1";
 const ID_RE = /^[A-Za-z0-9_-]{4,40}$/;
@@ -39,5 +40,22 @@ export class UtageReader extends WorkerEntrypoint<Env> {
     const p = Math.max(1, Math.floor(Number(page) || 1));
     const n = Math.min(100, Math.max(1, Math.floor(Number(perPage) || 100)));
     return await this.get(`/accounts/${encodeURIComponent(accountId)}/readers`, { per_page: n, page: p });
+  }
+
+  // v1.68.0（2026-11-06・UTAGE 解約の便 U1）：UTAGE の写しを読む（マーケくんの「UTAGE の写し」の棚から）。個人の情報は数だけ
+  async archive_status(): Promise<object> {
+    return await archiveStatus(this.env);
+  }
+
+  async archive_doc(doc: string, run?: string): Promise<object> {
+    return await archiveDoc(this.env, String(doc ?? ""), run ? String(run) : undefined);
+  }
+
+  async archive_search(q: { words?: string; kind?: string; limit?: number; run?: string }): Promise<object> {
+    return await archiveSearch(this.env, q ?? {});
+  }
+
+  async archive_item(ref: string, raw?: boolean, run?: string): Promise<object> {
+    return await archiveItem(this.env, String(ref ?? ""), { raw: raw === true, run: run ? String(run) : undefined });
   }
 }
