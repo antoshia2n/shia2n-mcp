@@ -389,6 +389,8 @@ export type AddTaskInput = {
   repeat?: string;
   /** テンプレの id（taskmaster__list_templates の id・2026-10-26）。画面の「テンプレで足す」と同じ中身で入る */
   template_id?: string;
+  /** リンク（[{title,url}]・2026-11-07 v1.71.0）。マーケくんのチャットから足すとき、元のメッセージへ戻る住所 1 本。道具からは渡さない */
+  links?: { title: string; url: string }[];
 };
 
 /** TaskMaster の繰り返しの値（taskmaster の src/lib/util.js の REPEAT と同じ・2026-10-22） */
@@ -454,6 +456,7 @@ export function buildNewTask(body: AddTaskInput, now = new Date()): Item {
     completed: false,
     createdAt: now.toISOString().slice(0, 10),
     ...(body.repeat ? { repeat: body.repeat } : {}),
+    ...(Array.isArray(body.links) && body.links.length ? { links: body.links.slice(0, 5) } : {}),
   };
 }
 
