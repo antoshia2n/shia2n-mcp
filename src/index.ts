@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.71.0（2026-11-07 開発部・マーケくんのチャット C1）：B（マーケくん）のチャットでメッセージから TaskMaster にタスクを足す口 TaskmasterWriter（add だけ・サービスの結びでだけ呼べる・外からは呼べない）。道具 taskmaster__add_task と同じ handleTaskmasterAddTask を通すだけで、書き方は持たない。足せるのは題・期限・元のメッセージへ戻る住所 1 本（AddTaskInput に links を足した。道具からは渡さない）。読む口 TaskmasterReader は読むだけのまま。src/taskmaster-writer.ts（口）と src/taskmaster-writer-core.ts（引数の確かめ）、試験は test/taskmaster-writer.test.ts。設定の追加 0 個。
  * v1.70.0（2026-11-06 開発部・AI チャットの目次 2 便）：anken__get_chat（全文を往復の範囲で読む）と anken__put_chat_index（要約と往復ごとの題・札・1 行だけを書く・全文は書き換えない）を追加。全文はシアニンパネルが案件くんの /api/chats で入れる（Claude が書き写さない）。anken__list_chats に目次の有無。設定の追加 0 個。
  * v1.69.0（2026-11-06 開発部・AI チャットの目次）：anken__put_chat（クライアントの ChatGPT・Claude の共有リンクを Claude が Naoki の Chrome で読み、要約・目次・各回の全文を ak_chats に書く・同じ共有リンクは上書き・伏せ字）と anken__list_chats を追加。表 ak_chats を足した（SQL は Naoki が貼る）。設定の追加 0 個。
  * v1.68.0（2026-11-06 開発部・UTAGE 解約の便 U1「UTAGE の写し」）：UTAGE の中身（ファネル・ページ・シナリオとメッセージ・LINE・読者・イベント・会員サイト・商品・売上）を UTAGE の MCP の読む道具で全部読み、保管庫の utage-archive/ に写す。毎晩 JST 3 時台に新しい回を始め、cron の 15 分ごとに少しずつ進める（cron-log の utage_archive・動いた回だけ記録）。AI が読む形：棚ごとの読み物（Markdown）・品目の一覧・ページやメールの文だけを抜いたもの。道具 utage_archive__status・run・read・search・get。個人の情報は raw にだけ置き、道具には数しか出さない。マーケくんからは UtageReader の archive_* で読む。src/utage-archive.ts・src/tools-utage-archive.ts・src/utage-reader.ts・src/cron-log.ts。試験は test/utage-archive.test.ts。設定の追加 0 個（UTAGE_MCP_TOKEN・BACKUP_BUCKET は既存）。Naoki OK 2026-11-06 19:47・19:56。
@@ -587,6 +588,7 @@ import { APP_VERSION } from "./version.js";
 export { TaskmasterReader } from "./taskmaster-reader.js";
 export { UtageReader } from "./utage-reader.js";
 export { SalesWriter } from "./sales-writer.js";
+export { TaskmasterWriter } from "./taskmaster-writer.js";
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
