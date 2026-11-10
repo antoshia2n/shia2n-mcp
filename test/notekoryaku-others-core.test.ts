@@ -7,6 +7,7 @@ const a = (k: string, day: string, likes: number, extra: Record<string, unknown>
 test("skiOf：その月の公開分を種類ごとに [本数, スキ]", () => {
   const xs = [a("a", "2026-10-01", 5), a("b", "2026-10-31", 7, { price: 300 }), a("c", "2026-10-15", 2, { membership: true }), a("d", "2026-11-01", 9)];
   assert.deepEqual(skiOf(xs, "2026-10"), { f: [1, 5], p: [1, 7], m: [1, 2] });
+  assert.deepEqual(skiOf([a("e", "2026-10-02", 4, { price: 500, membership: true })], "2026-10"), { f: [0, 0], p: [0, 0], m: [1, 4] });
   assert.equal(skiEmpty({ f: [0, 0], p: [0, 0], m: [0, 0] }), true);
   assert.equal(skiEmpty({}), true);
   assert.equal(skiEmpty({ m: [8, 230] }), false);
