@@ -64,6 +64,7 @@ export const KNOWN_JOBS = [
   "note_counts",
   // 2026-11-06 追加（v1.68.0）：UTAGE の写し（毎晩 JST 3 時台に始め、15 分ごとに進める・動いた回だけ記録）
   "utage_archive",
+  "content_schedules",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];

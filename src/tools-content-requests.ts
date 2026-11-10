@@ -48,4 +48,12 @@ export function registerContentRequestTools(server: McpServer, env: Env): void {
     },
     async (args) => asMcpTextResult(await callContentOsInternalApi(env, "put-result", args))
   );
+
+  // v1.73.0：予約の見回りを手で 1 回動かす（Claude の入口だけ。GPT の入口 /content/mcp には出さない）
+  server.tool(
+    "content_os__run_schedules",
+    "コンテンツくんの予約の見回りを 1 回動かす（ふだんは 30 分ごとに自動）。①送信済みの投稿の X の住所を残す ②予約の依頼（未着手・引用元待ち）を Buffer に入れる。戻り値: { ok, x_urls: {count, seen, error?}, done, waiting, error, errors }。",
+    {},
+    async () => asMcpTextResult(await callContentOsInternalApi(env, "run-schedules", {}))
+  );
 }
