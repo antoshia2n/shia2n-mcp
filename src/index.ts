@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.78.0（2026-11-10 開発部・note攻略くん 作業 73・Naoki「OK」21:41）：見る相手（自分以外）の月の数字とスワイプ候補。cron の 30 分ごと（15 分・45 分）に 1 人ずつ、note の公開の記事一覧（ログイン不要）を読み、na_obs の種類ごとの [本数, スキ] とフォロワー数（前の月の行だけ）を空のときだけ埋め、近い 10 本のスキの真ん中の 1.2 倍以上を na_picks へ（同じ記事は触らない）。対象は初回 2026-08〜10・以後は毎月 2 日から前の月。進み具合は保管庫 notekoryaku/others-state.json、記録は cron-log の notekoryaku_others。道具 notekoryaku__others（様子を見る・1 人ぶん手で進める）。分析の文・評価・メンシプ人数には書かない。src/notekoryaku-others.ts・src/notekoryaku-core.ts（計算）・試験 test/notekoryaku-others-core.test.ts。表は作業 73（Naoki が貼る）。設定の追加 0 個。
  * v1.77.0（2026-11-10 開発部・note攻略くん 作業 72 の続き）：notekoryaku__put_articles が受けるのを views（記事の印 → 全体ビュー）だけにした。Chrome の道具が 1 回に返せる文字が約 1000 字で、全記事の題まで運べなかったため。題・公開日・値段・メンシプ・スキ・コメントは道具が note の公開の記事一覧（ログイン不要）から取る。judge を省いた初回（note から入れた記事がまだ無い）は全部を判定する。設定の追加 0 個。
  * v1.76.0（2026-11-10 開発部・note攻略くん 作業 72・Naoki「OK」20:55）：notekoryaku__put_articles 追加（Claude の入口だけ）。毎月 2 日の予約が Naoki の Chrome で読んだ note の全記事（題・公開日・値段・メンシプ・全体ビュー・スキ・コメント）を受け、na_articles を note_key で 1 本 1 行に入れ直し、取った日の合計を snaps に足す。公開日の近い前後 10 本のスキの真ん中より 1.2 倍以上の記事にスワイプ候補の印 pick（判定は judge の範囲だけ・Naoki が入れた／見送ったものは残す）。スワイプくんへは入れない。計算は src/notekoryaku-core.ts・試験は test/notekoryaku-core.test.ts。列は作業 72（Naoki が貼る）。設定の追加 0 個。
  * v1.75.0（2026-11-10 開発部・型の持ち帰り 便1 の続き）：content_os__save_template に revise_id（今ある型の改訂案を候補で出す。採用は Naoki が画面で押す）と made_in（どこで作ったか）を足し、説明に「データベースの道具で型を直接書き換えない」「作るものの名前をパターン名にしない」を書いた。口は content-os の save-template、表は content_templates に replaces_id・made_in を足した。設定の追加 0 個。
@@ -658,6 +659,7 @@ import { registerLineInboxTools } from "./tools-line-inbox.js";
 import { registerMindmapTools } from "./tools-mindmap.js";
 import { registerNoteCountTools, recordNoteSnap } from "./note-counts.js";
 import { registerNotekoryakuTools } from "./tools-notekoryaku.js";
+import { registerNotekoryakuOthersTools, othersTick } from "./notekoryaku-others.js";
 import { registerSozaiTools } from "./tools-sozai.js";
 import { registerAnkenTools } from "./tools-anken.js";
 import { registerXbunsekiTools } from "./tools-xbunseki.js";
@@ -831,6 +833,7 @@ function createMcpServer(env: Env): McpServer {
   registerMindmapTools(server, env);
   registerNoteCountTools(server, env);
   registerNotekoryakuTools(server, env);
+  registerNotekoryakuOthersTools(server, env);
   registerSozaiTools(server, env);
   registerAnkenTools(server, env);
   registerXbunsekiTools(server, env);
@@ -1299,6 +1302,21 @@ export default {
           }
         } catch (e) {
           await appendRun(env, "utage_archive", { at: new Date().toISOString(), status: "failure", count: null, detail: e instanceof Error ? e.message : String(e), duration_ms: Date.now() - t0 });
+          throw e;
+        }
+      })()
+    );
+
+    // v1.78.0（2026-11-10）：note攻略くんの見る相手の月の数字とスワイプ候補。15 分と 45 分の cron で 1 人ずつ進める（動いた回だけ記録）
+    tasks.push(
+      (async () => {
+        const t0 = Date.now();
+        if (controller.cron !== "15,45 * * * *") return; // 30 分ごと（15 分と 45 分）に 1 人。外への呼び出しの数を、同じ回のほかの処理と合わせて上限に収めるため
+        try {
+          const r = await othersTick(env, controller.scheduledTime);
+          if (r.did) await appendRun(env, "notekoryaku_others", { at: new Date().toISOString(), status: "success", count: 1, detail: `${r.detail}・残り ${r.left} 人`, duration_ms: Date.now() - t0 });
+        } catch (e) {
+          await appendRun(env, "notekoryaku_others", { at: new Date().toISOString(), status: "failure", count: null, detail: e instanceof Error ? e.message : String(e), duration_ms: Date.now() - t0 });
           throw e;
         }
       })()

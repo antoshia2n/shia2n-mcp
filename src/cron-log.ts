@@ -64,6 +64,8 @@ export const KNOWN_JOBS = [
   "note_counts",
   // 2026-11-06 追加（v1.68.0）：UTAGE の写し（毎晩 JST 3 時台に始め、15 分ごとに進める・動いた回だけ記録）
   "utage_archive",
+  // 2026-11-10 追加（v1.78.0）：note攻略くんの見る相手の月の数字とスワイプ候補（15 分ごとに 1 人・動いた回だけ記録）
+  "notekoryaku_others",
   "content_schedules",
 ] as const;
 

@@ -75,3 +75,73 @@ export function buildRows(owner: string, arts: NoteIn[], olds: Old[], day: strin
   });
   return { rows, added: arts.filter(a => !byKey.has(a.key)).length };
 }
+
+/* ── ここから見る相手（2026-11-10 作業 73）──
+ * note攻略くん：見る相手（自分以外）の月の数字とスワイプ候補の計算（2026-11-10 開発部・作業 73・Naoki「OK」21:41）。
+ * 取りに行く・書くのは src/notekoryaku-others.ts。試験は test/notekoryaku-others-core.test.ts。
+ *
+ * 数字：その月に公開した記事を、種類（値段あり＝有料・メンシプにつながる＝メンシプ・ほか無料）ごとに [本数, スキの合計] で数える。
+ *   スキは取った時点の合計（note は月ごとのスキを出さない）。全体ビューは他人には見えないので扱わない。
+ * 候補：自分の記事と同じ決め（公開日の近い前後 10 本のスキの真ん中の 1.2 倍以上）。比べる相手は同じアカウントの記事だけ。
+ * 分析の文・評価・集客ルート・メンシプ人数には触らない（分析は Naoki が書く。メンシプ人数は公開されていない）。
+ */
+
+export type Ski = { f: [number, number]; p: [number, number]; m: [number, number] };
+export const KIND_KEY: Record<string, keyof Ski> = { free: "f", paid: "p", member: "m" };
+
+export function skiOf(arts: NoteIn[], month: string): Ski {
+  const s: Ski = { f: [0, 0], p: [0, 0], m: [0, 0] };
+  for (const a of arts) {
+    if (jstMonth(a.published_at) !== month) continue;
+    const k = KIND_KEY[kindOf(a)];
+    s[k][0] += 1; s[k][1] += Math.max(0, Math.round(+(a.likes ?? 0) || 0));
+  }
+  return s;
+}
+export const skiEmpty = (v: unknown) => {
+  const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+  return ["f", "p", "m"].every(k => { const x = o[k]; return !Array.isArray(x) || (!(+x[0]) && !(+x[1])); });
+};
+
+export type PickRow = { account: string; note_key: string; title: string; url: string; published_on: string; month: string; kind: string; likes: number; comments: number | null; r: number; base: number; n: number; at: string };
+
+export function picksOf(account: string, urlname: string, arts: NoteIn[], months: string[], day: string): PickRow[] {
+  const rr = ratios(arts);
+  const out: PickRow[] = [];
+  for (const a of arts) {
+    const m = jstMonth(a.published_at);
+    if (!months.includes(m)) continue;
+    const x = rr.get(a.key);
+    if (!x || x.r < RATIO) continue;
+    out.push({ account, note_key: a.key, title: String(a.title || "").slice(0, 300), url: `https://note.com/${urlname}/n/${a.key}`, published_on: jstDay(a.published_at), month: m,
+      kind: kindOf(a), likes: Math.round(+(a.likes ?? 0)), comments: a.comments ?? null, r: x.r, base: x.base, n: x.n, at: day });
+  }
+  return out.sort((p, q) => q.r - p.r);
+}
+
+/** いくつのページまで読めば足りるか：最古の対象月の頭より古い記事が 6 本たまり、ページの最後もその頭より古いなら止める */
+export function enoughOlder(arts: NoteIn[], lastOnPage: string | null, firstMonth: string): boolean {
+  const start = `${firstMonth}-01`;
+  const older = arts.filter(a => jstDay(a.published_at) < start).length;
+  return older >= 6 && !!lastOnPage && jstDay(lastOnPage) < start;
+}
+
+/** 対象の月：初回の遡り（2026-08〜10）と、毎月 2 日からは前の月。今月とまだ来ない月は入れない */
+export const BACKFILL = ["2026-08", "2026-09", "2026-10"];
+export function targetMonths(today: string): string[] {
+  const [y, m, d] = today.split("-").map(Number);
+  const cur = `${y}-${String(m).padStart(2, "0")}`;
+  const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+  const set = new Set(BACKFILL.filter(x => x < cur));
+  if (d >= 2) set.add(prev);
+  return [...set].filter(x => x < cur).sort();
+}
+
+/** 次に回す相手：まだ済んでいない月がある相手を、並び順で 1 人 */
+export function nextAccount(accounts: string[], done: Record<string, string[]>, months: string[]): { account: string; months: string[] } | null {
+  for (const a of accounts) {
+    const left = months.filter(m => !(done[m] || []).includes(a));
+    if (left.length) return { account: a, months: left };
+  }
+  return null;
+}
