@@ -10,7 +10,7 @@ import type { Env } from "./index.js";
  * ChatGPT の予定タスクが 1 時間ごとに読み、初稿を書き戻す。Naoki はそのチャットで仕上げ、OK で done にする。
  * 中身は content-os の /api/internal/list-requests と put-result。書けるのは結果と状態だけ（依頼の中身は変えられない）。
  */
-export const CONTENT_REQUEST_TOOLS = ["content_os__list_requests", "content_os__put_result"] as const;
+export const CONTENT_REQUEST_TOOLS = ["content_os__list_requests", "content_os__put_result", "content_os__list_templates", "content_os__save_template"] as const;
 
 export function registerContentRequestTools(server: McpServer, env: Env): void {
   server.tool(
@@ -47,6 +47,37 @@ export function registerContentRequestTools(server: McpServer, env: Env): void {
       note: z.string().max(2000).optional().describe("Naoki への申し送り（1〜2行）"),
     },
     async (args) => asMcpTextResult(await callContentOsInternalApi(env, "put-result", args))
+  );
+
+  // v1.74.0（2026-11-10 開発部・型の持ち帰り 便1）：成果の出た投稿のチャットで Naoki が「型にして」と言ったとき、AI が型・依頼パターンを候補として書き込む
+  server.tool(
+    "content_os__list_templates",
+    "コンテンツくんの型（本文・締め・メモ・プロンプト・依頼パターン）を読む。型を書く前に、似た型がもう無いかを確かめるために使う。status＝mine（Naoki が自分で作った）／candidate（AI が書いた候補）／testing（検証中）／confirmed（確定）。query で名前・中身・なぜ効いたかを探す。一覧の中身は頭の 400 字、id を渡すと全文。戻り値: { ok, count, templates: [...] }。",
+    {
+      kind: z.enum(["body", "closing", "memo", "prompt", "request"]).optional().describe("型の種類。request＝依頼パターン（GPT へ図解・サムネ・本文を頼む文）"),
+      status: z.enum(["mine", "candidate", "testing", "confirmed"]).optional(),
+      query: z.string().max(100).optional(),
+      id: z.string().optional().describe("型の番号（uuid）。渡すとその1件を全文で"),
+    },
+    async (args) => asMcpTextResult(await callContentOsInternalApi(env, "list-templates", args))
+  );
+
+  server.tool(
+    "content_os__save_template",
+    "コンテンツくんに型・依頼パターンを「候補」として書き込む。使うのは、Naoki が成果の出た投稿のチャットで「これを型にして」「依頼パターンにして」と言ったときだけ（自分の判断で作らない）。新しく作ると必ず候補になり、Naoki が型の管理画面で使いながら確かめる。id を渡すと、まだ候補のものだけ書き換えられる（Naoki が手を入れた型は書き換えられず 409）。kind：body 本文の型（{{cursor}} の所にカーソルが来る）／closing 締め／memo メモ（- と半角スペース2つで箇条書き）／prompt AI に渡す文（{タイトル}{本文}{メモ}{種類} が書いている中身に置き換わる）／request 依頼パターン（make＝quote_figure 引用の図解／article_figure 記事内の図解／thumbnail サムネ／text 本文の初稿）。why（なぜ効いたか）は必須で、Naoki が言った主観と数字をその言葉のまま入れる。source_post_id は元の投稿の id（content_os__get_post で読める数字）。refs にスワイプくん（k=swipe）・思考整理くん（k=map）の id を 5 件まで付けると、依頼のたびに GPT へ渡る。書く前に content_os__list_templates で似た型が無いか確かめる。戻り値: { ok, created, template, source_post }。",
+    {
+      id: z.string().optional().describe("書き換えるときだけ。まだ候補の型の番号（uuid）"),
+      kind: z.enum(["body", "closing", "memo", "prompt", "request"]).optional().describe("新しく作るときは必須"),
+      name: z.string().max(120).optional().describe("型の名前（何に使う型か一目でわかる名前）。新しく作るときは必須"),
+      content: z.string().max(20000).optional().describe("型の中身。新しく作るときは必須"),
+      why: z.string().max(4000).optional().describe("なぜ効いたか（Naoki の言葉のまま・主観と数字）。新しく作るときは必須"),
+      source_post_id: z.number().int().optional().describe("元の投稿の id"),
+      make: z.enum(["quote_figure", "article_figure", "thumbnail", "text"]).optional().describe("kind=request のときの作るもの"),
+      post_type: z.string().max(60).optional().describe("使う投稿の種類（x_post・x_article・note など）。省略ですべての種類"),
+      refs: z.array(z.object({ k: z.enum(["swipe", "map"]), id: z.string(), title: z.string().max(120).optional() })).max(5).optional(),
+      made_by: z.enum(["claude", "gpt"]).optional().describe("書いた AI。Claude は claude、ChatGPT は gpt（既定 claude）"),
+    },
+    async (args) => asMcpTextResult(await callContentOsInternalApi(env, "save-template", args))
   );
 
   // v1.73.0：予約の見回りを手で 1 回動かす（Claude の入口だけ。GPT の入口 /content/mcp には出さない）

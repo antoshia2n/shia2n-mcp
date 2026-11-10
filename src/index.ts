@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.74.0（2026-11-10 開発部・型の持ち帰り 便1）：content_os__list_templates（型を読む）と content_os__save_template（Naoki が成果の出た投稿のチャットで「型にして」と言ったとき、型・依頼パターンを候補として書き込む。新しいものは必ず候補・候補でない型は書き換えない・なぜ効いたかは必須）。Claude の入口と GPT の入口 /content/mcp の両方に出す。口は content-os の /api/internal/save-template・list-templates、表は content_templates に status・why・source_post_id・made_by を足した。設定の追加 0 個。
  * v1.73.0（2026-11-10 開発部・コンテンツくんの予約）：30 分ごとの見回り content_schedules（content-os の /api/internal/run-schedules を叩く。送信済みの投稿の X の住所を残し、予約の依頼＝未着手・引用元待ちを Buffer に入れる。X引用は引用元の住所が入ってから retweet つきで入れる）と、手で 1 回動かす content_os__run_schedules（Claude の入口だけ）。表は作業 71。設定の追加 0 個。
  * v1.72.0（2026-11-10 開発部・コンテンツくんの依頼）：content_os__list_requests（チェックで作られた依頼を、もとの投稿と依頼の型つきで読む）と content_os__put_result（初稿・画像を書き戻す。画像は content-os が置き場 contentos の requests/ へ入れる）。ChatGPT の予定タスク用に、この 2 本と content_os__get_post・ai_log__add だけを出す入口 /content/mcp を足した（/anken/mcp と同じ門の形・認証も同じ）。中身は src/tools-content-requests.ts、口は content-os #67。表は作業69。設定の追加 0 個。
  * v1.71.0（2026-11-07 開発部・マーケくんのチャット C1）：B（マーケくん）のチャットでメッセージから TaskMaster にタスクを足す口 TaskmasterWriter（add だけ・サービスの結びでだけ呼べる・外からは呼べない）。道具 taskmaster__add_task と同じ handleTaskmasterAddTask を通すだけで、書き方は持たない。足せるのは題・期限・元のメッセージへ戻る住所 1 本（AddTaskInput に links を足した。道具からは渡さない）。読む口 TaskmasterReader は読むだけのまま。src/taskmaster-writer.ts（口）と src/taskmaster-writer-core.ts（引数の確かめ）、試験は test/taskmaster-writer.test.ts。設定の追加 0 個。
@@ -876,7 +877,7 @@ function createAnkenMcpServer(env: Env): McpServer {
  * ChatGPT の予定タスクを、コンテンツくんの依頼（初稿づくり）につなぐため。
  * 出すのは依頼を読む・書き戻す 2 本と、投稿を 1 件読む道具・AI の利用ログを書く道具だけ。投稿の書き換えや予約の道具は出さない。
  */
-const CONTENT_GPT_TOOLS = new Set<string>(["content_os__list_requests", "content_os__put_result", "content_os__get_post", "ai_log__add"]);
+const CONTENT_GPT_TOOLS = new Set<string>(["content_os__list_requests", "content_os__put_result", "content_os__get_post", "content_os__list_templates", "content_os__save_template", "ai_log__add"]);
 function createContentMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "content-mcp", version: APP_VERSION });
   const gate = { tool: (name: string, ...rest: unknown[]) => (CONTENT_GPT_TOOLS.has(name) ? (server.tool as any)(name, ...rest) : undefined) };
