@@ -64,10 +64,12 @@ export function registerContentRequestTools(server: McpServer, env: Env): void {
 
   server.tool(
     "content_os__save_template",
-    "コンテンツくんに型・依頼パターンを「候補」として書き込む。使うのは、Naoki が成果の出た投稿のチャットで「これを型にして」「依頼パターンにして」と言ったときだけ（自分の判断で作らない）。新しく作ると必ず候補になり、Naoki が型の管理画面で使いながら確かめる。id を渡すと、まだ候補のものだけ書き換えられる（Naoki が手を入れた型は書き換えられず 409）。kind：body 本文の型（{{cursor}} の所にカーソルが来る）／closing 締め／memo メモ（- と半角スペース2つで箇条書き）／prompt AI に渡す文（{タイトル}{本文}{メモ}{種類} が書いている中身に置き換わる）／request 依頼パターン（make＝quote_figure 引用の図解／article_figure 記事内の図解／thumbnail サムネ／text 本文の初稿）。why（なぜ効いたか）は必須で、Naoki が言った主観と数字をその言葉のまま入れる。source_post_id は元の投稿の id（content_os__get_post で読める数字）。refs にスワイプくん（k=swipe）・思考整理くん（k=map）の id を 5 件まで付けると、依頼のたびに GPT へ渡る。書く前に content_os__list_templates で似た型が無いか確かめる。戻り値: { ok, created, template, source_post }。",
+    "コンテンツくんに型・依頼パターンを「候補」として書き込む。使うのは、Naoki が成果の出た投稿のチャットで「これを型にして」「依頼パターンにして」と言ったときだけ（自分の判断で作らない）。型の読み書きは必ずこの道具と content_os__list_templates で行い、データベースの道具（Supabase など）で content_templates を直接書き換えない。新しく作ると必ず候補になり、Naoki が型の管理画面で使いながら確かめる。今ある型を直したいときは revise_id にその型の id を渡し「改訂案」の候補にする（元の型は Naoki が画面で「採用」を押すまで変わらない。種類・作るもの・名前は元の型を引き継ぐ）。id を渡すと、まだ候補のものだけ書き換えられる（Naoki の型は 409）。名前は中身が分かる名前にし、作るもの（引用の図解・記事内の図解・サムネ・本文の初稿）の名前をそのまま付けない（例：赤ペンメモ4枚図解）。made_in に、いま話しているチャットの住所（分かれば）を入れる。kind：body 本文の型（{{cursor}} の所にカーソルが来る）／closing 締め／memo メモ（- と半角スペース2つで箇条書き）／prompt AI に渡す文（{タイトル}{本文}{メモ}{種類} が書いている中身に置き換わる）／request 依頼パターン（make＝quote_figure 引用の図解／article_figure 記事内の図解／thumbnail サムネ／text 本文の初稿）。why（なぜ効いたか）は必須で、Naoki が言った主観と数字をその言葉のまま入れる。source_post_id は元の投稿の id（content_os__get_post で読める数字）。refs にスワイプくん（k=swipe）・思考整理くん（k=map）の id を 5 件まで付けると、依頼のたびに GPT へ渡る。書く前に content_os__list_templates で似た型が無いか確かめる。戻り値: { ok, created, template, revises, source_post }。",
     {
       id: z.string().optional().describe("書き換えるときだけ。まだ候補の型の番号（uuid）"),
-      kind: z.enum(["body", "closing", "memo", "prompt", "request"]).optional().describe("新しく作るときは必須"),
+      revise_id: z.string().optional().describe("今ある型を直す改訂案を作るとき、直す先の型の番号（uuid）"),
+      made_in: z.string().max(300).optional().describe("どこで作ったか。チャットの住所（https://claude.ai/chat/… など）が分かればそれ、無ければ「claude.ai のチャット」など"),
+      kind: z.enum(["body", "closing", "memo", "prompt", "request"]).optional().describe("新しく作るときは必須（revise_id のときは不要）"),
       name: z.string().max(120).optional().describe("型の名前（何に使う型か一目でわかる名前）。新しく作るときは必須"),
       content: z.string().max(20000).optional().describe("型の中身。新しく作るときは必須"),
       why: z.string().max(4000).optional().describe("なぜ効いたか（Naoki の言葉のまま・主観と数字）。新しく作るときは必須"),
