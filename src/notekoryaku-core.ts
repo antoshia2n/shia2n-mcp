@@ -88,12 +88,14 @@ export function buildRows(owner: string, arts: NoteIn[], olds: Old[], day: strin
 
 export type Ski = { f: [number, number]; p: [number, number]; m: [number, number] };
 export const KIND_KEY: Record<string, keyof Ski> = { free: "f", paid: "p", member: "m" };
+/** 見る相手の種類（2026-11-10 Naoki「直して」22:22）：メンシプにつながっていればメンシプを先に見る（単品でも買えるメンシプ記事をメンシプに数える。Naoki の手の数え方に合わせた）。自分の記事は kindOf のまま */
+export const kindOfOther = (a: NoteIn) => (a.membership ? "member" : (+(a.price ?? 0) > 0) ? "paid" : "free");
 
 export function skiOf(arts: NoteIn[], month: string): Ski {
   const s: Ski = { f: [0, 0], p: [0, 0], m: [0, 0] };
   for (const a of arts) {
     if (jstMonth(a.published_at) !== month) continue;
-    const k = KIND_KEY[kindOf(a)];
+    const k = KIND_KEY[kindOfOther(a)];
     s[k][0] += 1; s[k][1] += Math.max(0, Math.round(+(a.likes ?? 0) || 0));
   }
   return s;
@@ -114,7 +116,7 @@ export function picksOf(account: string, urlname: string, arts: NoteIn[], months
     const x = rr.get(a.key);
     if (!x || x.r < RATIO) continue;
     out.push({ account, note_key: a.key, title: String(a.title || "").slice(0, 300), url: `https://note.com/${urlname}/n/${a.key}`, published_on: jstDay(a.published_at), month: m,
-      kind: kindOf(a), likes: Math.round(+(a.likes ?? 0)), comments: a.comments ?? null, r: x.r, base: x.base, n: x.n, at: day });
+      kind: kindOfOther(a), likes: Math.round(+(a.likes ?? 0)), comments: a.comments ?? null, r: x.r, base: x.base, n: x.n, at: day });
   }
   return out.sort((p, q) => q.r - p.r);
 }

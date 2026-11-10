@@ -21,7 +21,8 @@ import { enoughOlder, nextAccount, picksOf, skiEmpty, skiOf, targetMonths } from
 const OWNER = "VrMwzeSceqWeXVQOrm8kpu4uVR33";
 const STATE_KEY = "notekoryaku/others-state.json";
 const MAX_PAGES = 20; // 1 ページ 6 本前後。同じ回のほかの処理と合わせて外への呼び出しの上限に収める
-type State = { done: Record<string, string[]>; closed: string[]; errors?: Record<string, string>; at?: string };
+type State = { done: Record<string, string[]>; closed: string[]; errors?: Record<string, string>; at?: string; rule?: number };
+const RULE = 2; // 数え方の版。上がったら済みの印を消して数え直す（v1.79.0：メンシプを先に見る）
 
 function sbh(env: Env, extra: Record<string, string> = {}): Record<string, string> {
   return { apikey: env.SUPABASE_SERVICE_ROLE_KEY, ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}), "Content-Type": "application/json", ...extra };
@@ -36,7 +37,8 @@ const NOTE_H = { "User-Agent": "Mozilla/5.0 (compatible; shia2n-mcp/1.0)", Accep
 async function readState(env: Env): Promise<State> {
   const o = await env.BACKUP_BUCKET.get(STATE_KEY);
   const s = o ? (JSON.parse(await o.text()) as State) : null;
-  return { done: s?.done ?? {}, closed: s?.closed ?? [], errors: s?.errors ?? {} };
+  if (!s || s.rule !== RULE) return { done: {}, closed: [], errors: {}, rule: RULE };
+  return { done: s.done ?? {}, closed: s.closed ?? [], errors: s.errors ?? {}, rule: RULE };
 }
 const writeState = (env: Env, s: State) => env.BACKUP_BUCKET.put(STATE_KEY, JSON.stringify({ ...s, at: new Date().toISOString() }), { httpMetadata: { contentType: "application/json" } });
 
