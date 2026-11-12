@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.80.0"; // 2026-11-12 コンテンツくんの依頼の画像をドライブへも写す
+export const APP_VERSION = "1.81.0"; // 2026-11-12 画像をファイルのまま受ける content_os__put_images

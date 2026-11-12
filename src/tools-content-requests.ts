@@ -29,7 +29,7 @@ export function registerContentRequestTools(server: McpServer, env: Env): void {
 
   server.tool(
     "content_os__put_result",
-    "コンテンツくんの依頼に、作ったもの（初稿・仕上げ）を書き戻す。status は drafting（作り始めた）／review（初稿ができた・Naoki の確認待ち。既定）／done（Naoki が OK と言った）。result_text に文の成果、images に画像（base64・png/jpeg/webp・1枚8MBまで・最大6枚）を渡すと、コンテンツくんの置き場へ入れて住所を残す。urls には https の住所（Drive など）をそのまま足せる。replace_images=true で前の画像を外して入れ直す。done にしてよいのは Naoki が会話の中で OK と言ったときだけ。戻り値: { ok, request }。取り消し済みは 409。",
+    "コンテンツくんの依頼に、作ったもの（初稿・仕上げ）を書き戻す。status は drafting（作り始めた）／review（初稿ができた・Naoki の確認待ち。既定）／done（Naoki が OK と言った）。result_text に文の成果、画像は content_os__put_images でファイルのまま渡す（型に「put_result の images へ」とあっても put_images を使う。大きい画像は base64 で運べない）。images に画像（base64・png/jpeg/webp・1枚8MBまで・最大6枚）を渡すと、コンテンツくんの置き場へ入れて住所を残す。urls には https の住所（Drive など）をそのまま足せる。replace_images=true で前の画像を外して入れ直す。done にしてよいのは Naoki が会話の中で OK と言ったときだけ。戻り値: { ok, request }。取り消し済みは 409。",
     {
       id: z.string().describe("依頼の番号（uuid。content_os__list_requests の id）"),
       status: z.enum(["drafting", "review", "done"]).optional().describe("既定 review"),
@@ -126,4 +126,64 @@ async function copyToDrive(env: Env, id: string): Promise<unknown> {
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+// v1.81.0（2026-11-12 開発部）：GPT が作った画像を「ファイルのまま」受け取る口。
+// 起きたこと：put_result の images（base64）では、GPT が 1600px の図解 4 枚を運べず、画像だけ書き戻せなかった（依頼 0e9b6b54・12:28）。
+// ChatGPT は道具の入力に _meta["openai/fileParams"] を付けると、会話の中のファイルを { download_url, file_id } で渡してくる。
+// こちらで download_url から読み、put-result へ base64 で渡す（サーバー同士なので大きさで詰まらない）。そのあとドライブへも写す。
+const OpenAIFile = z.object({
+  download_url: z.string().describe("ファイルの一時的な住所（ChatGPT が入れる）"),
+  file_id: z.string().describe("ファイルの番号（ChatGPT が入れる）"),
+  mime_type: z.string().optional(),
+  file_name: z.string().optional(),
+});
+function toB64(buf: ArrayBuffer): string {
+  const u8 = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+export function registerContentFileTool(server: McpServer, env: Env): void {
+  (server as any).registerTool(
+    "content_os__put_images",
+    {
+      description:
+        "コンテンツくんの依頼に、作った画像をファイルのまま書き戻す（図解・サムネなど。base64 にしなくてよい）。files に画像ファイルを 01・02… の順で 1〜6 枚渡す。labels は各画像の番号と題（同じ順）。replace_images=true で前の画像を外して入れ直す。文の成果やステータスは content_os__put_result で別に書く（この道具は画像だけ。ステータスは変えない）。書き戻すと Naoki のドライブ「コンテンツくん/月/日付_題/種類/」にも写る。戻り値: { ok, request, drive }。",
+      inputSchema: {
+        id: z.string().describe("依頼の番号（uuid）"),
+        files: z.array(OpenAIFile).min(1).max(6).describe("画像ファイル（01 から順に）"),
+        labels: z.array(z.string().max(100)).max(6).optional(),
+        replace_images: z.boolean().optional(),
+      },
+      _meta: { "openai/fileParams": ["files"] },
+    },
+    async (args: { id: string; files: { download_url: string; mime_type?: string; file_name?: string }[]; labels?: string[]; replace_images?: boolean }) => {
+      const images: { base64: string; mime?: string; label?: string }[] = [];
+      const errors: string[] = [];
+      for (let i = 0; i < args.files.length; i++) {
+        const f = args.files[i];
+        try {
+          if (!/^https:\/\//.test(f.download_url || "")) throw new Error("https の住所ではありません");
+          const res = await fetch(f.download_url);
+          if (!res.ok) throw new Error(`読めません（${res.status}）`);
+          const buf = await res.arrayBuffer();
+          if (buf.byteLength > 8 * 1024 * 1024) throw new Error("8MB を超えています");
+          const t = (f.mime_type || res.headers.get("content-type") || "").split(";")[0].trim();
+          const mime = ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(t) ? t : /\.jpe?g$/i.test(f.file_name || "") ? "image/jpeg" : "image/png";
+          images.push({ base64: toB64(buf), mime, label: args.labels?.[i] || f.file_name || String(i + 1).padStart(2, "0") });
+        } catch (e) {
+          errors.push(`${i + 1} 枚目：${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      if (!images.length) return asMcpTextResult({ ok: false, error: "画像を 1 枚も読めませんでした", errors });
+      const cur = await callContentOsInternalApi<{ requests?: Array<{ status?: string }> }>(env, "list-requests", { id: args.id });
+      const status = cur?.requests?.[0]?.status;
+      const keep = status === "drafting" || status === "review" || status === "done" ? status : "review";
+      const out = await callContentOsInternalApi<Record<string, unknown>>(env, "put-result", { id: args.id, status: keep, images, replace_images: args.replace_images });
+      if (out && (out as { ok?: boolean }).ok !== false) (out as Record<string, unknown>).drive = await copyToDrive(env, args.id);
+      if (errors.length) (out as Record<string, unknown>).errors = errors;
+      return asMcpTextResult(out);
+    }
+  );
 }
