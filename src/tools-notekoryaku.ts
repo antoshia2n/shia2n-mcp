@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { RATIO, buildRows, jstDay, prevMonthOf, type NoteIn, type Old } from "./notekoryaku-core.js";
+import { RATIO, buildRows, jstDay, prevMonthOf, nkMovesOf, nkGoalsOf, type NoteIn, type Old } from "./notekoryaku-core.js";
 
 /**
  * note攻略くん（note-koryaku.shia2n.jp）の「自分の記事」を、note の数字で入れ直す道具（2026-11-10 開発部・作業 72・Naoki「OK」20:55）。
@@ -89,6 +89,31 @@ export function registerNotekoryakuTools(server: McpServer, env: Env): void {
           ok: true, ...(dry_run ? { 下見: "書いていない" } : {}), 取った日: day, 判定した範囲: range === "all" ? "全部" : `${range} の公開分`, 基準: `近い 10 本のスキの真ん中の ${RATIO} 倍以上`,
           記事: rows.length, 新しく足した: added, 全体ビューが無い記事: noViews, 候補の数: cands.length, まだ見ていない候補: cands.filter(c => c.状態 === "まだ見ていない").length, 候補: cands, 住所: `${APP_URL}（レポート › スワイプ候補）`,
         });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── notekoryaku__get_moves（2026-11-12 攻略の8段 便5・X攻略くんの xbunseki__get_moves と同じ考えを月で）───
+  server.tool(
+    "notekoryaku__get_moves",
+    "note攻略くんの打ち手ごとの材料をまとめて返す（読むだけ）。月の方針・コンセプト、ロードマップ（目標とマイルストーン・レベル）、打ち手ごとの中身・列（集客ルート／記事／売り方と運用）・状態（今月オン／控え／停止）・つながる仮説・お手本（スワイプくんで結んだ記事）・先月の評価（最高〜最悪）・④月の型で結んだマスとその週にコンテンツくんで予約・公開した note の記事（無料・メンシプ・有料）・予定と実績、今月の計画、⑤作るもの。記事の下書きや月次レビュー・打ち手の見直しを頼まれたときに読む。month は YYYY-MM（省略で今月・日本時間）。",
+    { month: z.string().regex(/^\d{4}-\d{2}$/).optional().describe("YYYY-MM。省略で今月") },
+    async ({ month }) => {
+      try {
+        const today = jstDay(new Date().toISOString()), mo = month ?? today.slice(0, 7), own = `user_id=eq.${encodeURIComponent(OWNER)}`;
+        const get = async (q: string, soft = false) => { const r = await fetch(`${env.SUPABASE_URL}/rest/v1/${q}`, { headers: sbHeaders(env) }); if (!r.ok) { if (soft) return []; throw new Error(`Supabase ${r.status}: ${(await r.text()).slice(0, 200)}`); } return (await r.json()) as any[]; };
+        const [y, m] = mo.split("-").map(Number), last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        const [items, sets, months, posts] = await Promise.all([
+          get(`na_items?select=*&${own}&order=sort.asc`),
+          get(`na_settings?select=ladder&${own}&limit=1`, true),
+          get(`na_months?select=month,policy,concept,kpi&${own}&month=eq.${mo}&limit=1`, true),
+          get(`posts?select=title,post_type,status,datetime&${own}&post_type=in.(note,membership,paid)&status=in.(reserved,published)&datetime=gte.${mo}-01&datetime=lte.${mo}-${String(last).padStart(2, "0")}T23:59`, true),
+        ]);
+        const ladder = sets[0]?.ladder || null, mrow = months[0] || {};
+        const moves = nkMovesOf(items, mo, ladder, posts, today);
+        const plans = items.filter(i => i.kind === "pl" && !i.archived && i.plan_month === mo).map(i => ({ 計画: i.body || "", ...(i.result ? { 結果: i.result } : {}), ...(i.verdict ? { 判定: i.verdict } : {}) }));
+        const builds = items.filter(i => i.kind === "bd" && !i.archived && i.plan_month === mo).map(i => ({ 作るもの: i.body || "", 完了の形: i.memo || "", いつまで: i.due || "", 打ち手: items.find(x => x.id === (i.links || [])[0])?.body || "" }));
+        return asMcpTextResult({ ok: true, 月: mo, 方針: mrow.policy || "", コンセプト: mrow.concept || "", ロードマップ: nkGoalsOf(ladder), 件数: moves.length, 打ち手: moves, 今月の計画: plans, 作るもの: builds, 画面: `${APP_URL}/` });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
