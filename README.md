@@ -141,6 +141,10 @@ curl https://api.anthropic.com/v1/messages \
 
 レスポンスで `high_shin__` で始まる 6 本のツールが列挙されれば Phase B 完了。
 
+## コンテンツくんの画像のドライブへの写し（v1.80.0）
+
+content_os__put_result で画像が入ると、zoom-to-youtube（ArchiveApi.saveContentImages）経由で Naoki のドライブ「コンテンツくん/月/日付_題/種類/」へも写す。zoom-to-youtube を先に本番へ出すこと。
+
 ## 更新・再デプロイ
 
 このリポジトリに push すれば、Cloudflare Workers Builds が自動ビルド＆デプロイする。

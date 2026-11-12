@@ -46,7 +46,14 @@ export function registerContentRequestTools(server: McpServer, env: Env): void {
       replace_images: z.boolean().optional(),
       note: z.string().max(2000).optional().describe("Naoki への申し送り（1〜2行）"),
     },
-    async (args) => asMcpTextResult(await callContentOsInternalApi(env, "put-result", args))
+    async (args) => {
+      const out = await callContentOsInternalApi<Record<string, unknown>>(env, "put-result", args);
+      // v1.80.0：画像を入れた回だけ、ドライブの「コンテンツくん/月/日付_題/種類/」へも写す。失敗しても書き戻しは止めない
+      if (args.images?.length && out && (out as { ok?: boolean }).ok !== false) {
+        (out as Record<string, unknown>).drive = await copyToDrive(env, args.id);
+      }
+      return asMcpTextResult(out);
+    }
   );
 
   // v1.74.0（2026-11-10 開発部・型の持ち帰り 便1）：成果の出た投稿のチャットで Naoki が「型にして」と言ったとき、AI が型・依頼パターンを候補として書き込む
@@ -89,4 +96,34 @@ export function registerContentRequestTools(server: McpServer, env: Env): void {
     {},
     async () => asMcpTextResult(await callContentOsInternalApi(env, "run-schedules", {}))
   );
+}
+
+// v1.80.0（2026-11-12 開発部・Naoki「進めて」12:11）：依頼の画像を Naoki のドライブへ写す。
+// 置き方は コンテンツくん/2026-11/2026-11-14_題/引用図解/01.png …（X に手で入れるとき、ファイル選択から直接選べるように）。
+// 書くのは zoom-to-youtube 第27版の ArchiveApi.saveContentImages（Naoki のふだんの Google の許可を持っているのがそちらのため）。
+const DRIVE_SUB: Record<string, string> = { quote_figure: "引用図解", thumbnail: "サムネ", article_figure: "記事内図解" };
+const IMG = /\.(png|jpe?g|webp|gif)(\?|$)/i;
+async function copyToDrive(env: Env, id: string): Promise<unknown> {
+  try {
+    if (!env.ZOOM_ARCHIVE?.saveContentImages) return { ok: false, error: "zoom-to-youtube への結び（ZOOM_ARCHIVE）がありません" };
+    const got = await callContentOsInternalApi<{ requests?: Array<Record<string, any>> }>(env, "list-requests", { id });
+    const r = got?.requests?.[0];
+    if (!r) return { ok: false, error: "依頼を読み直せませんでした" };
+    const sub = DRIVE_SUB[String(r.kind)];
+    if (!sub) return { ok: false, error: "画像を写す種類ではありません" };
+    const images = (Array.isArray(r.result_urls) ? r.result_urls : [])
+      .map((u: { url?: string }) => String(u?.url || ""))
+      .filter((u: string) => /^https:\/\//.test(u) && IMG.test(u))
+      .map((url: string) => ({ url }));
+    if (!images.length) return { ok: false, error: "写す画像がありません" };
+    return await env.ZOOM_ARCHIVE.saveContentImages({
+      post_id: String(r.post_id),
+      title: String(r.post?.title || "無題"),
+      date: r.post?.datetime ? String(r.post.datetime) : null,
+      sub,
+      images,
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
