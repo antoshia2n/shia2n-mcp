@@ -16,18 +16,18 @@ const posts = [{ post_type: "membership", status: "reserved", datetime: "2026-11
 test("月の月曜（11 月は 2・9・16・23・30）", () => {
   assert.deepEqual(monthMondays("2026-11"), ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23", "2026-11-30"]);
 });
-test("打ち手：今月使っているもの・列・状態・仮説・お手本・先月の評価", () => {
+test("立ち回り：今月使っているもの・列・状態・仮説・お手本・先月の評価", () => {
   const m = nkMovesOf(items, "2026-11", ladder, posts, "2026-11-20");
   assert.deepEqual(m.map(x => x.id), ["s1", "s2"]);
-  assert.equal(m[0].列, "記事"); assert.equal(m[0].状態, "今月オン"); assert.deepEqual(m[0].仮説, ["ノウハウが強い"]); assert.equal(m[0].お手本[0].投稿者, "限界読書");
-  assert.equal(m[1].列, "集客ルート"); assert.equal(m[1].ルート, "X"); assert.equal(m[1].状態, "控え"); assert.equal(m[1].先月の評価, "悪い");
+  assert.equal(m[0].列, "記事"); assert.equal(m[0].状態, "今月やる"); assert.deepEqual(m[0].仮説, ["ノウハウが強い"]); assert.equal(m[0].お手本[0].投稿者, "限界読書");
+  assert.equal(m[1].列, "集客"); assert.equal(m[1].ルート, "X"); assert.equal(m[1].状態, "控え"); assert.equal(m[1].先月の評価, "悪い");
 });
 test("予定と実績：その週に同じ種類の予約か公開（下書きは数えない・集客は数えない）", () => {
   const [a, b] = nkMovesOf(items, "2026-11", ladder, posts, "2026-11-20");
-  assert.equal(a.月の型のマス[0].出した記事[0].題, "図解の下書き");
-  assert.equal(a.月の型のマス[1].出した記事.length, 0);
+  assert.equal(a.記事の予定表のマス[0].出した記事[0].題, "図解の下書き");
+  assert.equal(a.記事の予定表のマス[1].出した記事.length, 0);
   assert.equal(a.予定と実績, "1 / 2（今日までに始まった週のマス・全 2）");
-  assert.equal(b.月の型のマス[0].数え方, "集客は数えない");
+  assert.equal(b.記事の予定表のマス[0].数え方, "集客は数えない");
   assert.equal(b.予定と実績, undefined);
 });
 test("ロードマップ：書いたマイルストーンだけ・レベル付き", () => {

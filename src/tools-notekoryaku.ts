@@ -96,7 +96,7 @@ export function registerNotekoryakuTools(server: McpServer, env: Env): void {
   // ─── notekoryaku__get_moves（2026-11-12 攻略の8段 便5・X攻略くんの xbunseki__get_moves と同じ考えを月で）───
   server.tool(
     "notekoryaku__get_moves",
-    "note攻略くんの打ち手ごとの材料をまとめて返す（読むだけ）。月の方針・コンセプト、ロードマップ（目標とマイルストーン・レベル）、打ち手ごとの中身・列（集客ルート／記事／売り方と運用）・状態（今月オン／控え／停止）・つながる仮説・お手本（スワイプくんで結んだ記事）・先月の評価（最高〜最悪）・④月の型で結んだマスとその週にコンテンツくんで予約・公開した note の記事（無料・メンシプ・有料）・予定と実績、今月の計画、⑤作るもの。記事の下書きや月次レビュー・打ち手の見直しを頼まれたときに読む。month は YYYY-MM（省略で今月・日本時間）。",
+    "note攻略くんの立ち回りごとの材料をまとめて返す（読むだけ）。月の方針・コンセプト、ロードマップ（目標とマイルストーン・レベル）、立ち回りごとの中身・列（集客ルート／記事／売り方と運用）・状態（今月やる／控え／やめた）・つながる仮説・お手本（スワイプくんで結んだ記事）・先月の評価（最高〜最悪）・④記事の予定表で結んだマスとその週にコンテンツくんで予約・公開した note の記事（無料・メンシプ・有料）・予定と実績、今月の計画、⑤作るもの。記事の下書きや月次レビュー・立ち回りの見直しを頼まれたときに読む。month は YYYY-MM（省略で今月・日本時間）。",
     { month: z.string().regex(/^\d{4}-\d{2}$/).optional().describe("YYYY-MM。省略で今月") },
     async ({ month }) => {
       try {
@@ -112,8 +112,8 @@ export function registerNotekoryakuTools(server: McpServer, env: Env): void {
         const ladder = sets[0]?.ladder || null, mrow = months[0] || {};
         const moves = nkMovesOf(items, mo, ladder, posts, today);
         const plans = items.filter(i => i.kind === "pl" && !i.archived && i.plan_month === mo).map(i => ({ 計画: i.body || "", ...(i.result ? { 結果: i.result } : {}), ...(i.verdict ? { 判定: i.verdict } : {}) }));
-        const builds = items.filter(i => i.kind === "bd" && !i.archived && i.plan_month === mo).map(i => ({ 作るもの: i.body || "", 完了の形: i.memo || "", いつまで: i.due || "", 打ち手: items.find(x => x.id === (i.links || [])[0])?.body || "" }));
-        return asMcpTextResult({ ok: true, 月: mo, 方針: mrow.policy || "", コンセプト: mrow.concept || "", ロードマップ: nkGoalsOf(ladder), 件数: moves.length, 打ち手: moves, 今月の計画: plans, 作るもの: builds, 画面: `${APP_URL}/` });
+        const builds = items.filter(i => i.kind === "bd" && !i.archived && i.plan_month === mo).map(i => ({ 作るもの: i.body || "", 完了の形: i.memo || "", いつまで: i.due || "", 立ち回り: items.find(x => x.id === (i.links || [])[0])?.body || "" }));
+        return asMcpTextResult({ ok: true, 月: mo, 方針: mrow.policy || "", コンセプト: mrow.concept || "", ロードマップ: nkGoalsOf(ladder), 件数: moves.length, 立ち回り: moves, 今月の計画: plans, 作るもの: builds, 画面: `${APP_URL}/` });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
