@@ -12,6 +12,7 @@
  */
 
 import { Env } from "./index.js";
+import { subStats, subView, applySubEst, newSubs, subEstOf, type SubStats, type EstInput } from "./taskmaster-subs.js";
 
 const FIREBASE_PROJECT_ID = "gen-lang-client-0371348401";
 const FIREBASE_DB_ID = "ai-studio-622b9a97-52df-425a-85c6-1a2670c54e0a";
@@ -296,6 +297,8 @@ type TaskRecord = {
   projectId: string | null;
   repeat?: string;
   templateId?: string;
+  /** サブタスクの数・進捗率・見積もり（分）。サブタスクがあるときだけ（v1.81.0） */
+  sub?: SubStats;
 };
 
 type ProjectRecord = {
@@ -326,6 +329,7 @@ function toTask(t: Item): TaskRecord {
     projectId: nullStr(t.projectId),
     ...(typeof t.repeat === "string" && t.repeat ? { repeat: t.repeat } : {}),
     ...(typeof t.templateId === "string" && t.templateId ? { templateId: t.templateId } : {}),
+    ...(() => { const st = subStats(t); return st ? { sub: st } : {}; })(),
   };
 }
 
@@ -342,7 +346,9 @@ function toProject(p: Item): ProjectRecord {
 // GET /taskmaster/tasks
 // ─────────────────────────────────────────────
 
-export async function handleTaskmasterTasks(_req: Request, env: Env): Promise<Response> {
+export async function handleTaskmasterTasks(req: Request, env: Env): Promise<Response> {
+  // v1.81.0：?with_subtasks=1 でサブタスクの中身（id・名前・済み・見積もり・メモの頭）も返す。ふだんは数と進捗率だけ（毎朝の読みを軽く保つ）
+  const withSubs = new URL(req.url).searchParams.get("with_subtasks") === "1";
   const uid = env.NAOKI_UID;
   if (!uid || !env.FIREBASE_SA_EMAIL || !env.FIREBASE_SA_PRIVATE_KEY) {
     return Response.json({ error: "env not configured" }, { status: 500 });
@@ -365,9 +371,9 @@ export async function handleTaskmasterTasks(_req: Request, env: Env): Promise<Re
     return Response.json({ error: "Firestore fetch failed", detail: String(e) }, { status: 500 });
   }
 
-  const tasks: TaskRecord[] = items
+  const tasks = items
     .filter((t) => !bool(t.archived) && !bool(t.completed))
-    .map(toTask);
+    .map((t) => (withSubs && subStats(t) ? { ...toTask(t), subtasks: subView(t) } : toTask(t)));
 
   const projects: ProjectRecord[] = expandValue(projectsDoc).map(toProject);
 
@@ -391,6 +397,8 @@ export type AddTaskInput = {
   template_id?: string;
   /** リンク（[{title,url}]・2026-11-07 v1.71.0）。マーケくんのチャットから足すとき、元のメッセージへ戻る住所 1 本。道具からは渡さない */
   links?: { title: string; url: string }[];
+  /** サブタスク（[{title, minutes?}]・v1.81.0）。テンプレのチェックの後ろに足す。minutes は見積もり（分） */
+  subtasks?: { title: string; minutes?: number }[];
 };
 
 /** TaskMaster の繰り返しの値（taskmaster の src/lib/util.js の REPEAT と同じ・2026-10-22） */
@@ -434,7 +442,8 @@ export const repeatNextId = (t: Item, nd: { deadline: string; startDate: string 
 export function nextRepeatTask(t: Item, todayStr: string): Item | null {
   const nd = nextRepeatDates(t, todayStr);
   if (!nd) return null;
-  const subs = Array.isArray(t.subtasks) ? (t.subtasks as Item[]).map((x) => ({ ...x, done: false })) : [];
+  // サブタスクのメモはその回だけ（見積もりは持ち越す・画面と同じ 2026-11-12）
+  const subs = Array.isArray(t.subtasks) ? (t.subtasks as unknown[]).map((x) => (x && typeof x === "object" ? (({ memo: _m, ...r }) => ({ ...r, done: false }))(x as Item) : x)) : [];
   return { ...t, id: repeatNextId(t, nd), seriesId: seriesOf(t), spawnedFrom: String(t.id), deadline: nd.deadline, startDate: nd.startDate,
     completed: false, status: "todo", doneAt: "", completedAt: "", archived: false,
     order: typeof t.order === "number" ? t.order + 1 : t.order, subtasks: subs, labels: [], waitFor: "", doneWhen: "",
@@ -499,8 +508,10 @@ export function templateSummary(t: Item) {
 /** 新しいタスクにテンプレの中身を入れる（画面の fieldsFromTemplate と同じ：重要度・まっさらのチェック・リンク・進め方の写し。
  *  重要度・時間帯・プロジェクトは呼んだ側が指定していればそちらを使う） */
 export function withTemplate(task: Item, tpl: Item, body: AddTaskInput): Item {
-  const subs = (Array.isArray(tpl.subtasks) ? tpl.subtasks : []).map(subTitleOf).filter((x) => x.trim())
-    .map((title) => ({ id: crypto.randomUUID().slice(0, 7), title, done: false }));
+  // v1.81.0：見積もり（est）もテンプレから写す（画面の freshSubs と同じ）
+  const subs = (Array.isArray(tpl.subtasks) ? tpl.subtasks : []).map((s) => ({ title: subTitleOf(s), est: s && typeof s === "object" ? subEstOf((s as Item).est) : 0 }))
+    .filter((x) => x.title.trim())
+    .map(({ title, est }) => ({ id: crypto.randomUUID().slice(0, 7), title, done: false, ...(est ? { est } : {}) }));
   const links = (Array.isArray(tpl.links) ? tpl.links : [])
     .filter((l): l is Item => !!l && typeof l === "object" && typeof (l as Item).url === "string" && !!(l as Item).url)
     .map((l) => ({ url: tplStr(l.url), label: tplStr(l.label) }));
@@ -562,6 +573,9 @@ export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<R
     if (!tpl) return Response.json({ error: "template not found", detail: "taskmaster__list_templates の id を渡してください。タスクは足していません" }, { status: 400 });
     newTask = withTemplate(newTask, tpl, body);
   }
+  // v1.81.0：渡されたサブタスク（見積もり付き）を後ろに足す
+  const extra = newSubs(body.subtasks, () => crypto.randomUUID().slice(0, 7));
+  if (extra.length) newTask = { ...newTask, subtasks: [...(Array.isArray(newTask.subtasks) ? newTask.subtasks : []), ...extra] };
 
   try {
     if (layout === "v2") {
@@ -575,7 +589,7 @@ export async function handleTaskmasterAddTask(req: Request, env: Env): Promise<R
     return Response.json({ error: "Firestore write failed", detail: String(e) }, { status: 500 });
   }
 
-  return Response.json({ ok: true, task: toTask(newTask) }, { status: 201 });
+  return Response.json({ ok: true, task: toTask(newTask), ...(subStats(newTask) ? { subtasks: subView(newTask) } : {}) }, { status: 201 });
 }
 
 // ─────────────────────────────────────────────
@@ -594,6 +608,8 @@ type UpdateTaskInput = {
   groupId?: string | null;
   /** 繰り返し（daily／weekday／weekly／monthly、空で解除・2026-10-22） */
   repeat?: string;
+  /** サブタスクの見積もり（v1.81.0）。subtask は id か名前、minutes は分（0 で消す） */
+  subtask_est?: EstInput[];
 };
 
 export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promise<Response> {
@@ -634,6 +650,13 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
     for (const k of ["title", "status", "priority", "deadline", "archived", "projectId", "groupId", "repeat"] as const) {
       if (body[k] !== undefined) fields[k] = body[k];
     }
+    // v1.81.0：サブタスクの見積もり。決まらないものが 1 つでもあれば何も書かない
+    const hasEst = Array.isArray(body.subtask_est) && body.subtask_est.length > 0;
+    if (hasEst) {
+      const r = applySubEst(docToItem(current), body.subtask_est!);
+      if (!r.ok) return Response.json({ error: r.error, detail: r.detail, subtasks: subView(docToItem(current)), note: "何も書いていません" }, { status: 400 });
+      fields.subtasks = r.subtasks;
+    }
     if (body.status !== undefined) {
       fields.completed = body.status === "done";
       fields.doneAt = body.status === "done" ? tokyoToday() : "";
@@ -659,7 +682,7 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
         catch (e) { return Response.json({ error: "next repeat write failed", detail: String(e) }, { status: 500 }); }
       }
     }
-    return Response.json({ ok: true, task: toTask({ ...curItem, ...fields }), ...(nextTask ? { next: toTask(nextTask) } : {}) });
+    return Response.json({ ok: true, task: toTask({ ...curItem, ...fields }), ...(hasEst ? { subtasks: subView({ ...curItem, ...fields }) } : {}), ...(nextTask ? { next: toTask(nextTask) } : {}) });
   }
 
   let tasksDoc: FSDoc;
@@ -685,6 +708,11 @@ export async function handleTaskmasterUpdateTask(req: Request, env: Env): Promis
   if (body.projectId !== undefined) updated.projectId = body.projectId;
   if (body.groupId   !== undefined) updated.groupId   = body.groupId;
   if (body.repeat    !== undefined) updated.repeat    = body.repeat;
+  if (Array.isArray(body.subtask_est) && body.subtask_est.length) {
+    const r = applySubEst(updated, body.subtask_est);
+    if (!r.ok) return Response.json({ error: r.error, detail: r.detail, subtasks: subView(updated), note: "何も書いていません" }, { status: 400 });
+    updated.subtasks = r.subtasks;
+  }
 
   const updatedItems = [...existingItems];
   updatedItems[targetIndex] = updated;
