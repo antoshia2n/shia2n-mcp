@@ -60,3 +60,20 @@ test("施策の特徴：メモがあればそのまま、無ければ層ごと�
   assert.equal(featOf({ memo: "  ", ly: {} }), "");
   assert.equal(featOf(null), "");
 });
+
+import { movesOf } from "../src/xbunseki-core.ts";
+test("打ち手ごとの材料：状態・本数・仮説・お手本・評価・今週の投稿", () => {
+  const items = [
+    { id: "s1", kind: "st", layer: "ocont", body: "記事を毎日", from_month: "2026-11", links: ["h1"], src: [{ per: { n: 1, u: "日", pt: "x_article" } }, { ref: { id: "r", title: "お手本", shu: "記事", url: "https://n", shot: "https://img" } }] },
+    { id: "s2", kind: "st", layer: "pstyle", body: "引用を散らす", from_month: "2026-11", src: [{ state: "wait" }] },
+    { id: "s3", kind: "st", layer: "pstyle", body: "やめた", from_month: "2026-10", until_month: "2026-10", archived: true, src: [] },
+    { id: "g", kind: "st", layer: "goal", body: "目的", from_month: "2026-11", src: [] },
+    { id: "h1", kind: "hy", layer: "ocont", body: "記事で信頼", from_month: "2026-11", src: [] },
+  ];
+  const week = { id: "w", month: "2026-11", label: "11月2週" };
+  const posts = [{ title: "A", post_type: "x_article", status: "published", datetime: "2026-11-09T18:02" }, { title: "B", post_type: "x_article", status: "reserved", datetime: "2026-11-15T18:02" }, { title: "C", post_type: "x_post", status: "published", datetime: "2026-11-10T07:02" }];
+  const r = movesOf(items, "2026-11", week, { ev: { w: { s1: 4 } } }, posts);
+  assert.deepEqual(r.map(x => [x.id, x.状態]), [["s1", "今週オン"], ["s2", "控え"]]);
+  assert.equal(r[0].本数, "1 本／日・X記事"); assert.deepEqual(r[0].仮説, ["記事で信頼"]); assert.equal(r[0].お手本[0].画像, "https://img");
+  assert.equal(r[0].今週の評価, "良い"); assert.deepEqual(r[0].今週出した投稿.map((o: any) => o.題), ["A"]); assert.deepEqual(r[1].今週出した投稿, []);
+});
