@@ -24,14 +24,24 @@ test("立ち回り：今月使っているもの・列・状態・仮説・お�
 });
 test("予定と実績：その週に同じ種類の予約か公開（下書きは数えない・集客は数えない）", () => {
   const [a, b] = nkMovesOf(items, "2026-11", ladder, posts, "2026-11-20");
-  assert.equal(a.記事の予定表のマス[0].出した記事[0].題, "図解の下書き");
-  assert.equal(a.記事の予定表のマス[1].出した記事.length, 0);
+  assert.equal(a.戦術表のマス[0].出した記事[0].題, "図解の下書き");
+  assert.equal(a.戦術表のマス[1].出した記事.length, 0);
   assert.equal(a.予定と実績, "1 / 2（今日までに始まった週のマス・全 2）");
-  assert.equal(b.記事の予定表のマス[0].数え方, "集客は数えない");
+  assert.equal(b.戦術表のマス[0].数え方, "記事の種類が無いので数えない");
   assert.equal(b.予定と実績, undefined);
 });
 test("ロードマップ：書いたマイルストーンだけ・レベル付き", () => {
   const g = nkGoalsOf(ladder);
   assert.equal(g[0].レベル, "Lv20〜30");
   assert.deepEqual(g[0].マイルストーン.map((m: any) => [m.Lv, m.状態, m.種類]), [[21, "できた", "行動"], [23, "試し中", "成果"]]);
+});
+
+test("戦術表（2026-11-13 の新しい形）：鍵は 週:立ち回りの id・種類は k", () => {
+  const items = [{ id: "a", kind: "st", layer: "pcont", body: "メンシプ記事", plan_month: "2026-11", links: [], src: [] }];
+  const ladder = { shape: { "2026-11": { "2:a": { t: "保存版", s: "a", k: "m" }, "3:a": { t: "下書き", s: "a", k: "" } } } };
+  const posts = [{ title: "保存版の記事", post_type: "membership", status: "published", datetime: "2026-11-11T12:00" }];
+  const m = nkMovesOf(items, "2026-11", ladder, posts, "2026-11-20")[0];
+  assert.equal(m.戦術表のマス[0].種類, "メンシプ"); assert.equal(m.戦術表のマス[0].出した記事[0].題, "保存版の記事");
+  assert.equal(m.戦術表のマス[1].数え方, "記事の種類が無いので数えない");
+  assert.equal(m.予定と実績, "1 / 1（今日までに始まった週のマス・全 1）");
 });

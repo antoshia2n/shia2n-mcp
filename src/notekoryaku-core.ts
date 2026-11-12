@@ -152,7 +152,7 @@ export function nextAccount(accounts: string[], done: Record<string, string[]>, 
  * X攻略くんの movesOf（xbunseki-core.ts）と同じ考えを月で回す。読むだけ・計算は note攻略くんの画面と同じ式。
  *   立ち回り＝na_items の kind st（使い始めた月 plan_month が見る月以前・しまっていない）。列は 集客ルート（route）／記事（pstyle・pcont）／売り方と運用（ostyle・ocont）
  *   状態＝state（''＝今月やる・wait＝控え・stop＝停止）
- *   記事の予定表＝na_settings.ladder.shape[月]["週:種類"] = { t, s（立ち回りの id）}。種類 f 無料・m メンシプ・p 有料・r 集客。週はその月の中の月曜から始まる週
+ *   戦術表＝na_settings.ladder.shape[月]["週:種類"] = { t, s（立ち回りの id）}。種類 f 無料・m メンシプ・p 有料・r 集客。週はその月の中の月曜から始まる週
  *   予定と実績＝結んだマス（集客は数えない）のうち、その週にコンテンツくんで同じ種類の記事（note・membership・paid）が予約か公開されたか
  *   評価＝na_settings.ladder.ev[月][立ち回りの id] = 5〜1 */
 type R = Record<string, any>;
@@ -174,13 +174,14 @@ export function nkMovesOf(items: R[], month: string, ladder: R | null, posts: R[
     const maps = (i.src || []).filter((s: R) => s && s.map && s.map.id).map((s: R) => ({ 名前: s.map.t || "", URL: `https://mindmap.shia2n.jp/m/${s.map.id}` }));
     const refs = (i.src || []).filter((s: R) => s && s.ref).map((s: R) => ({ 題: s.ref.title || "", 投稿者: s.ref.author || "", URL: s.ref.url || "" }));
     const cells: R[] = Object.entries(shape).filter(([, c]: [string, any]) => c && c.s === i.id && String(c.t || "").trim()).map(([key, c]: [string, any]) => {
-      const [n, k] = key.split(":"), mon = W[+n - 1] || "", sun = mon ? addDays(mon, 6) : "";
-      const outs = k === "r" || !mon ? [] : P.filter(p => p.k === k && p.day >= mon && p.day <= sun);
-      return { 週: `${+n}週${mon ? `（${+mon.slice(5, 7)}/${+mon.slice(8)}〜）` : ""}`, 種類: KIND_NAME[k] || k, 書いた文: String(c.t), 始まった: !!mon && mon <= today, ...(k === "r" ? { 数え方: "集客は数えない" } : { 出した記事: outs.map(p => ({ 日: p.day, 題: p.t, 状態: p.st === "published" ? "公開" : "予約" })) }) };
+      // 2026-11-13 戦術表：鍵は「週:立ち回りの id」・種類は c.k（f|m|p|''）。古い形（「週:f」・行＝種類）も読む
+      const [n, r] = key.split(":"), old = /^[fmpr]$/.test(r), k = old ? r : (["f", "m", "p"].includes(c.k) ? c.k : ""), mon = W[+n - 1] || "", sun = mon ? addDays(mon, 6) : "";
+      const outs = !k || k === "r" || !mon ? [] : P.filter(p => p.k === k && p.day >= mon && p.day <= sun);
+      return { 週: `${+n}週${mon ? `（${+mon.slice(5, 7)}/${+mon.slice(8)}〜）` : ""}`, ...(k && k !== "r" ? { 種類: KIND_NAME[k] } : {}), 書いた文: String(c.t), 始まった: !!mon && mon <= today, ...(!k || k === "r" ? { 数え方: "記事の種類が無いので数えない" } : { 出した記事: outs.map(p => ({ 日: p.day, 題: p.t, 状態: p.st === "published" ? "公開" : "予約" })) }) };
     });
-    const cnt = cells.filter(c => c.種類 !== "集客"), due = cnt.filter(c => c.始まった).length, done = cnt.filter(c => c.始まった && (c.出した記事 || []).length).length;
+    const cnt = cells.filter(c => c.種類), due = cnt.filter(c => c.始まった).length, done = cnt.filter(c => c.始まった && (c.出した記事 || []).length).length;
     return { id: i.id, 立ち回り: i.body || "", 列: NK_COL[i.layer], ...(i.layer === "route" && i.memo ? { ルート: i.memo } : {}), 状態: i.state === "wait" ? "控え" : i.state === "stop" ? "やめた" : "今月やる",
-      ...(hy.length ? { 仮説: hy } : {}), ...(String(i.note || "").trim() ? { 中身: String(i.note) } : {}), ...(maps.length ? { 思考整理くん: maps } : {}), お手本: refs, ...(ev[i.id] ? { 先月の評価: NK_EV[ev[i.id]] } : {}), 記事の予定表のマス: cells, ...(cnt.length ? { 予定と実績: `${done} / ${due}（今日までに始まった週のマス・全 ${cnt.length}）` } : {}) };
+      ...(hy.length ? { 仮説: hy } : {}), ...(String(i.note || "").trim() ? { 中身: String(i.note) } : {}), ...(maps.length ? { 思考整理くん: maps } : {}), お手本: refs, ...(ev[i.id] ? { 先月の評価: NK_EV[ev[i.id]] } : {}), 戦術表のマス: cells, ...(cnt.length ? { 予定と実績: `${done} / ${due}（今日までに始まった週のマス・全 ${cnt.length}）` } : {}) };
   });
 }
 export function nkGoalsOf(ladder: R | null): R[] {
