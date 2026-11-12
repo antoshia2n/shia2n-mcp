@@ -147,3 +147,43 @@ export function nextAccount(accounts: string[], done: Record<string, string[]>, 
   }
   return null;
 }
+
+/* ── note攻略くんの打ち手（2026-11-12 攻略の8段 便5・notekoryaku__get_moves）──
+ * X攻略くんの movesOf（xbunseki-core.ts）と同じ考えを月で回す。読むだけ・計算は note攻略くんの画面と同じ式。
+ *   打ち手＝na_items の kind st（使い始めた月 plan_month が見る月以前・しまっていない）。列は 集客ルート（route）／記事（pstyle・pcont）／売り方と運用（ostyle・ocont）
+ *   状態＝state（''＝今月オン・wait＝控え・stop＝停止）
+ *   月の型＝na_settings.ladder.shape[月]["週:種類"] = { t, s（打ち手の id）}。種類 f 無料・m メンシプ・p 有料・r 集客。週はその月の中の月曜から始まる週
+ *   予定と実績＝結んだマス（集客は数えない）のうち、その週にコンテンツくんで同じ種類の記事（note・membership・paid）が予約か公開されたか
+ *   評価＝na_settings.ladder.ev[月][打ち手の id] = 5〜1 */
+type R = Record<string, any>;
+export const NK_COL: Record<string, string> = { route: "集客ルート", pstyle: "記事", pcont: "記事", ostyle: "売り方と運用", ocont: "売り方と運用" };
+export const NK_EV: Record<number, string> = { 5: "最高", 4: "良い", 3: "普通", 2: "悪い", 1: "最悪" };
+const KIND_NAME: Record<string, string> = { f: "無料", m: "メンシプ", p: "有料", r: "集客" };
+const PT_KIND: Record<string, string> = { note: "f", membership: "m", paid: "p" };
+export function monthMondays(month: string): string[] {
+  const [y, m] = month.split("-").map(Number), out: string[] = [];
+  for (let d = 1; d <= 31; d++) { const dt = new Date(Date.UTC(y, m - 1, d)); if (dt.getUTCMonth() !== m - 1) break; if (dt.getUTCDay() === 1) out.push(`${month}-${String(d).padStart(2, "0")}`); }
+  return out;
+}
+const addDays = (iso: string, n: number) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+export function nkMovesOf(items: R[], month: string, ladder: R | null, posts: R[], today: string): R[] {
+  const W = monthMondays(month), shape: R = ladder?.shape?.[month] || {}, ev: R = ladder?.ev?.[prevMonthOf(month + "-01")] || {};
+  const P = posts.map(p => ({ k: PT_KIND[p.post_type] || "", day: String(p.datetime || "").slice(0, 10), t: p.title || "", st: p.status })).filter(p => p.k && (p.st === "reserved" || p.st === "published"));
+  return items.filter(i => i.kind === "st" && !i.archived && NK_COL[i.layer] && String(i.plan_month || "") <= month).map(i => {
+    const hy = (i.links || []).map((id: string) => items.find(x => x.id === id && x.kind === "hy")?.body).filter(Boolean);
+    const refs = (i.src || []).filter((s: R) => s && s.ref).map((s: R) => ({ 題: s.ref.title || "", 投稿者: s.ref.author || "", URL: s.ref.url || "" }));
+    const cells: R[] = Object.entries(shape).filter(([, c]: [string, any]) => c && c.s === i.id && String(c.t || "").trim()).map(([key, c]: [string, any]) => {
+      const [n, k] = key.split(":"), mon = W[+n - 1] || "", sun = mon ? addDays(mon, 6) : "";
+      const outs = k === "r" || !mon ? [] : P.filter(p => p.k === k && p.day >= mon && p.day <= sun);
+      return { 週: `${+n}週${mon ? `（${+mon.slice(5, 7)}/${+mon.slice(8)}〜）` : ""}`, 種類: KIND_NAME[k] || k, 書いた文: String(c.t), 始まった: !!mon && mon <= today, ...(k === "r" ? { 数え方: "集客は数えない" } : { 出した記事: outs.map(p => ({ 日: p.day, 題: p.t, 状態: p.st === "published" ? "公開" : "予約" })) }) };
+    });
+    const cnt = cells.filter(c => c.種類 !== "集客"), due = cnt.filter(c => c.始まった).length, done = cnt.filter(c => c.始まった && (c.出した記事 || []).length).length;
+    return { id: i.id, 中身: i.body || "", 列: NK_COL[i.layer], ...(i.layer === "route" && i.memo ? { ルート: i.memo } : {}), 状態: i.state === "wait" ? "控え" : i.state === "stop" ? "停止" : "今月オン",
+      ...(hy.length ? { 仮説: hy } : {}), お手本: refs, ...(ev[i.id] ? { 先月の評価: NK_EV[ev[i.id]] } : {}), 月の型のマス: cells, ...(cnt.length ? { 予定と実績: `${done} / ${due}（今日までに始まった週のマス・全 ${cnt.length}）` } : {}) };
+  });
+}
+export function nkGoalsOf(ladder: R | null): R[] {
+  const ST: Record<string, string> = { todo: "これから", try: "試し中", ok: "できた", ng: "外した" };
+  return (ladder?.goals || []).map((g: R) => ({ 目標: g.t || "", レベル: `Lv${g.from}〜${(+g.from || 0) + 10}`, ...(g.when ? { いつまで: g.when } : {}), ...(g.metric ? { 測る数: g.metric } : {}),
+    マイルストーン: (g.ms || []).map((m: R, i: number) => (m && String(m.t || "").trim() ? { Lv: (+g.from || 0) + i + 1, 中身: m.t, 種類: m.type === "res" ? "成果" : "行動", 状態: ST[m.st] || "これから" } : null)).filter(Boolean) }));
+}
