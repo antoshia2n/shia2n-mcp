@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { KINDS, LAYERS, METRICS, type Row, actsSummary, featOf, inMonth, itemsFor, layerName, layersOf, mergeMetrics, pickWeek, weekDays } from "./xbunseki-core.js";
+import { KINDS, LAYERS, METRICS, type Row, actsSummary, featOf, inMonth, itemsFor, layerName, layersOf, mergeMetrics, movesOf, pickWeek, weekDays } from "./xbunseki-core.js";
 
 /**
  * X攻略くん（x-koryaku.shia2n.jp・Naoki の X の定点観測）の道具。
@@ -162,6 +162,30 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
         let mon: Row | null = null, mm: Row = {};
         try { mon = (await sbGet(env, `/xa_months?select=*&${own}&month=eq.${m}`))[0] || null; (await sbGet(env, `/xa_weeks?select=metrics,sort&${own}&month=eq.${m}&order=sort.asc`)).forEach((w: Row) => Object.entries(w.metrics || {}).forEach(([k, v]) => { if (v !== null && v !== "") mm[k] = v; })); } catch (_) { mon = null; }
         return asMcpTextResult({ ok: true, 月: m, ...(mon ? { 月の方針: mon.policy || "", ...(kpiOut(mon.kpi, mm) ? { 月のKPI: kpiOut(mon.kpi, mm) } : {}) } : {}), 件数: live.length, 層ごと: byLayer, ...(include_archived ? { アーカイブ: items.filter(i => i.archived).map(itemOut) } : {}), 住所: APP_URL });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 4b. xbunseki__get_moves（2026-11-12）───────────────────────
+  server.tool(
+    "xbunseki__get_moves",
+    "X攻略くんの打ち手ごとの材料をまとめて返す。各打ち手の中身・状態（今週オン／控え／停止）・本数・つながる仮説・お手本（スワイプくんで結んだポスト・記事の題と URL と画像）・その週の評価（最高〜最悪）・その週にコンテンツくんで予約・公開した投稿（打ち手の種類と同じもの。日・題・状態、入っていれば評価と URL）。下書きや振り返りを頼まれたときに読む。week は「今週」「11月2週」「2026-11 11月2週」か id。省略で今週。読むだけ。",
+    { week: z.string().optional().describe("省略で今週") },
+    async ({ week }) => {
+      try {
+        const { uid, own, weeks } = await loadBase(env);
+        const w = pickWeek(weeks, week || "今週") || pickWeek(weeks);
+        if (!w) return asMcpTextResult({ ok: false, message: "回がまだない" });
+        const [items, sets, accs] = await Promise.all([
+          sbGet(env, `/xa_items?select=*&${own}&order=sort.asc`),
+          sbGet(env, `/xa_settings?select=ladder&${own}&limit=1`).catch(() => []),
+          sbGet(env, `/accounts?select=id,default_platform,is_active,sort_order&user_id=eq.${encodeURIComponent(uid)}&is_active=eq.true&order=sort_order.asc`).catch(() => []),
+        ]);
+        const acc = accs.find(a => a.default_platform === "x");
+        const days = weekDays(w.month, w.label);
+        const posts = acc && days.length ? await sbGet(env, `/posts?select=title,post_type,status,datetime,platform,x_url,score&user_id=eq.${encodeURIComponent(uid)}&account_id=eq.${encodeURIComponent(acc.id)}&status=in.(reserved,published)&datetime=gte.${days[0]}&datetime=lt.${days[days.length - 1]}T99`).catch(() => []) : [];
+        const moves = movesOf(items, w.month, w, sets[0]?.ladder || null, posts.filter(p => (p.platform || "x") === "x"));
+        return asMcpTextResult({ ok: true, 週: w.label, 月: w.month, 件数: moves.length, 打ち手: moves, 画面: `${APP_URL}/` });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );

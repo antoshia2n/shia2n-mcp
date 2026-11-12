@@ -120,3 +120,24 @@ export function actsSummary(rows: Row[], days: string[], items: Row[], today: st
   for (const r of inWeek) { if (!r.n) continue; const key = String(r.account || "").toLowerCase(); const p = by.get(key) || { 相手: r.account ? name(r.account) : "相手なし", ...(r.account ? { "@": r.account } : {}) }; const l = label(String(r.kind)); p[l] = (p[l] || 0) + r.n; by.set(key, p); }
   return { 項目, 相手ごと: [...by.values()] };
 }
+
+/* ── 打ち手ごとの材料（2026-11-12 X攻略くん・お手本と出した投稿）──────────────
+ * 画面の③戦略の打ち手（kind st・目的以外）を、状態・本数・仮説・お手本（スワイプくん）・今週の評価（ladder.ev）・今週コンテンツくんで出した投稿にまとめる。
+ * 出した投稿は、打ち手の本数の種類（src の per.pt）と同じ種類で、その週の日に予約・公開したもの。種類の無い打ち手は空 */
+export const PT_NAME: Record<string, string> = { x_post: "Xポスト", x_quote: "X引用", x_article: "X記事", note: "note", membership: "メンシプ" };
+export const EV_NAME: Record<number, string> = { 5: "最高", 4: "良い", 3: "普通", 2: "悪い", 1: "最悪" };
+export function movesOf(items: Row[], month: string, week: Row | null, ladder: Row | null, posts: Row[]): Row[] {
+  const days = week ? weekDays(week.month, week.label) : [], ds = new Set(days);
+  const ev: Row = (week && ladder?.ev?.[week.id]) || {};
+  const per = (i: Row) => (i.src || []).find((s: Row) => s && s.per && typeof s.per === "object")?.per || null;
+  const st = (i: Row) => (i.src || []).find((s: Row) => s && s.state)?.state || "";
+  return items.filter(i => i.kind === "st" && i.layer !== "goal" && inMonth(i, month) && (!i.archived || String(i.until_month || "") >= month)).map(i => {
+    const p = per(i), pt = p ? String(p.pt || "") : "";
+    const hy = (i.links || []).map((id: string) => items.find(x => x.id === id && x.kind === "hy")?.body).filter(Boolean);
+    const refs = (i.src || []).filter((s: Row) => s && s.ref).map((s: Row) => ({ 題: s.ref.title || "", 種類: s.ref.shu || "", 投稿者: s.ref.author || "", URL: s.ref.url || "", 画像: s.ref.shot || "" }));
+    const outs = pt ? posts.filter(o => (o.post_type || "x_post") === pt && ds.has(String(o.datetime || "").slice(0, 10))).map(o => ({ 日: String(o.datetime).slice(0, 10), 題: o.title || "", 状態: o.status === "published" ? "公開" : "予約", ...(o.score ? { 評価: o.score } : {}), ...(o.x_url ? { URL: o.x_url } : {}) })) : [];
+    return { id: i.id, 中身: i.body || "", 層: layerName(i.layer), 状態: i.archived ? "停止" : st(i) === "wait" ? "控え" : "今週オン",
+      ...(p && +p.n ? { 本数: `${+p.n} 本／${p.u === "週" ? "週" : "日"}${pt ? "・" + (PT_NAME[pt] || pt) : ""}` } : {}),
+      ...(hy.length ? { 仮説: hy } : {}), お手本: refs, ...(ev[i.id] ? { 今週の評価: EV_NAME[ev[i.id]] } : {}), 今週出した投稿: outs };
+  });
+}
