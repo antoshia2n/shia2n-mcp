@@ -145,6 +145,8 @@ curl https://api.anthropic.com/v1/messages \
 
 content_os__put_result で画像が入ると、zoom-to-youtube（ArchiveApi.saveContentImages）経由で Naoki のドライブ「コンテンツくん/月/日付_題/種類/」へも写す。zoom-to-youtube を先に本番へ出すこと。
 
+v1.81.0 から、GPT は画像を content_os__put_images（ファイルのまま・_meta の openai/fileParams）で渡す。base64 では大きい図解を運べないため。
+
 ## 更新・再デプロイ
 
 このリポジトリに push すれば、Cloudflare Workers Builds が自動ビルド＆デプロイする。
