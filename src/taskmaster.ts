@@ -209,6 +209,7 @@ function docToItem(d: FSDoc): Item {
 }
 
 // 1 本ずつの置き場を条件で引く（equality 1 つだけ）
+/** v1.92.0：リマインドの見回りで使う（欄の値が同じタスクだけを読む・全部は読まない） */
 export async function queryTasks(token: string, uid: string, field: string, value: FVal): Promise<Item[]> {
   const res = await fetch(`${FIRESTORE_BASE}/users/${uid}:runQuery`, {
     method: "POST",
@@ -399,6 +400,9 @@ export type AddTaskInput = {
   links?: { title: string; url: string }[];
   /** サブタスク（[{title, minutes?}]・v1.81.0）。テンプレのチェックの後ろに足す。minutes は見積もり（分） */
   subtasks?: { title: string; minutes?: number }[];
+  /** リマインド（v1.92.0・2026-11-13）：着手日の朝にメール／期限を過ぎたら毎朝メール。TaskMaster の画面の「リマインド」と同じ欄 */
+  remindStart?: boolean;
+  remindOverdue?: boolean;
 };
 
 /** TaskMaster の繰り返しの値（taskmaster の src/lib/util.js の REPEAT と同じ・2026-10-22） */
@@ -466,6 +470,8 @@ export function buildNewTask(body: AddTaskInput, now = new Date()): Item {
     createdAt: now.toISOString().slice(0, 10),
     ...(body.repeat ? { repeat: body.repeat } : {}),
     ...(Array.isArray(body.links) && body.links.length ? { links: body.links.slice(0, 5) } : {}),
+    ...(body.remindStart === true ? { remindStart: true } : {}),
+    ...(body.remindOverdue === true ? { remindOverdue: true } : {}),
   };
 }
 

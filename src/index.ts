@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.92.0（2026-11-13 開発部・Naoki「リマインド設定みたいにしておいて、着手の通知と、期限漏れの通知」20:27）：TaskMaster のタスクの「リマインド」（remindStart＝着手日の朝にメール・remindOverdue＝期限を過ぎたら毎朝メール）を見て、毎朝 8:00（日本時間＝UTC 23:00）に 1 通（Resend）。読むのはスイッチの入ったタスクだけ（runQuery）。知らせるものが無い朝は送らない。taskmaster__add_task の中身（AddTaskInput）に remindStart・remindOverdue を足し、セミナーの 構成・告知・スライド は remindOverdue を入れて作る。中身は src/task-remind.ts、試験は test/task-remind.test.ts。記録は task_remind。設定の追加 0 個。
  * v1.91.0（2026-11-13 開発部・セミナー管理の流れ 便3）：日曜 20:00（日本時間＝UTC 日曜 11:00）に、今日から 14 日のセミナーの回ごとの 構成・告知・スライド の期限と済みかどうかを 1 通（Resend・RESEND_TO_EMAIL へ）。回が無い週は送らず「送らなかった」を残す。中身は src/seminar-tasks.ts の buildSeminarMail・runSeminarMail、試験は test/seminar-tasks.test.ts。記録は seminar_mail。設定の追加 0 個（RESEND_* は既存）。
  * v1.90.0（2026-11-13 開発部・セミナー管理の流れ 便2・作る前の 1 枚に Naoki OK 19:02）：毎時 0 分に、コンテンツくんの「セミナー」の回（今日から 60 日先まで）から TaskMaster の「シアラボ｜運営」へ「セミナー｜構成／告知／スライド｜回の題」を入れ（期限は開催日の 3・2・1 日前）、開催日が動いたら期限を写す。Naoki が TaskMaster で動かした期限・済み・消したタスクは触らない。どれを入れたかは KV の seminar_tasks_v1。中身は src/seminar-tasks.ts、試験は test/seminar-tasks.test.ts。記録は seminar_tasks。設定の追加 0 個。
  * v1.89.0（2026-11-13 開発部・X攻略くん note攻略くんからの逆輸入 便4）：xbunseki__get_stock（読むだけ）と xbunseki__put_stock（足すだけ・評価 C・今日・同じ文は足さない・1 回 30 件まで）を足した。X攻略くんの右上「ストック」と同じ形（仮説 hy・ノウハウ kn・評価 grade・フォルダ／評価の変化／リンクは src の sk）。中身は src/xbunseki-core.ts の xbStockOf・xbStockRow、試験は test/xbunseki-stock.test.ts。設定の追加 0 個。
@@ -656,6 +657,7 @@ import { handleShiaraboMtgSync } from "./cron-shiarabo-mtg.js";
 import { handleConsultManagerIntake, handleConsultManagerIntakeHttp } from "./cron-consult-manager-intake.js";
 import { runBackupSlot } from "./cron-backup.js";
 import { runSeminarTasks, runSeminarMail, describe as describeSeminarTasks } from "./seminar-tasks.js";
+import { runTaskRemind } from "./task-remind.js";
 import { registerRestoreTools } from "./tools-restore.js";
 import { registerTsumiageTools } from "./tools-tsumiage.js";
 import { registerEvolabTools } from "./tools-evolab.js";
@@ -1136,6 +1138,15 @@ export default {
             return { count: r.rows, detail: r.detail };
           });
         })());
+      }
+      // v1.92.0：TaskMaster のリマインド（毎朝 8:00 JST＝UTC 23:00）
+      if (utcMinute === 0 && utcHour === 23) {
+        tasks.push(
+          runAndRecord(env, "task_remind", async () => {
+            const r = await runTaskRemind(env);
+            return { count: r.count, detail: r.detail };
+          })
+        );
       }
       // 既存：UTAGE ポーリング（毎回 30 分ごと）
       tasks.push(
