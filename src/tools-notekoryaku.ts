@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { RATIO, buildRows, jstDay, prevMonthOf, nkMovesOf, nkGoalsOf, type NoteIn, type Old } from "./notekoryaku-core.js";
+import { RATIO, buildRows, jstDay, prevMonthOf, nkMovesOf, nkGoalsOf, nkStockOf, nkStockRow, STOCK_KIND, type NoteIn, type Old } from "./notekoryaku-core.js";
 
 /**
  * note攻略くん（note-koryaku.shia2n.jp）の「自分の記事」を、note の数字で入れ直す道具（2026-11-10 開発部・作業 72・Naoki「OK」20:55）。
@@ -114,6 +114,52 @@ export function registerNotekoryakuTools(server: McpServer, env: Env): void {
         const plans = items.filter(i => i.kind === "pl" && !i.archived && i.plan_month === mo).map(i => ({ 計画: i.body || "", ...(i.result ? { 結果: i.result } : {}), ...(i.verdict ? { 判定: i.verdict } : {}) }));
         const builds = items.filter(i => i.kind === "bd" && !i.archived && i.plan_month === mo).map(i => ({ 作るもの: i.body || "", 完了の形: i.memo || "", いつまで: i.due || "", 立ち回り: items.find(x => x.id === (i.links || [])[0])?.body || "" }));
         return asMcpTextResult({ ok: true, 月: mo, 方針: mrow.policy || "", コンセプト: mrow.concept || "", ロードマップ: nkGoalsOf(ladder), 件数: moves.length, 立ち回り: moves, 今月の計画: plans, 作るもの: builds, 画面: `${APP_URL}/` });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 仮説とノウハウのストック（2026-11-13 便3・Naoki「OK」）───
+  server.tool(
+    "notekoryaku__get_stock",
+    "note攻略くんの「仮説とノウハウのストック」を返す（読むだけ）。評価（C 根拠が薄い・B 手応えあり・A 自分で証明できた・S 証明できて効果も大きい）・フォルダ・登録日・評価の変化・ここまで通用（評価を下げた日）・出どころ・リンク・メモ・使っている立ち回り。足す前に重なりを見るとき、記事の材料を探すときに読む。",
+    { kind: z.enum(["仮説", "ノウハウ"]).optional().describe("省略で両方"), folder: z.string().max(30).optional().describe("フォルダの名前。未分類は空文字") },
+    async ({ kind, folder }) => {
+      try {
+        const own = `user_id=eq.${encodeURIComponent(OWNER)}`;
+        const get = async (q: string) => { const r = await fetch(`${env.SUPABASE_URL}/rest/v1/${q}`, { headers: sbHeaders(env) }); if (!r.ok) throw new Error(`${q.split("?")[0]} を読めませんでした（${r.status}）`); return r.json() as Promise<any[]>; };
+        const [items, accounts, months] = await Promise.all([get(`na_items?select=*&${own}&kind=in.(hy,kn,st)`), get(`na_accounts?select=handle,name&${own}`), get(`na_months?select=id,month&${own}`)]);
+        const list = nkStockOf(items, accounts, months, kind ? STOCK_KIND[kind] : undefined, folder);
+        const folders = [...new Set(items.filter(i => (i.kind === "hy" || i.kind === "kn") && !i.archived && i.folder).map(i => i.folder))];
+        return asMcpTextResult({ ok: true, 件数: list.length, フォルダ: folders, ストック: list, 画面: APP_URL });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+  server.tool(
+    "notekoryaku__put_stock",
+    "note攻略くんの「仮説とノウハウのストック」へ足す（足すだけ。直す・消すはしない）。チャットで「このマップ（記事・分析）から仮説とノウハウを抜いて」と頼まれたときに使う。1 回 30 件まで。評価は C（根拠が薄い）で入り、評価の変化に今日が残る。同じ種類で同じ文がもうあれば足さない。出どころの住所（思考整理くんのマップ・note の記事など）を map_url か links に入れる。足す前に notekoryaku__get_stock で重なりと既存のフォルダを見る。",
+    { items: z.array(z.object({
+        kind: z.enum(["仮説", "ノウハウ"]), text: z.string().min(1).max(500).describe("1 文で言い切る"),
+        folder: z.string().max(30).optional().describe("フォルダの名前（既存に合わせる。無ければ新しく）"),
+        note: z.string().max(4000).optional().describe("根拠や補足。「- 」の箇条書き"),
+        map_url: z.string().max(300).optional().describe("出どころの思考整理くんのマップの住所"),
+        links: z.array(z.object({ url: z.string().max(500), title: z.string().max(80).optional() })).max(5).optional(),
+      })).min(1).max(30) },
+    async ({ items: input }) => {
+      try {
+        const own = `user_id=eq.${encodeURIComponent(OWNER)}`, today = jstDay(new Date().toISOString());
+        const r0 = await fetch(`${env.SUPABASE_URL}/rest/v1/na_items?select=id,kind,body,archived&${own}&kind=in.(hy,kn)`, { headers: sbHeaders(env) });
+        if (!r0.ok) throw new Error(`ストックを読めませんでした（${r0.status}）`);
+        const have = (await r0.json()) as any[];
+        const mids = [...new Set(input.map(x => String(x.map_url || "")).filter(u => /mindmap\.shia2n\.jp/.test(u)).map(u => (u.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i) || [""])[0].toLowerCase()).filter(Boolean))];
+        const mapTitle: Record<string, string> = {};
+        if (mids.length) { const rm = await fetch(`${env.SUPABASE_URL}/rest/v1/mm_maps?select=id,title&${own}&id=in.(${mids.join(",")})`, { headers: sbHeaders(env) }); if (rm.ok) ((await rm.json()) as any[]).forEach(m => { mapTitle[m.id] = m.title || ""; }); }
+        const rows: any[] = [], skipped: string[] = [];
+        for (const x of input) { const row = nkStockRow(x, OWNER, today, [...have, ...rows], mapTitle); if (row) rows.push(row); else skipped.push(x.text); }
+        if (!rows.length) return asMcpTextResult({ ok: true, 足した: 0, 足さなかった: skipped, 理由: "同じ文がもうある", 画面: APP_URL });
+        const ins = await fetch(`${env.SUPABASE_URL}/rest/v1/na_items`, { method: "POST", headers: sbHeaders(env, { Prefer: "return=representation" }), body: JSON.stringify(rows) });
+        if (!ins.ok) throw new Error(`足せませんでした（${ins.status}）：${(await ins.text()).slice(0, 200)}`);
+        const got = (await ins.json()) as any[];
+        return asMcpTextResult({ ok: true, 足した: got.length, 足したもの: got.map(g => ({ id: g.id, 種類: g.kind === "kn" ? "ノウハウ" : "仮説", 文: g.body, フォルダ: g.folder || "未分類" })), ...(skipped.length ? { 足さなかった: skipped } : {}), 画面: `${APP_URL}/`, 見る場所: "右上の「ストック」" });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );

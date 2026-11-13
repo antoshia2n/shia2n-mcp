@@ -172,7 +172,10 @@ export function nkMovesOf(items: R[], month: string, ladder: R | null, posts: R[
   const W = monthMondays(month), shape: R = ladder?.shape?.[month] || {}, ev: R = ladder?.ev?.[prevMonthOf(month + "-01")] || {};
   const P = posts.map(p => ({ k: PT_KIND[p.post_type] || "", day: String(p.datetime || "").slice(0, 10), t: p.title || "", st: p.status })).filter(p => p.k && (p.st === "reserved" || p.st === "published"));
   return items.filter(i => i.kind === "st" && !i.archived && NK_COL[i.layer] && String(i.plan_month || "") <= month).map(i => {
-    const hy = (i.links || []).map((id: string) => items.find(x => x.id === id && x.kind === "hy")?.body).filter(Boolean);
+    // 根拠（2026-11-13 便2）：ストックの仮説（hy）とノウハウ（kn）。評価 C 根拠が薄い・B 手応え・A 自分で証明・S 証明＋効果大
+    const base = (i.links || []).map((id: string) => items.find(x => x.id === id && (x.kind === "hy" || x.kind === "kn"))).filter(Boolean);
+    const hy = base.filter((x: R) => x.kind === "hy").map((x: R) => x.body);
+    const why = base.map((x: R) => ({ 種類: x.kind === "kn" ? "ノウハウ" : "仮説", 評価: x.grade || "なし", 文: x.body || "" }));
     const maps = (i.src || []).filter((s: R) => s && s.map && s.map.id).map((s: R) => ({ 名前: s.map.t || "", URL: `https://mindmap.shia2n.jp/m/${s.map.id}` }));
     const refs = (i.src || []).filter((s: R) => s && s.ref).map((s: R) => ({ 題: s.ref.title || "", 投稿者: s.ref.author || "", URL: s.ref.url || "" }));
     // 戦術表のマス → ネタのカード（2026-11-13 便1）。新しい形は { s, items: [{ t, ty, lb, p }] }。前の { t, s, k, p } と「週:f」の形も読む
@@ -191,11 +194,46 @@ export function nkMovesOf(items: R[], month: string, ladder: R | null, posts: R[
     });
     const cnt = cells.filter(c => c.出した記事), due = cnt.filter(c => c.始まった).length, done = cnt.filter(c => c.始まった && (c.出した記事 || []).length).length;
     return { id: i.id, 立ち回り: i.body || "", 列: NK_COL[i.layer], ...(i.layer === "route" && i.memo ? { ルート: i.memo } : {}), 状態: i.state === "wait" ? "控え" : i.state === "stop" ? "やめた" : "今月やる",
-      ...(hy.length ? { 仮説: hy } : {}), ...(String(i.note || "").trim() ? { 中身: String(i.note) } : {}), ...(maps.length ? { 思考整理くん: maps } : {}), お手本: refs, ...(ev[i.id] ? { 先月の評価: NK_EV[ev[i.id]] } : {}), 戦術表のマス: cells, ...(cnt.length ? { 予定と実績: `${done} / ${due}（今日までに始まった週のマス・全 ${cnt.length}）` } : {}) };
+      ...(hy.length ? { 仮説: hy } : {}), ...(why.length ? { 根拠: why } : {}), ...(String(i.note || "").trim() ? { 中身: String(i.note) } : {}), ...(maps.length ? { 思考整理くん: maps } : {}), お手本: refs, ...(ev[i.id] ? { 先月の評価: NK_EV[ev[i.id]] } : {}), 戦術表のマス: cells, ...(cnt.length ? { 予定と実績: `${done} / ${due}（今日までに始まった週のマス・全 ${cnt.length}）` } : {}) };
   });
 }
 export function nkGoalsOf(ladder: R | null): R[] {
   const ST: Record<string, string> = { todo: "これから", try: "試し中", ok: "できた", ng: "外した" };
   return (ladder?.goals || []).map((g: R) => ({ 目標: g.t || "", レベル: `Lv${g.from}〜${(+g.from || 0) + 10}`, ...(g.when ? { いつまで: g.when } : {}), ...(g.metric ? { 測る数: g.metric } : {}),
     マイルストーン: (g.ms || []).map((m: R, i: number) => (m && String(m.t || "").trim() ? { Lv: (+g.from || 0) + i + 1, 中身: m.t, 種類: m.type === "res" ? "成果" : "行動", 状態: ST[m.st] || "これから" } : null)).filter(Boolean) }));
+}
+
+
+/* ── 仮説とノウハウのストック（2026-11-13 便3）── */
+export const STOCK_KIND: Record<string, string> = { 仮説: "hy", ノウハウ: "kn" };
+const GR_ORD: Record<string, number> = { S: 4, A: 3, B: 2, C: 1, "": 0 };
+const MM_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+/** ストックの一覧（読むだけ）。評価の高い順・新しい順 */
+export function nkStockOf(items: R[], accounts: R[], months: R[], kind?: string, folder?: string): R[] {
+  const name = (h: string) => accounts.find(a => a.handle === h)?.name || h, mk = (id: string) => months.find(m => m.id === id)?.month || "";
+  return items.filter(i => (i.kind === "hy" || i.kind === "kn") && !i.archived && (!kind || i.kind === kind) && (folder == null || String(i.folder || "") === folder))
+    .sort((a, b) => (GR_ORD[b.grade || ""] - GR_ORD[a.grade || ""]) || String(b.created_at || "").localeCompare(String(a.created_at || "")))
+    .map(i => {
+      const src = (i.src || []) as R[], gr = (Array.isArray(i.grades) ? i.grades : []) as R[];
+      let down = ""; for (let n = 1; n < gr.length; n++) if (GR_ORD[gr[n].g] < GR_ORD[gr[n - 1].g]) down = `${gr[n].at} に ${gr[n - 1].g}→${gr[n].g}`;
+      const used = items.filter(x => x.kind === "st" && !x.archived && (x.links || []).includes(i.id)).map(x => x.body);
+      return { id: i.id, 種類: i.kind === "kn" ? "ノウハウ" : "仮説", 文: i.body || "", 評価: i.grade || "なし", フォルダ: i.folder || "未分類", 登録: String(i.created_at || "").slice(0, 10),
+        ...(gr.length ? { 評価の変化: gr.map(x => `${x.g} ${x.at}`).join(" → ") } : {}), ...(down ? { ここまで通用: down } : {}),
+        ...(src.some(x => x.account) ? { 出どころ: [...new Set(src.filter(x => x.account).map(x => `${name(x.account)}${mk(x.month_id) ? `（${mk(x.month_id)} の分析）` : ""}`))] } : {}),
+        ...(src.some(x => x.map || x.link) ? { リンク: src.filter(x => x.map || x.link).map(x => x.map ? { 名前: x.map.t || "思考整理くんのマップ", URL: `https://mindmap.shia2n.jp/m/${x.map.id}` } : { 名前: x.link.t || x.link.url, URL: x.link.url }) } : {}),
+        ...(String(i.note || "").trim() ? { メモ: i.note } : {}), ...(used.length ? { 使っている立ち回り: used } : {}) };
+    });
+}
+/** ストックへ足す行（評価 C・評価の変化に今日）。同じ種類で同じ文がもうあれば null（足さない） */
+export function nkStockRow(x: R, owner: string, today: string, items: R[], mapTitle: Record<string, string>): R | null {
+  const kind = STOCK_KIND[x.kind] || ""; const body = String(x.text || "").trim().slice(0, 500);
+  if (!kind || !body) return null;
+  if (items.some(i => i.kind === kind && !i.archived && String(i.body || "").trim() === body)) return null;
+  const src: R[] = [];
+  for (const u of [x.map_url, ...(Array.isArray(x.links) ? x.links.map((l: R) => l.url) : [])].filter(Boolean)) {
+    const v = String(u), mid = /mindmap\.shia2n\.jp/.test(v) ? (v.match(MM_RE) || [""])[0].toLowerCase() : "";
+    if (mid) { if (!src.some(s => s.map?.id === mid)) src.push({ map: { id: mid, t: mapTitle[mid] || "" } }); }
+    else if (/^https?:\/\//.test(v) && !src.some(s => s.link?.url === v)) src.push({ link: { url: v, t: String((x.links || []).find((l: R) => l.url === v)?.title || "").slice(0, 80) || v.replace(/^https?:\/\/(www\.)?/, "").slice(0, 60) } });
+  }
+  return { user_id: owner, layer: "goal", kind, body, src, links: [], grade: "C", grades: [{ g: "C", at: today }], folder: String(x.folder || "").trim().slice(0, 30), note: String(x.note || "").slice(0, 4000), memo: "", archived: false };
 }
