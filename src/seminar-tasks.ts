@@ -131,7 +131,7 @@ export async function runSeminarTasks(env: Env, now = new Date()): Promise<RunRe
   try {
     for (const a of plan.adds) {
       const res = await handleTaskmasterAddTask(fakeReq({
-        title: a.title, deadline: a.deadline, projectId: SHIARABO_UNEI_PROJECT, priority: "high",
+        title: a.title, deadline: a.deadline, projectId: SHIARABO_UNEI_PROJECT, priority: "high", remindOverdue: true,
         links: [{ title: "コンテンツくんのセミナーの回", url: a.url }],
       }), env);
       const j = await res.json().catch(() => ({})) as { ok?: boolean; task?: { id?: string } };
