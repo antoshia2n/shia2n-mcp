@@ -166,6 +166,8 @@ export function monthMondays(month: string): string[] {
   return out;
 }
 const addDays = (iso: string, n: number) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const TY_KIND: Record<string, string> = { note: "f", membership: "m", paid: "p" };
+const TY_NAME: Record<string, string> = { note: "note（無料）", membership: "メンシプ", paid: "有料", x_post: "Xポスト", x_quote: "X引用", x_article: "X記事", other: "その他" };
 export function nkMovesOf(items: R[], month: string, ladder: R | null, posts: R[], today: string): R[] {
   const W = monthMondays(month), shape: R = ladder?.shape?.[month] || {}, ev: R = ladder?.ev?.[prevMonthOf(month + "-01")] || {};
   const P = posts.map(p => ({ k: PT_KIND[p.post_type] || "", day: String(p.datetime || "").slice(0, 10), t: p.title || "", st: p.status })).filter(p => p.k && (p.st === "reserved" || p.st === "published"));
@@ -173,13 +175,21 @@ export function nkMovesOf(items: R[], month: string, ladder: R | null, posts: R[
     const hy = (i.links || []).map((id: string) => items.find(x => x.id === id && x.kind === "hy")?.body).filter(Boolean);
     const maps = (i.src || []).filter((s: R) => s && s.map && s.map.id).map((s: R) => ({ 名前: s.map.t || "", URL: `https://mindmap.shia2n.jp/m/${s.map.id}` }));
     const refs = (i.src || []).filter((s: R) => s && s.ref).map((s: R) => ({ 題: s.ref.title || "", 投稿者: s.ref.author || "", URL: s.ref.url || "" }));
-    const cells: R[] = Object.entries(shape).filter(([, c]: [string, any]) => c && c.s === i.id && String(c.t || "").trim()).map(([key, c]: [string, any]) => {
-      // 2026-11-13 戦術表：鍵は「週:立ち回りの id」・種類は c.k（f|m|p|''）。古い形（「週:f」・行＝種類）も読む
-      const [n, r] = key.split(":"), old = /^[fmpr]$/.test(r), k = old ? r : (["f", "m", "p"].includes(c.k) ? c.k : ""), mon = W[+n - 1] || "", sun = mon ? addDays(mon, 6) : "";
-      const outs = !k || k === "r" || !mon ? [] : P.filter(p => p.k === k && p.day >= mon && p.day <= sun);
-      return { 週: `${+n}週${mon ? `（${+mon.slice(5, 7)}/${+mon.slice(8)}〜）` : ""}`, ...(k && k !== "r" ? { 種類: KIND_NAME[k] } : {}), 書いた文: String(c.t), 始まった: !!mon && mon <= today, ...(!k || k === "r" ? { 数え方: "記事の種類が無いので数えない" } : { 出した記事: outs.map(p => ({ 日: p.day, 題: p.t, 状態: p.st === "published" ? "公開" : "予約" })) }) };
+    // 戦術表のマス → ネタのカード（2026-11-13 便1）。新しい形は { s, items: [{ t, ty, lb, p }] }。前の { t, s, k, p } と「週:f」の形も読む
+    const cards: R[] = [];
+    Object.entries(shape).forEach(([key, c]: [string, any]) => { if (!c || typeof c !== "object") return; const [n, r] = key.split(":"), old = /^[fmpr]$/.test(r);
+      const sid = old ? c.s : (Array.isArray(c.items) ? c.s : (c.s || r)); if (sid !== i.id) return;
+      const list = Array.isArray(c.items) ? c.items : String(c.t || "").trim() ? [{ t: c.t, ty: ({ f: "note", m: "membership", p: "paid" } as R)[old ? r : c.k] || "", lb: [], p: c.p }] : [];
+      list.forEach((x: R) => { if (String(x.t || "").trim()) cards.push({ n: +n, x }); }); });
+    const cells: R[] = cards.sort((a, b) => a.n - b.n).map(({ n, x }) => {
+      const k = TY_KIND[x.ty] || "", mon = W[n - 1] || "", sun = mon ? addDays(mon, 6) : "";
+      const outs = !k || !mon ? [] : P.filter(p => p.k === k && p.day >= mon && p.day <= sun);
+      const counts = !!k || !!x.p;
+      return { 週: `${n}週${mon ? `（${+mon.slice(5, 7)}/${+mon.slice(8)}〜）` : ""}`, ...(x.ty ? { 種別: TY_NAME[x.ty] || x.ty } : {}), 書いた文: String(x.t), ...(Array.isArray(x.lb) && x.lb.length ? { ラベル: x.lb } : {}),
+        ...(x.p ? { コンテンツくん: `https://content-os.shia2n.jp/?post=${x.p}` } : {}), 始まった: !!mon && mon <= today,
+        ...(!counts ? { 数え方: "種別が記事でなく、コンテンツくんへも送っていないので数えない" } : k ? { 出した記事: outs.map(p => ({ 日: p.day, 題: p.t, 状態: p.st === "published" ? "公開済み" : "予約" })) } : { 数え方: "コンテンツくんへ送った記事の状態で数える（画面で確かめる）" }) };
     });
-    const cnt = cells.filter(c => c.種類), due = cnt.filter(c => c.始まった).length, done = cnt.filter(c => c.始まった && (c.出した記事 || []).length).length;
+    const cnt = cells.filter(c => c.出した記事), due = cnt.filter(c => c.始まった).length, done = cnt.filter(c => c.始まった && (c.出した記事 || []).length).length;
     return { id: i.id, 立ち回り: i.body || "", 列: NK_COL[i.layer], ...(i.layer === "route" && i.memo ? { ルート: i.memo } : {}), 状態: i.state === "wait" ? "控え" : i.state === "stop" ? "やめた" : "今月やる",
       ...(hy.length ? { 仮説: hy } : {}), ...(String(i.note || "").trim() ? { 中身: String(i.note) } : {}), ...(maps.length ? { 思考整理くん: maps } : {}), お手本: refs, ...(ev[i.id] ? { 先月の評価: NK_EV[ev[i.id]] } : {}), 戦術表のマス: cells, ...(cnt.length ? { 予定と実績: `${done} / ${due}（今日までに始まった週のマス・全 ${cnt.length}）` } : {}) };
   });

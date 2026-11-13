@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.86.0"; // 2026-11-13 notekoryaku__get_moves：④戦術表（週:立ち回り・種類 k）を読む。古い形も読む
+export const APP_VERSION = "1.87.0"; // 2026-11-13 notekoryaku__get_moves：戦術表のマスにネタのカード（種別・ラベル・コンテンツくん）を読む
