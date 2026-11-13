@@ -403,6 +403,8 @@ export type AddTaskInput = {
   /** リマインド（v1.92.0・2026-11-13）：着手日の朝にメール／期限を過ぎたら毎朝メール。TaskMaster の画面の「リマインド」と同じ欄 */
   remindStart?: boolean;
   remindOverdue?: boolean;
+  /** 着手の知らせの時刻（"HH:MM"・30 分ごと・空なら 07:00・v1.93.0） */
+  remindAt?: string;
 };
 
 /** TaskMaster の繰り返しの値（taskmaster の src/lib/util.js の REPEAT と同じ・2026-10-22） */
@@ -472,6 +474,7 @@ export function buildNewTask(body: AddTaskInput, now = new Date()): Item {
     ...(Array.isArray(body.links) && body.links.length ? { links: body.links.slice(0, 5) } : {}),
     ...(body.remindStart === true ? { remindStart: true } : {}),
     ...(body.remindOverdue === true ? { remindOverdue: true } : {}),
+    ...(typeof body.remindAt === "string" && /^\d{2}:(00|30)$/.test(body.remindAt) ? { remindAt: body.remindAt } : {}),
   };
 }
 

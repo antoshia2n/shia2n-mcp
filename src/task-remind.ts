@@ -1,9 +1,10 @@
 /**
  * shia2n-mcp / src/task-remind.ts / 新設（2026-11-13 開発部・v1.92.0）
  *
- * TaskMaster のリマインド。毎朝 8:00（日本時間）に 1 通だけ送る。
- *   ・「着手日の朝にメール」（remindStart）が入っていて、着手日が今日のタスク
- *   ・「期限を過ぎたら毎朝メール」（remindOverdue）が入っていて、期限が昨日より前のタスク（済むまで毎朝）
+ * TaskMaster のリマインド。30 分ごとに見て、その時刻に知らせるものがあれば 1 通送る。
+ *   ・「着手日にメール」（remindStart）が入っていて、着手日が今日で、時刻（remindAt・空なら 07:00）が今の 30 分のタスク
+ *   ・「期限を過ぎたら毎朝 7:00 にメール」（remindOverdue）が入っていて、期限が昨日より前のタスク（済むまで毎朝・7:00 の回だけ）
+ *   v1.93.0（2026-11-13 20:48 Naoki「リマインドの時間は決めたい。期限超過は 7 時でいい」）で 8:00 の 1 回から変えた
  *   済み・アーカイブは出さない。どちらも無い朝は送らない（記録は「送らなかった」で残す）
  * Naoki「リマインド設定みたいにしておいて、着手の通知と、期限漏れの通知ってイメージ」（2026-11-13 20:27）
  * 読むのはスイッチの入ったタスクだけ（runQuery で欄の値が true のもの・全部は読まない）
@@ -21,9 +22,22 @@ const open = (t: T) => t.completed !== true && t.status !== "done" && t.archived
 const diffDays = (a: string, b: string) => Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 864e5);
 
 /** 今朝知らせるタスクを選ぶ（書かない・試験しやすいように中身だけ） */
-export function pickReminders(startOn: T[], overdueOn: T[], today: string): { starts: RemindRow[]; overdue: RemindRow[] } {
+export const OVERDUE_AT = "07:00";
+/** 時刻を 30 分の枠にそろえる（"7:00"・"07:15" → "07:00"・形が違えば null） */
+export function slotOf(v: unknown): string | null {
+  const m = typeof v === "string" ? v.match(/^(\d{1,2}):(\d{2})$/) : null;
+  if (!m || +m[1] > 23 || +m[2] > 59) return null;
+  return `${m[1].padStart(2, "0")}:${+m[2] < 30 ? "00" : "30"}`;
+}
+/** 日本時間の今の 30 分の枠 */
+export function jstSlot(now = new Date()): string {
+  const d = new Date(now.getTime() + 9 * 3600e3);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${d.getUTCMinutes() < 30 ? "00" : "30"}`;
+}
+export function pickReminders(startOn: T[], overdueOn: T[], today: string, slot: string = OVERDUE_AT): { starts: RemindRow[]; overdue: RemindRow[] } {
   const row = (t: T, day: string): RemindRow => ({ id: String(t.id ?? ""), title: String(t.title || "（題なし）"), day, late: diffDays(today, day) });
-  const starts = startOn.filter(t => t.remindStart === true && open(t) && day10(t.startDate) === today).map(t => row(t, today));
+  const starts = startOn.filter(t => t.remindStart === true && open(t) && day10(t.startDate) === today && (slotOf(t.remindAt) || OVERDUE_AT) === slot).map(t => row(t, today));
+  if (slot !== OVERDUE_AT) return { starts, overdue: [] };
   const overdue = overdueOn.filter(t => t.remindOverdue === true && open(t) && day10(t.deadline) && day10(t.deadline) < today)
     .map(t => row(t, day10(t.deadline))).sort((a, b) => b.late - a.late || a.title.localeCompare(b.title));
   return { starts, overdue };
@@ -42,7 +56,7 @@ export function buildRemindMail(p: { starts: RemindRow[]; overdue: RemindRow[] }
     sec("期限を過ぎたもの", p.overdue, r => `${dayLabel(r.day)}が期限・${r.late} 日過ぎ`),
   ].filter(Boolean) as { head: string; rows: RemindRow[]; note: (r: RemindRow) => string }[];
   const text = secs.map(s => `■ ${s.head}\n${s.rows.map(r => `・${r.title}（${s.note(r)}）\n  ${link(r.id)}`).join("\n")}`).join("\n\n")
-    + `\n\n止めるときは、タスクを済みにするか、日付の「リマインド」を外す。（${dayLabel(today)} 8:00）`;
+    + `\n\n止めるときは、タスクを済みにするか、日付の「リマインド」を外す。（${dayLabel(today)}）`;
   const html = `<div style="font-family:sans-serif;font-size:14px;line-height:1.7;color:#222">`
     + secs.map(s => `<p style="margin:16px 0 4px"><b>${esc(s.head)}</b></p><ul style="margin:0;padding-left:18px">${s.rows.map(r => `<li><a href="${link(r.id)}">${esc(r.title)}</a> <span style="color:${s.head.startsWith("期限") ? "#b91c1c" : "#555"}">（${esc(s.note(r))}）</span></li>`).join("")}</ul>`).join("")
     + `<p style="margin-top:20px;color:#666;font-size:12px">止めるときは、タスクを済みにするか、日付の「リマインド」を外す。</p></div>`;
@@ -50,23 +64,23 @@ export function buildRemindMail(p: { starts: RemindRow[]; overdue: RemindRow[] }
 }
 
 export async function runTaskRemind(env: Env, now = new Date()): Promise<{ sent: boolean; count: number; detail: string }> {
-  const today = jstToday(now);
+  const today = jstToday(now), slot = jstSlot(now);
   const token = await getFirestoreToken(env);
   const layout = await readLayout(token, env.NAOKI_UID);
   if (layout !== "v2") return { sent: false, count: 0, detail: `TaskMaster の置き場が ${layout} のため見なかった` };
   const [s, o] = await Promise.all([
     queryTasks(token, env.NAOKI_UID, "remindStart", toFVal(true)),
-    queryTasks(token, env.NAOKI_UID, "remindOverdue", toFVal(true)),
+    slot === OVERDUE_AT ? queryTasks(token, env.NAOKI_UID, "remindOverdue", toFVal(true)) : Promise.resolve([] as T[]),
   ]);
-  const p = pickReminders(s, o, today);
+  const p = pickReminders(s, o, today, slot);
   const mail = buildRemindMail(p, today);
-  if (!mail) return { sent: false, count: 0, detail: `知らせるものが無いので送らなかった（スイッチ 着手 ${s.length}・期限 ${o.length}）` };
+  if (!mail) return { sent: false, count: 0, detail: `${slot}：知らせるものが無いので送らなかった（スイッチ 着手 ${s.length}${slot === OVERDUE_AT ? `・期限 ${o.length}` : ""}）` };
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ from: env.RESEND_FROM_EMAIL, to: [env.RESEND_TO_EMAIL], subject: mail.subject, html: mail.html, text: mail.text }),
   });
   if (!res.ok) throw new Error(`メールを送れませんでした（Resend ${res.status}：${(await res.text().catch(() => "")).slice(0, 200)}）`);
-  return { sent: true, count: p.starts.length + p.overdue.length, detail: `着手 ${p.starts.length}・期限切れ ${p.overdue.length} を送った` };
+  return { sent: true, count: p.starts.length + p.overdue.length, detail: `${slot}：着手 ${p.starts.length}・期限切れ ${p.overdue.length} を送った` };
 }
 
