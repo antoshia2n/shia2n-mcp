@@ -1,7 +1,7 @@
 // v1.92.0：TaskMaster のリマインド。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickReminders, buildRemindMail } from "../src/task-remind.js";
+import { pickReminders, buildRemindMail, slotOf, jstSlot } from "../src/task-remind.js";
 import { buildNewTask } from "../src/taskmaster.js";
 
 const today = "2026-11-14";
@@ -39,4 +39,27 @@ test("メールの中身・知らせるものが無ければ null", () => {
 test("add_task の中身にリマインドを渡せる（true のときだけ欄を持つ）", () => {
   assert.equal(buildNewTask({ title: "t", remindOverdue: true }).remindOverdue, true);
   assert.equal("remindStart" in buildNewTask({ title: "t" }), false);
+});
+
+// v1.93.0：時刻
+test("時刻を 30 分の枠にそろえる・日本時間の今の枠", () => {
+  assert.equal(slotOf("7:00"), "07:00");
+  assert.equal(slotOf("21:45"), "21:30");
+  assert.equal(slotOf("25:00"), null);
+  assert.equal(slotOf(undefined), null);
+  assert.equal(jstSlot(new Date("2026-11-13T22:00:30Z")), "07:00");
+  assert.equal(jstSlot(new Date("2026-11-13T12:31:00Z")), "21:30");
+});
+test("着手は選んだ時刻の枠だけ（空なら 7:00）・期限切れは 7:00 の枠だけ", () => {
+  const st = [
+    { id: "a", title: "空", remindStart: true, startDate: today },
+    { id: "b", title: "21 時", remindStart: true, startDate: today, remindAt: "21:00" },
+  ];
+  const od = [{ id: "y", title: "遅れ", remindOverdue: true, deadline: "2026-11-10" }];
+  const at7 = pickReminders(st, od, today, "07:00");
+  assert.deepEqual([at7.starts.map(r => r.id), at7.overdue.map(r => r.id)], [["a"], ["y"]]);
+  const at21 = pickReminders(st, od, today, "21:00");
+  assert.deepEqual([at21.starts.map(r => r.id), at21.overdue.length], [["b"], 0]);
+  assert.equal(buildNewTask({ title: "t", remindAt: "21:00" }).remindAt, "21:00");
+  assert.equal("remindAt" in buildNewTask({ title: "t", remindAt: "21:15" }), false);
 });
