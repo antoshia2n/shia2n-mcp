@@ -1,0 +1,163 @@
+/**
+ * shia2n-mcp / src/seminar-tasks.ts / 新設（2026-11-13 開発部・セミナー管理の流れ 便2）
+ *
+ * コンテンツくんの「セミナー」の回（1 回＝1 行・開催日時は posts.datetime）から、
+ * TaskMaster に「構成・告知・スライド」の 3 つのタスクを入れ、開催日が動いたら期限もついていかせる。
+ * 作る前の 1 枚に Naoki OK（2026-11-13 19:02）。正本はコンテンツくん。TaskMaster はその写し。
+ *
+ * 決まり
+ *   ・見るのは、今日から 60 日先までに開催日がある「セミナー」の回だけ（ゴミ箱・アーカイブは見ない）
+ *   ・期限は開催日から数える：構成＝3 日前・告知＝2 日前・スライド＝前日（STEPS の 1 か所で決める）
+ *   ・入れる先は TaskMaster のプロジェクト「シアラボ｜運営」。タスクにはコンテンツくんの回へのリンクを付ける
+ *   ・開催日が動いたら期限を写す。ただし、Naoki が TaskMaster で期限を動かしたタスク（前に写した日と違う）は触らない
+ *   ・済み・アーカイブのタスクは触らない。TaskMaster で消したタスクは作り直さない（消したのは Naoki の判断のため）
+ *   ・回を消しても、開催日を外しても、タスクは消さない（消すのは Naoki）
+ *   ・どのタスクを入れたかは KV の 1 か所（seminar_tasks_v1）に持つ。タスクは id で読むだけ（全部は読まない・Firestore の無料枠を守るため）
+ */
+import type { Env } from "./index.js";
+import { getFirestoreToken, handleTaskmasterAddTask, handleTaskmasterUpdateTask } from "./taskmaster.js";
+import { readTasksById, type TaskNow } from "./taskmaster-by-id.js";
+
+export const STORE_KEY = "seminar_tasks_v1";
+export const SHIARABO_UNEI_PROJECT = "63d412a7-3647-4a56-88d7-0db9d95f60c0"; // TaskMaster「シアラボ｜運営」
+export const CONTENT_OS = "https://content-os.shia2n.jp";
+export const LOOK_AHEAD_DAYS = 60;
+/** 開催日から何日前を期限にするか（並びは期限の早い順） */
+export const STEPS = [
+  { step: "構成", before: 3 },
+  { step: "告知", before: 2 },
+  { step: "スライド", before: 1 },
+] as const;
+export type Step = (typeof STEPS)[number]["step"];
+
+export type Mark = { taskId: string; deadline: string; gone?: boolean };
+export type Store = { v: 1; posts: Record<string, Partial<Record<Step, Mark>>> };
+export type SeminarPost = { id: string; title: string; date: string };
+
+/** 日本時間の今日（YYYY-MM-DD） */
+export function jstToday(now = new Date()): string {
+  return new Date(now.getTime() + 9 * 3600e3).toISOString().slice(0, 10);
+}
+/** YYYY-MM-DD に日を足す */
+export function addDays(day: string, n: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+export function parseStore(v: unknown): Store {
+  if (v == null) return { v: 1, posts: {} };
+  if (typeof v !== "object" || (v as Store).v !== 1 || typeof (v as Store).posts !== "object" || !(v as Store).posts) {
+    throw new Error(STORE_KEY + " の形が読めません。止めました");
+  }
+  return v as Store;
+}
+/** 回の題（日付つきの題でもそのまま）から、タスクの名前を作る */
+export function taskTitle(step: Step, title: string): string {
+  return `セミナー｜${step}｜${(title || "（題なし）").trim().slice(0, 120)}`;
+}
+
+export type Add = { postId: string; step: Step; title: string; deadline: string; url: string };
+export type Move = { postId: string; step: Step; taskId: string; from: string; to: string };
+export type Plan = { adds: Add[]; moves: Move[] };
+
+/** 何を入れて何を動かすかを決める（書かない・試験しやすいように中身だけ） */
+export function planSeminarTasks(posts: SeminarPost[], store: Store): Plan {
+  const adds: Add[] = [], moves: Move[] = [];
+  for (const p of posts) {
+    const have = store.posts[p.id] || {};
+    for (const s of STEPS) {
+      const deadline = addDays(p.date, -s.before);
+      const m = have[s.step];
+      if (!m) adds.push({ postId: p.id, step: s.step, title: taskTitle(s.step, p.title), deadline, url: `${CONTENT_OS}/?post=${encodeURIComponent(p.id)}` });
+      else if (!m.gone && m.deadline !== deadline) moves.push({ postId: p.id, step: s.step, taskId: m.taskId, from: m.deadline, to: deadline });
+    }
+  }
+  return { adds, moves };
+}
+
+export type MoveDecision = "move" | "naoki" | "closed" | "gone";
+/** 動かしてよいかを、タスクの今から決める */
+export function decideMove(m: Move, now: TaskNow | undefined): MoveDecision {
+  if (!now || !now.exists) return "gone";
+  if (now.completed || now.archived) return "closed";
+  const cur = typeof now.deadline === "string" ? now.deadline.slice(0, 10) : "";
+  return cur === m.from ? "move" : "naoki";
+}
+
+// ── 読み書き ──
+function sbHeaders(env: Env) {
+  const k = env.SUPABASE_SERVICE_ROLE_KEY;
+  return { apikey: k, ...(/^eyJ/.test(String(k || "")) ? { Authorization: `Bearer ${k}` } : {}) };
+}
+/** そのアカウントの種類のうち、名前が「セミナー」のものの鍵（コンテンツくんの ext/ideas と同じ探し方） */
+export function seminarKeys(accounts: { custom_post_types?: unknown }[]): string[] {
+  const out: string[] = [];
+  for (const a of accounts) for (const c of Array.isArray(a.custom_post_types) ? a.custom_post_types : []) {
+    if (c && typeof c.key === "string" && String(c.label || "").trim() === "セミナー") out.push(c.key);
+  }
+  return [...new Set(out)];
+}
+async function readSeminarPosts(env: Env, today: string): Promise<SeminarPost[]> {
+  const uid = encodeURIComponent(env.NAOKI_UID);
+  const ra = await fetch(`${env.SUPABASE_URL}/rest/v1/accounts?select=custom_post_types&user_id=eq.${uid}`, { headers: sbHeaders(env) });
+  if (!ra.ok) throw new Error(`コンテンツくんのアカウントを読めませんでした（${ra.status}）`);
+  const keys = seminarKeys(await ra.json());
+  if (!keys.length) return [];
+  const inList = keys.map(k => `"${k.replace(/"/g, "")}"`).join(",");
+  const until = addDays(today, LOOK_AHEAD_DAYS);
+  const q = `select=id,title,datetime,labels&user_id=eq.${uid}&post_type=in.(${encodeURIComponent(inList)})&datetime=gte.${today}&datetime=lt.${until}`;
+  const rp = await fetch(`${env.SUPABASE_URL}/rest/v1/posts?${q}`, { headers: sbHeaders(env) });
+  if (!rp.ok) throw new Error(`セミナーの回を読めませんでした（${rp.status}）`);
+  const rows = await rp.json() as { id: number | string; title: string | null; datetime: string | null; labels: string[] | null }[];
+  return rows
+    .filter(r => !(r.labels || []).some(l => l === "ゴミ箱" || l === "アーカイブ"))
+    .filter(r => typeof r.datetime === "string" && /^\d{4}-\d{2}-\d{2}/.test(r.datetime))
+    .map(r => ({ id: String(r.id), title: r.title || "", date: (r.datetime as string).slice(0, 10) }));
+}
+
+const fakeReq = (body: unknown) => new Request("https://shia2n-mcp.internal/", { method: "POST", body: JSON.stringify(body) });
+
+export type RunResult = { posts: number; added: number; moved: number; naoki: number; closed: number; gone: number; failed: number };
+
+export async function runSeminarTasks(env: Env, now = new Date()): Promise<RunResult> {
+  const today = jstToday(now);
+  const store = parseStore(await env.OAUTH_KV.get(STORE_KEY, "json"));
+  const posts = await readSeminarPosts(env, today);
+  const plan = planSeminarTasks(posts, store);
+  const r: RunResult = { posts: posts.length, added: 0, moved: 0, naoki: 0, closed: 0, gone: 0, failed: 0 };
+  if (!plan.adds.length && !plan.moves.length) return r;
+
+  const put = (postId: string, step: Step, m: Mark) => { (store.posts[postId] ||= {})[step] = m; };
+  try {
+    for (const a of plan.adds) {
+      const res = await handleTaskmasterAddTask(fakeReq({
+        title: a.title, deadline: a.deadline, projectId: SHIARABO_UNEI_PROJECT, priority: "high",
+        links: [{ title: "コンテンツくんのセミナーの回", url: a.url }],
+      }), env);
+      const j = await res.json().catch(() => ({})) as { ok?: boolean; task?: { id?: string } };
+      if (res.ok && j.ok && j.task?.id) { put(a.postId, a.step, { taskId: j.task.id, deadline: a.deadline }); r.added++; }
+      else r.failed++;
+    }
+    if (plan.moves.length) {
+      const token = await getFirestoreToken(env);
+      const nowById = await readTasksById({ token, uid: env.NAOKI_UID }, plan.moves.map(m => m.taskId));
+      for (const m of plan.moves) {
+        const d = decideMove(m, nowById.get(m.taskId));
+        if (d === "move") {
+          const res = await handleTaskmasterUpdateTask(fakeReq({ task_id: m.taskId, deadline: m.to }), env);
+          if (res.ok) { put(m.postId, m.step, { taskId: m.taskId, deadline: m.to }); r.moved++; } else r.failed++;
+        } else if (d === "gone") { put(m.postId, m.step, { taskId: m.taskId, deadline: m.from, gone: true }); r.gone++; }
+        else if (d === "naoki") r.naoki++;
+        else r.closed++;
+      }
+    }
+  } finally {
+    // 途中で止まっても、入れた分は覚えておく（次の回に 2 本目を作らないため）
+    await env.OAUTH_KV.put(STORE_KEY, JSON.stringify(store));
+  }
+  return r;
+}
+
+export function describe(r: RunResult): string {
+  return `回 ${r.posts}・入れた ${r.added}・期限を写した ${r.moved}・Naoki の日なので写さなかった ${r.naoki}・済みで見送り ${r.closed}・消されていた ${r.gone}・失敗 ${r.failed}`;
+}
