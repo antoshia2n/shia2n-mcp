@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.89.0"; // 2026-11-13 xbunseki__get_stock・put_stock（X攻略くんの仮説とノウハウのストック）
+export const APP_VERSION = "1.90.0"; // 2026-11-13 セミナーの回から TaskMaster へ 構成・告知・スライド（seminar_tasks）

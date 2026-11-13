@@ -67,6 +67,8 @@ export const KNOWN_JOBS = [
   // 2026-11-10 追加（v1.78.0）：note攻略くんの見る相手の月の数字とスワイプ候補（15 分ごとに 1 人・動いた回だけ記録）
   "notekoryaku_others",
   "content_schedules",
+  // 2026-11-13 追加（v1.90.0）：コンテンツくんのセミナーの回から TaskMaster へ 構成・告知・スライド を入れ、開催日が動いたら期限を写す（毎時 0 分）
+  "seminar_tasks",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];
