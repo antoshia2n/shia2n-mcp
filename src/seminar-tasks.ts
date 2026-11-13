@@ -161,3 +161,59 @@ export async function runSeminarTasks(env: Env, now = new Date()): Promise<RunRe
 export function describe(r: RunResult): string {
   return `回 ${r.posts}・入れた ${r.added}・期限を写した ${r.moved}・Naoki の日なので写さなかった ${r.naoki}・済みで見送り ${r.closed}・消されていた ${r.gone}・失敗 ${r.failed}`;
 }
+
+// ── 便3（2026-11-13）：日曜 20:00（日本時間）に、今週と来週のセミナーの回の「作るものと期限」を 1 通 ──
+// 回が 1 つも無い週は送らない（記録は「送らなかった」で残す）。済みかどうかは TaskMaster のタスクを id で読んで出す
+export const MAIL_DAYS = 14;
+export type MailLine = { step: Step; deadline: string; done: boolean | null };
+export type MailRow = { id: string; title: string; date: string; lines: MailLine[] };
+
+const WD = ["日", "月", "火", "水", "木", "金", "土"];
+export function dayLabel(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}（${WD[d.getUTCDay()]}）`;
+}
+const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+
+/** メールの中身（書かない・試験しやすいように中身だけ）。回が無ければ null */
+export function buildSeminarMail(posts: SeminarPost[], store: Store, nowById: Map<string, TaskNow>, today: string): { subject: string; html: string; text: string } | null {
+  const until = addDays(today, MAIL_DAYS);
+  const rows: MailRow[] = posts.filter(p => p.date >= today && p.date < until).sort((a, b) => a.date.localeCompare(b.date)).map(p => ({
+    id: p.id, title: p.title, date: p.date,
+    lines: STEPS.map(s => {
+      const m = store.posts[p.id]?.[s.step];
+      const t = m && !m.gone ? nowById.get(m.taskId) : undefined;
+      const dl = t && typeof t.deadline === "string" && t.deadline ? t.deadline.slice(0, 10) : (m?.deadline || addDays(p.date, -s.before));
+      return { step: s.step, deadline: dl, done: t ? (t.completed === true) : null };
+    }),
+  }));
+  if (!rows.length) return null;
+  const mark = (l: MailLine) => l.done === true ? "済み" : l.done === false ? (l.deadline < today ? "期限切れ" : "まだ") : "TaskMaster に無い";
+  const subject = `セミナーの段取り：${dayLabel(rows[0].date)}から ${rows.length} 回`;
+  const text = rows.map(r => `■ ${dayLabel(r.date)} ${r.title || "（題なし）"}\n${r.lines.map(l => `  ${l.step}：${dayLabel(l.deadline)}まで（${mark(l)}）`).join("\n")}\n  ${CONTENT_OS}/?post=${r.id}`).join("\n\n")
+    + "\n\n日付を変えるときは、コンテンツくんの回の開催日を直す（TaskMaster の期限は次の 0 分についていく）。";
+  const html = `<div style="font-family:sans-serif;font-size:14px;line-height:1.7;color:#222">`
+    + rows.map(r => `<p style="margin:16px 0 4px"><b>${esc(dayLabel(r.date))} ${esc(r.title || "（題なし）")}</b> ・ <a href="${CONTENT_OS}/?post=${encodeURIComponent(r.id)}">コンテンツくんで開く</a></p>`
+      + `<table style="border-collapse:collapse">${r.lines.map(l => `<tr><td style="padding:2px 12px 2px 0">${esc(l.step)}</td><td style="padding:2px 12px 2px 0">${esc(dayLabel(l.deadline))}まで</td><td style="padding:2px 0;color:${l.done === true ? "#047857" : l.deadline < today ? "#b91c1c" : "#555"}">${esc(mark(l))}</td></tr>`).join("")}</table>`).join("")
+    + `<p style="margin-top:20px;color:#666;font-size:12px">日付を変えるときは、コンテンツくんの回の開催日を直す（TaskMaster の期限は次の 0 分についていく）。</p></div>`;
+  return { subject, html, text };
+}
+
+/** 日曜 20:00 の 1 通。送らなかったときは理由の文を返す */
+export async function runSeminarMail(env: Env, now = new Date()): Promise<{ sent: boolean; rows: number; detail: string }> {
+  const today = jstToday(now);
+  const store = parseStore(await env.OAUTH_KV.get(STORE_KEY, "json"));
+  const posts = (await readSeminarPosts(env, today)).filter(p => p.date < addDays(today, MAIL_DAYS));
+  if (!posts.length) return { sent: false, rows: 0, detail: "今週と来週のセミナーの回が無いので送らなかった" };
+  const ids = posts.flatMap(p => STEPS.map(s => store.posts[p.id]?.[s.step]).filter((m): m is Mark => !!m && !m.gone).map(m => m.taskId));
+  const nowById = ids.length ? await readTasksById({ token: await getFirestoreToken(env), uid: env.NAOKI_UID }, ids) : new Map<string, TaskNow>();
+  const mail = buildSeminarMail(posts, store, nowById, today);
+  if (!mail) return { sent: false, rows: 0, detail: "今週と来週のセミナーの回が無いので送らなかった" };
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: env.RESEND_FROM_EMAIL, to: [env.RESEND_TO_EMAIL], subject: mail.subject, html: mail.html, text: mail.text }),
+  });
+  if (!res.ok) throw new Error(`メールを送れませんでした（Resend ${res.status}：${(await res.text().catch(() => "")).slice(0, 200)}）`);
+  return { sent: true, rows: posts.length, detail: `${posts.length} 回の段取りを送った` };
+}

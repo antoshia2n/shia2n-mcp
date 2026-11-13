@@ -69,6 +69,8 @@ export const KNOWN_JOBS = [
   "content_schedules",
   // 2026-11-13 追加（v1.90.0）：コンテンツくんのセミナーの回から TaskMaster へ 構成・告知・スライド を入れ、開催日が動いたら期限を写す（毎時 0 分）
   "seminar_tasks",
+  // 2026-11-13 追加（v1.91.0）：日曜 20:00（日本時間）に今週と来週のセミナーの段取りを 1 通（回が無い週は送らない）
+  "seminar_mail",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];
