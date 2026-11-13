@@ -141,3 +141,30 @@ export function movesOf(items: Row[], month: string, week: Row | null, ladder: R
       ...(hy.length ? { 仮説: hy } : {}), お手本: refs, ...(ev[i.id] ? { 今週の評価: EV_NAME[ev[i.id]] } : {}), 今週出した投稿: outs };
   });
 }
+
+/* ── 仮説とノウハウのストック（2026-11-13・X攻略くん 便4・note攻略くんから逆輸入）──
+ * 画面と同じ形：仮説 kind hy・ノウハウ kind kn。評価は grade（C・B・A・S）、フォルダ・評価の変化・リンクは src の { sk: { folder, grades, links } }。
+ * 仮説・ノウハウ → 立ち回り（kind st）の結びは、仮説・ノウハウの側の links に立ち回りの id */
+export const STOCK_KIND: Record<string, string> = { 仮説: "hy", ノウハウ: "kn" };
+const GR_ORD: Record<string, number> = { S: 4, A: 3, B: 2, C: 1, "": 0 };
+const skOf = (i: Row): Row => { const k = (Array.isArray(i.src) ? i.src : []).find((s: Row) => s && s.sk && typeof s.sk === "object")?.sk || {}; return { folder: String(k.folder || ""), grades: Array.isArray(k.grades) ? k.grades : [], links: Array.isArray(k.links) ? k.links : [] }; };
+export const layerIdOf = (name?: string) => (LAYERS.find(l => l[1] === name || l[0] === name) || LAYERS[2])[0];
+export function xbStockOf(items: Row[], weeks: Row[], accounts: Row[], kind?: string, folder?: string): Row[] {
+  const sts = items.filter(i => i.kind === "st" && !i.archived);
+  return items.filter(i => (i.kind === "hy" || i.kind === "kn") && !i.archived && (!kind || i.kind === kind) && (folder == null || skOf(i).folder === folder))
+    .sort((a, b) => (GR_ORD[b.grade || ""] - GR_ORD[a.grade || ""]) || String(b.created_at || "").localeCompare(String(a.created_at || "")))
+    .map(i => { const sk = skOf(i); let down = ""; for (let n = 1; n < sk.grades.length; n++) if ((GR_ORD[sk.grades[n].g] || 0) < (GR_ORD[sk.grades[n - 1].g] || 0)) down = `${sk.grades[n].at} に ${sk.grades[n - 1].g}→${sk.grades[n].g}`;
+      const src = [...new Set((Array.isArray(i.src) ? i.src : []).filter((s: Row) => s && (s.week_id || s.account)).map((s: Row) => `${accounts.find(a => a.handle === s.account)?.name || s.account || ""}（${weeks.find(w => w.id === s.week_id)?.label || ""}の分析）`))];
+      const used = sts.filter(s => (i.links || []).includes(s.id)).map(s => s.body || "");
+      return { id: i.id, 種類: i.kind === "kn" ? "ノウハウ" : "仮説", 文: i.body || "", 評価: i.grade || "なし", 層: layerName(i.layer), フォルダ: sk.folder || "未分類", 登録日: String(i.created_at || "").slice(0, 10),
+        ...(sk.grades.length ? { 評価の変化: sk.grades.map((g: Row) => `${g.g} ${g.at}`).join(" → ") } : {}), ...(down ? { ここまで通用: down } : {}),
+        ...(src.length ? { 出どころ: src } : {}), ...(sk.links.length ? { リンク: sk.links.map((l: Row) => ({ 題: l.t || "", URL: l.url })) } : {}),
+        ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), ...(used.length ? { 使っている立ち回り: used } : {}) }; });
+}
+/** 足す 1 行。同じ種類で同じ文（前後の空白を除く）がもうあれば null */
+export function xbStockRow(x: Row, owner: string, today: string, items: Row[]): Row | null {
+  const kind = STOCK_KIND[x.kind]; const body = String(x.text || "").trim(); if (!kind || !body) return null;
+  if (items.some(i => i.kind === kind && !i.archived && String(i.body || "").trim() === body)) return null;
+  const links = [...(x.map_url ? [{ t: "思考整理くんのマップ", url: String(x.map_url) }] : []), ...((x.links || []) as Row[]).map(l => ({ t: String(l.title || ""), url: String(l.url || "") }))].filter(l => /^https?:\/\//i.test(l.url)).slice(0, 6);
+  return { user_id: owner, layer: layerIdOf(x.layer), kind, body: body.slice(0, 500), memo: String(x.note || "").slice(0, 4000), grade: "C", src: [{ sk: { folder: String(x.folder || "").trim().slice(0, 30), grades: [{ g: "C", at: today }], links } }], links: [], from_month: today.slice(0, 7), archived: false, tm: false, sort: 9999 };
+}
