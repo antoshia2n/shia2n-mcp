@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { KINDS, LAYERS, METRICS, type Row, actsSummary, featOf, inMonth, itemsFor, layerName, layersOf, mergeMetrics, movesOf, pickWeek, weekDays } from "./xbunseki-core.js";
+import { KINDS, LAYERS, METRICS, STOCK_KIND, type Row, actsSummary, featOf, inMonth, itemsFor, layerName, layersOf, mergeMetrics, movesOf, pickWeek, weekDays, xbStockOf, xbStockRow } from "./xbunseki-core.js";
 
 /**
  * X攻略くん（x-koryaku.shia2n.jp・Naoki の X の定点観測）の道具。
@@ -208,6 +208,48 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
         const rows = await sbPatch(env, `/xa_weeks?id=eq.${w.id}&${own}&select=id,metrics`, { metrics: next, updated_at: new Date().toISOString() });
         if (!rows.length) return asMcpTextResult({ ok: false, message: "書けませんでした（行が見つからない）" });
         return asMcpTextResult({ ok: true, 週: w.label, 前: metricsOut(w.metrics), 後: metricsOut(rows[0].metrics), 直した欄: changed.map(k => METRICS[k]), 住所: APP_URL });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // ─── 仮説とノウハウのストック（2026-11-13・X攻略くん 便4・note攻略くんの notekoryaku__get_stock／put_stock と同じ形）───
+  server.tool(
+    "xbunseki__get_stock",
+    "X攻略くんの「仮説とノウハウのストック」（右上の「ストック」）を返す（読むだけ）。評価（C 根拠が薄い・B 手応えあり・A 自分で証明できた・S 証明できて効果も大きい）・層・フォルダ・登録日・評価の変化・ここまで通用（評価を下げた日）・出どころ・リンク・メモ・使っている立ち回り。足す前に重なりと既存のフォルダを見るとき、ポストや記事の材料を探すときに読む。",
+    { kind: z.enum(["仮説", "ノウハウ"]).optional().describe("省略で両方"), folder: z.string().max(30).optional().describe("フォルダの名前。未分類は空文字") },
+    async ({ kind, folder }) => {
+      try {
+        const { own, weeks, accounts } = await loadBase(env);
+        const items = await sbGet(env, `/xa_items?select=*&${own}&kind=in.(hy,kn,st)`);
+        const list = xbStockOf(items, weeks, accounts, kind ? STOCK_KIND[kind] : undefined, folder);
+        const folders = [...new Set(list.map(x => x.フォルダ).filter(f => f && f !== "未分類"))];
+        return asMcpTextResult({ ok: true, 件数: list.length, フォルダ: folders, ストック: list, 画面: APP_URL, 見る場所: "右上の「ストック」" });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+  server.tool(
+    "xbunseki__put_stock",
+    "X攻略くんの「仮説とノウハウのストック」へ足す（足すだけ。直す・消す・評価を上げるはしない）。チャットで「この分析（マップ・ポスト）から仮説とノウハウを抜いて」と頼まれたときに使う。1 回 30 件まで。評価は C（根拠が薄い）で入り、評価の変化に今日が残る。層は 5 つ（アカウントの目的・意図／運用のスタイル／運用の内容／投稿のスタイル／投稿の内容）から 1 つ。同じ種類で同じ文がもうあれば足さない。出どころの住所を map_url か links に入れる。足す前に xbunseki__get_stock で重なりと既存のフォルダを見る。",
+    { items: z.array(z.object({
+        kind: z.enum(["仮説", "ノウハウ"]), text: z.string().min(1).max(500).describe("1 文で言い切る"),
+        layer: z.enum(["アカウントの目的・意図", "運用のスタイル", "運用の内容", "投稿のスタイル", "投稿の内容"]).optional().describe("省略で運用の内容"),
+        folder: z.string().max(30).optional().describe("フォルダの名前（既存に合わせる。無ければ新しく）"),
+        note: z.string().max(4000).optional().describe("根拠や補足。「- 」の箇条書き"),
+        map_url: z.string().max(300).optional().describe("出どころの思考整理くんのマップの住所"),
+        links: z.array(z.object({ url: z.string().max(500), title: z.string().max(80).optional() })).max(5).optional(),
+      })).min(1).max(30) },
+    async ({ items: input }) => {
+      try {
+        const { uid, own } = await loadBase(env);
+        const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+        const have = await sbGet(env, `/xa_items?select=id,kind,body,archived&${own}&kind=in.(hy,kn)`);
+        const rows: Row[] = [], skipped: string[] = [];
+        for (const x of input) { const row = xbStockRow(x, uid, today, [...have, ...rows]); if (row) rows.push(row); else skipped.push(x.text); }
+        if (!rows.length) return asMcpTextResult({ ok: true, 足した: 0, 足さなかった: skipped, 理由: "同じ文がもうある", 画面: APP_URL });
+        const ins = await fetch(`${env.SUPABASE_URL}/rest/v1/xa_items`, { method: "POST", headers: sbHeaders(env, { Prefer: "return=representation" }), body: JSON.stringify(rows) });
+        if (!ins.ok) throw new Error(`足せませんでした（${ins.status}）：${(await ins.text()).slice(0, 200)}`);
+        const got = (await ins.json()) as Row[];
+        return asMcpTextResult({ ok: true, 足した: got.length, 足したもの: got.map(g => ({ id: g.id, 種類: g.kind === "kn" ? "ノウハウ" : "仮説", 文: g.body, 層: layerName(g.layer), フォルダ: g.src?.[0]?.sk?.folder || "未分類" })), ...(skipped.length ? { 足さなかった: skipped } : {}), 画面: `${APP_URL}/`, 見る場所: "右上の「ストック」" });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
