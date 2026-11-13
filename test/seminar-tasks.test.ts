@@ -53,3 +53,19 @@ test("「セミナー」の種類の鍵を名前で探す・題の無い回", ()
   assert.deepEqual(seminarKeys([{ custom_post_types: [{ key: "custom_a", label: "動画" }, { key: "custom_s", label: " セミナー " }] }, { custom_post_types: null }]), ["custom_s"]);
   assert.equal(taskTitle("告知", ""), "セミナー｜告知｜（題なし）");
 });
+
+// v1.91.0：日曜の 1 通
+import { buildSeminarMail, dayLabel } from "../src/seminar-tasks.js";
+test("曜日つきの日付", () => { assert.equal(dayLabel("2026-11-18"), "11/18（水）"); });
+test("今週と来週の回だけ、期限と済みかを出す。回が無ければ送らない", () => {
+  const s: Store = { v: 1, posts: { "11": { 構成: { taskId: "a", deadline: "2026-11-15" }, 告知: { taskId: "b", deadline: "2026-11-16" } } } };
+  const now = new Map([["a", T("2026-11-14", { completed: true })], ["b", T("2026-11-16")]]);
+  const m = buildSeminarMail([{ id: "11", title: "アプリの使い方", date: "2026-11-18" }, { id: "12", title: "遠い回", date: "2026-12-30" }], s, now, "2026-11-15");
+  assert.ok(m);
+  assert.equal(m!.subject, "セミナーの段取り：11/18（水）から 1 回");
+  assert.match(m!.text, /構成：11\/14（土）まで（済み）/);
+  assert.match(m!.text, /告知：11\/16（月）まで（まだ）/);
+  assert.match(m!.text, /スライド：11\/17（火）まで（TaskMaster に無い）/);
+  assert.doesNotMatch(m!.text, /遠い回/);
+  assert.equal(buildSeminarMail([], s, now, "2026-11-15"), null);
+});
