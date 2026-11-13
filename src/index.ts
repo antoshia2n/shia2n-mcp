@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.94.0（2026-11-13 開発部・スライド制作 便1・作る前の 1 枚に Naoki OK 23:34）：思考整理くんのマップから GPT がスライドを描くための台帳と道具 slides__start・list・get・put_plan・set_tone・put_image（ファイルのまま）・feedback・set_status。台帳は KV の slide_deck:<id>、画像は R2（BACKUP_BUCKET の slides/）で /slides/img/ から読む。スライド制作スキル（手順）は src/slides.ts の SKILL に置き、slides__get が毎回返す。Claude の入口と GPT の入口 /content/mcp の両方に出し、GPT の入口には mindmap__get_map も足した。試験は test/slides.test.ts。設定の追加 0 個。
  * v1.93.0（2026-11-13 開発部・Naoki「リマインドの時間は決めたい。期限超過は 7 時でいい」20:48）：リマインドの見回りを 30 分ごとにした。着手の知らせは TaskMaster で選んだ時刻（remindAt・30 分ごと・空なら 07:00）、期限切れは毎朝 7:00 だけ。同じ枠のものは 1 通。add_task の中身に remindAt を足した。試験は test/task-remind.test.ts。設定の追加 0 個。
  * v1.92.0（2026-11-13 開発部・Naoki「リマインド設定みたいにしておいて、着手の通知と、期限漏れの通知」20:27）：TaskMaster のタスクの「リマインド」（remindStart＝着手日の朝にメール・remindOverdue＝期限を過ぎたら毎朝メール）を見て、毎朝 8:00（日本時間＝UTC 23:00）に 1 通（Resend）。読むのはスイッチの入ったタスクだけ（runQuery）。知らせるものが無い朝は送らない。taskmaster__add_task の中身（AddTaskInput）に remindStart・remindOverdue を足し、セミナーの 構成・告知・スライド は remindOverdue を入れて作る。中身は src/task-remind.ts、試験は test/task-remind.test.ts。記録は task_remind。設定の追加 0 個。
  * v1.91.0（2026-11-13 開発部・セミナー管理の流れ 便3）：日曜 20:00（日本時間＝UTC 日曜 11:00）に、今日から 14 日のセミナーの回ごとの 構成・告知・スライド の期限と済みかどうかを 1 通（Resend・RESEND_TO_EMAIL へ）。回が無い週は送らず「送らなかった」を残す。中身は src/seminar-tasks.ts の buildSeminarMail・runSeminarMail、試験は test/seminar-tasks.test.ts。記録は seminar_mail。設定の追加 0 個（RESEND_* は既存）。
@@ -659,6 +660,7 @@ import { handleConsultManagerIntake, handleConsultManagerIntakeHttp } from "./cr
 import { runBackupSlot } from "./cron-backup.js";
 import { runSeminarTasks, runSeminarMail, describe as describeSeminarTasks } from "./seminar-tasks.js";
 import { runTaskRemind } from "./task-remind.js";
+import { registerSlideTools, handleSlideImage, IMG_PATH as SLIDE_IMG_PATH } from "./slides.js";
 import { registerRestoreTools } from "./tools-restore.js";
 import { registerTsumiageTools } from "./tools-tsumiage.js";
 import { registerEvolabTools } from "./tools-evolab.js";
@@ -847,6 +849,7 @@ function createMcpServer(env: Env): McpServer {
   registerImpactTools(server, env);
   registerLineInboxTools(server, env);
   registerMindmapTools(server, env);
+  registerSlideTools(server, env); // v1.94.0：スライドの台帳
   registerNoteCountTools(server, env);
   registerNotekoryakuTools(server, env);
   registerNotekoryakuOthersTools(server, env);
@@ -901,7 +904,7 @@ function createAnkenMcpServer(env: Env): McpServer {
  * ChatGPT の予定タスクを、コンテンツくんの依頼（初稿づくり）につなぐため。
  * 出すのは依頼を読む・書き戻す 2 本と、投稿を 1 件読む道具・AI の利用ログを書く道具だけ。投稿の書き換えや予約の道具は出さない。
  */
-const CONTENT_GPT_TOOLS = new Set<string>(["content_os__list_requests", "content_os__put_result", "content_os__get_post", "content_os__list_templates", "content_os__save_template", "ai_log__add"]);
+const CONTENT_GPT_TOOLS = new Set<string>(["content_os__list_requests", "content_os__put_result", "content_os__get_post", "content_os__list_templates", "content_os__save_template", "ai_log__add", "mindmap__get_map"]);
 function createContentMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "content-mcp", version: APP_VERSION });
   const gate = { tool: (name: string, ...rest: unknown[]) => (CONTENT_GPT_TOOLS.has(name) ? (server.tool as any)(name, ...rest) : undefined) };
@@ -909,6 +912,8 @@ function createContentMcpServer(env: Env): McpServer {
   registerContentFileTool(server, env); // v1.81.0：画像をファイルのまま受ける（_meta の openai/fileParams）
   registerContentOsTools(gate as unknown as McpServer, env);
   registerAiLogTools(gate as unknown as McpServer, env);
+  registerMindmapTools(gate as unknown as McpServer, env); // v1.94.0：スライドのためにマップを読む（mindmap__get_map だけ通す）
+  registerSlideTools(server, env); // v1.94.0：スライドの台帳（全部）
   return server;
 }
 
@@ -949,6 +954,10 @@ export default {
 
     // Browser approval is independent from MCP OAuth and its AI-controlled tool args.
     // Handle OPTIONS here as well: strict origin rather than the gateway-wide CORS '*'.
+    // v1.94.0：スライドの画像（読むだけ・推測できない名前）
+    if (url.pathname.startsWith(SLIDE_IMG_PATH)) {
+      return handleSlideImage(request, env);
+    }
     if (url.pathname.startsWith("/haaku/approvals/")) {
       return handleHaakuHumanApproval(request, env);
     }
