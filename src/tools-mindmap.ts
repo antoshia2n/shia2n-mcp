@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import {
-  type MNodes, ID_RE, addItems, parseMapRef, moveNode, findTable, tablesOf, putTrow, bodyOf, cleanName, countNodes, findRequests, markChecks, newMapTree, parseBullets, pathOf, sameName, titleOf, toOutline,
+  type MNodes, ID_RE, addItems, parseMapRef, moveNode, findTable, tablesOf, putTrow, bodyOf, cleanName, countNodes, findRequests, imagesOf, markChecks, newMapTree, parseBullets, pathOf, sameName, titleOf, toOutline,
 } from "./mindmap-core.js";
 import { reduceRows, countDays, datesBetween, nextDate, type Snap } from "./mindmap-activity.js";
 
@@ -128,6 +128,11 @@ const resolveFolder = (names: Map<string, string>, folder: string) => {
 };
 const folderIdOf = (r: Row) => { const v = r.folder_id != null && r.folder_id !== "" ? r.folder_id : r.kind; return !v || v === "none" ? "none" : String(v); };
 
+/** v1.97.0：スライドの台帳から枝の画像を読むため（読むだけ） */
+export async function readMapNodes(env: Env, id: string): Promise<{ root: string; nodes: MNodes } | null> {
+  const r = await getFull(env, id);
+  return r ? { root: String(r.root), nodes: (r.nodes || {}) as MNodes } : null;
+}
 async function getFull(env: Env, id: string): Promise<Row | null> {
   if (!ID_RE.test(id)) throw new Error("map_id の形が違います（mindmap__list_maps の id を使ってください）");
   const rows = await sbGet(env, `/${MAP_TABLE}?select=${META},root,nodes&id=eq.${id}&${own}&limit=1`);
@@ -200,7 +205,7 @@ export function registerMindmapTools(server: McpServer, env: Env): void {
   // ─── 2. mindmap__get_map ─────────────────────────────────────────
   server.tool(
     "mindmap__get_map",
-    "思考整理くんのマップ 1 枚を、入れ子の箇条書きの文字で返す。map_id には共有リンク（/s/…）やマップの住所（/m/…）も渡せる。各行の末尾の {id} が枝の印で、mindmap__add_branches の足し先や mindmap__mark_done の宛先に使う。行の印：[ ] 未完了のチェック／[x] 済み／(AI) Claude が足してまだ Naoki が残すか決めていない枝。メモと「AI への指示」は次の行に字下げして出る。from_node を渡すとその枝から下だけ。戻り値: { ok, id, 名前, 版, 最終更新, 住所, 箇条書き, AI への指示 }。",
+    "思考整理くんのマップ 1 枚を、入れ子の箇条書きの文字で返す。map_id には共有リンク（/s/…）やマップの住所（/m/…）も渡せる。各行の末尾の {id} が枝の印で、mindmap__add_branches の足し先や mindmap__mark_done の宛先に使う。行の印：[ ] 未完了のチェック／[x] 済み／(AI) Claude が足してまだ Naoki が残すか決めていない枝。メモと「AI への指示」「スライドの指示」は次の行に字下げして出る。(画像 住所) は枝に貼った画像（開いて見られる）。from_node を渡すとその枝から下だけ。戻り値: { ok, id, 名前, 版, 最終更新, 住所, 箇条書き, AI への指示, 画像: [{ node_id, 枝, url }] }。",
     {
       map_id: z.string().max(300).describe("マップの id（mindmap__list_maps の id）。マップの住所（https://mindmap.shia2n.jp/m/…）や共有リンク（https://mindmap.shia2n.jp/s/…）をそのまま渡してもよい"),
       from_node: z.string().max(64).optional().describe("この枝から下だけ読む（{id}）"),
@@ -221,8 +226,9 @@ export function registerMindmapTools(server: McpServer, env: Env): void {
         const nodes = (r.nodes || {}) as MNodes;
         return asMcpTextResult({
           ok: true, id: r.id, 名前: r.title || "無題", 版: r.rev, 最終更新: jst(r.updated_at), 住所: `${APP_URL}/m/${r.id}`,
-          箇条書き: toOutline(r.root, nodes, from_node),
+          箇条書き: toOutline(r.root, nodes, from_node, env.SUPABASE_URL),
           AIへの指示: findRequests(r.root, nodes),
+          画像: imagesOf(r.root, nodes, env.SUPABASE_URL, from_node),
         });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }

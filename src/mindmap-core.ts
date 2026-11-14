@@ -17,6 +17,7 @@ export type MNode = {
   id: string; text: string; children: string[]; parent: string | null;
   collapsed?: boolean; color?: string | null; side?: string | null; hue?: string;
   memo?: string; link?: string; img?: unknown; ai?: string; check?: "todo" | "done"; tm?: string; by?: "ai";
+  slide?: { type?: string; ref?: string; design?: string };
 };
 export type MNodes = Record<string, MNode>;
 
@@ -63,7 +64,28 @@ export function pathOf(nodes: MNodes, id: string): string {
  * 1 枚を箇条書きの文字にする。各行の末尾に {id} を付け、足す・済みにするときの宛先に使う。
  * チェックは [ ] / [x]、Claude が足した枝は (AI)、メモ・AI への指示は次の行に字下げして出す。
  */
-export function toOutline(root: string, nodes: MNodes, from?: string): string {
+/** v1.97.0（スライド制作 便2）：枝に貼った画像の住所。思考整理くんの画像は Supabase の公開の置き場 mindmap にある（画面の src/lib/api.js imageUrl と同じ形）。形が変なら null */
+export const MINDMAP_IMG_BUCKET = "mindmap";
+export function imgUrlOf(n: MNode | undefined, supabaseUrl: string | undefined): string | null {
+  const p = n && n.img && typeof n.img === "object" ? (n.img as { path?: unknown }).path : null;
+  if (typeof p !== "string" || !/^[\w\-./]+$/.test(p) || p.includes("..") || !supabaseUrl) return null;
+  return `${String(supabaseUrl).replace(/\/+$/, "")}/storage/v1/object/public/${MINDMAP_IMG_BUCKET}/${p}`;
+}
+/** 枝のスライドの指示（種類・参考・デザイン）を 1 行に */
+export function slideLine(n: MNode): string {
+  const s = n.slide; if (!s || typeof s !== "object") return "";
+  return [s.type && `種類 ${s.type}`, s.ref && `参考 ${oneLine(s.ref)}`, s.design && `デザイン ${oneLine(s.design)}`].filter(Boolean).join(" ／ ");
+}
+/** 画像が付いた枝の一覧（スライドの素材にする） */
+export function imagesOf(root: string, nodes: MNodes, supabaseUrl: string | undefined, from?: string): { node_id: string; 枝: string; url: string }[] {
+  const start = from && nodes[from] ? from : root;
+  const out: { node_id: string; 枝: string; url: string }[] = [];
+  const walk = (id: string) => { const n = nodes[id]; if (!n) return; const u = imgUrlOf(n, supabaseUrl); if (u) out.push({ node_id: id, 枝: (n.text || "（名前なし）").trim(), url: u }); for (const c of n.children ?? []) walk(c); };
+  walk(start);
+  return out;
+}
+
+export function toOutline(root: string, nodes: MNodes, from?: string, supabaseUrl?: string): string {
   const start = from && nodes[from] ? from : root;
   const lines: string[] = [];
   const head = nodes[start];
@@ -71,15 +93,17 @@ export function toOutline(root: string, nodes: MNodes, from?: string): string {
   lines.push(`# ${(head.text || "（名前なし）").trim()} {${start}}`);
   if (head.memo) lines.push(`  メモ: ${oneLine(head.memo)}`);
   if (head.ai) lines.push(`  AI への指示: ${oneLine(head.ai)}`);
+  if (slideLine(head)) lines.push(`  スライドの指示: ${slideLine(head)}`);
   const walk = (id: string, d: number) => {
     for (const c of nodes[id]?.children ?? []) {
       const n = nodes[c]; if (!n) continue;
       const pad = "  ".repeat(d);
       const ck = n.check === "done" ? "[x] " : n.check === "todo" ? "[ ] " : "";
-      const tags = [n.by === "ai" ? "(AI)" : "", n.tm ? "(TaskMaster に入れた)" : "", n.link ? `(リンク ${n.link})` : "", n.img ? "(画像)" : ""].filter(Boolean).join(" ");
+      const tags = [n.by === "ai" ? "(AI)" : "", n.tm ? "(TaskMaster に入れた)" : "", n.link ? `(リンク ${n.link})` : "", n.img ? (imgUrlOf(n, supabaseUrl) ? `(画像 ${imgUrlOf(n, supabaseUrl)})` : "(画像)") : ""].filter(Boolean).join(" ");
       lines.push(`${pad}- ${ck}${(n.text || "（名前なし）").trim()}${tags ? " " + tags : ""} {${c}}`);
       if (n.memo) lines.push(`${pad}  メモ: ${oneLine(n.memo)}`);
       if (n.ai) lines.push(`${pad}  AI への指示: ${oneLine(n.ai)}`);
+      if (slideLine(n)) lines.push(`${pad}  スライドの指示: ${slideLine(n)}`);
       walk(c, d + 1);
     }
   };
@@ -104,7 +128,7 @@ export type Item = { text: string; check?: "todo" | "done"; memo?: string; link?
  * get_map の行をそのまま書き戻せるよう、末尾の (AI)・(TaskMaster に入れた)・(画像)・{id} の印も外す（枝の印は道具が付け直す）。
  * 行が URL だけのときは、画面と同じく文字も URL のまま残す。
  */
-const TAIL_MARKS = /\s*(?:\(AI\)|\(TaskMaster に入れた\)|\(画像\)|\{[A-Za-z0-9_-]{1,40}\})$/;
+const TAIL_MARKS = /\s*(?:\(AI\)|\(TaskMaster に入れた\)|\(画像(?:\s+https?:\/\/[^\s)]+)?\)|\{[A-Za-z0-9_-]{1,40}\})$/;
 const TAIL_LINK = /\s*[(（]リンク\s+(https?:\/\/[^\s)）]+)\s*[)）]$/i;
 const TAIL_URL = /(?:^|\s+)(https?:\/\/\S+)$/i;
 const okUrl = (u: string) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) && u.length <= 2000 ? x.href : null; } catch { return null; } };
@@ -112,7 +136,7 @@ export function splitLink(line: string): { text: string; link?: string } {
   let t = line.trim(), link: string | undefined;
   for (let i = 0; i < 8; i++) {
     const before = t;
-    t = t.replace(TAIL_MARKS, "").trim();
+    for (let k = 0; k < 6; k++) { const b2 = t; t = t.replace(TAIL_MARKS, "").trim(); if (t === b2) break; } // 印を先に全部外す（(画像 住所) をリンクと取り違えない）
     if (!link) {
       const m = t.match(TAIL_LINK) || t.match(TAIL_URL);
       const u = m && okUrl(m[1]);
