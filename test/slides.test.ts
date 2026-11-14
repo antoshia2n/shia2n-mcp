@@ -158,3 +158,26 @@ test("回との結び：Google スライドの住所は同じ名前の行を差�
   assert.deepEqual(searchSlides([d], "採点 仮説", 10).map(x => [x.no, x.image, x.gslides]), [[1, "u1", "g"]]);
   assert.equal(searchSlides([d], "", 1).length, 1);
 });
+
+test("見直し：台本を入れ直しても配置表は残る・ほかのスライドの住所は消さない・外した素材は入れ直さない（v1.100.1）", () => {
+  let d = applyPlan(base(), [{ role: "本題" as const, title: "A", body: "x", visual: "", node_ids: [], materials: [] }], true);
+  d.slides[0].image = { file: "001-v1-aaaaaaaa.png", url: "u1", v: 1, at: "t" }; d.slides[0].layout = { v: 1, at: "t", image_v: 1, items: [] };
+  d = applyPlan(d, [{ role: "本題" as const, title: "A", body: "x", visual: "", node_ids: [], materials: [] }], true);
+  assert.equal(d.slides[0].layout?.v, 1);
+  assert.deepEqual(withGslidesLink([{ url: "https://docs.google.com/presentation/d/MINE/edit", label: "別の資料" }], "NEW").map(l => l.url), ["https://docs.google.com/presentation/d/MINE/edit", "NEW"]);
+  const S = "https://x.supabase.co";
+  const nodes: any = { r: { id: "r", text: "c", children: ["a"], parent: null }, a: { id: "a", text: "画像", children: [], parent: "r", img: { path: "u/1.png" } } };
+  const off = [`${S}/storage/v1/object/public/mindmap/u/1.png`];
+  assert.equal(withBranchImages([{ node_ids: ["a"], materials: [] }], nodes, S, new Map(), off)[0].materials!.length, 0);
+});
+
+test("ひな形は大きい面と長い罫線だけ残す（v1.100.1）", () => {
+  const t = templateOf([
+    { type: "text", x: 0, y: 0, w: 900, h: 100, text: "見出し", size: 84 },
+    { type: "line", x: 96, y: 180, w: 540, h: 1, color: "#BDCCD5", stroke_w: 5 },
+    { type: "rect", x: 80, y: 340, width: 0, w: 1100, h: 400, fill: "#F0F6F9" } as any,
+    { type: "rect", x: 550, y: 450, w: 20, h: 20, fill: "#0875B1" },
+    { type: "line", x: 600, y: 500, w: 40, h: 1, arrow: true },
+  ]);
+  assert.deepEqual(t.map(i => i.type), ["text", "line", "rect"]);
+});
