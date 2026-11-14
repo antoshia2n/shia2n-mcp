@@ -11,6 +11,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Env } from "./index.js";
+import { imgUrlOf, type MNodes } from "./mindmap-core.js";
+import { readMapNodes } from "./tools-mindmap.js";
 
 export const DECK_PREFIX = "slide_deck:";
 export const INDEX_KEY = "slide_decks_index_v1";
@@ -36,11 +38,11 @@ export type Deck = {
 /** スライド制作スキル（GPT が毎回読む手順）。直すときはここだけ
  * v2（2026-11-14 v1.96.0）：GPT と Naoki が「オンラインビジネスの攻略手順」で 24・35 枚目を仕上げたやり方（Naoki「初めて90点以上」「これを求めた」）を、デッキをまたいで使える手順にした。
  * 見た目（色・字・絵の作り）はデッキの tone.rules、作り方（具体化・組み方・確かめ方・直し方）はここ、と分ける */
-export const SKILL = `【スライド制作スキル v2（シアニン式スライドデザイン）】
+export const SKILL = `【スライド制作スキル v2.1（シアニン式スライドデザイン）】
 目的：思考整理くんのマップの内容を、受講者が「何を見て・どう考え・次に何をするか」までわかる、具体的でリッチな図解のスライドにする。中身を考えるのはシアニン、意図を補って図解に組み、描くのはあなた。
 ■ 進め方
 0. いつも最初に slides__get で台帳を読む。続きは台帳の status・各枚の state・next_to_draw から始める。会話の記憶や引き継ぎの資料より台帳を正とし、シアニンの最新の指示をいちばん上に置く
-1. 台本（status=plan）：mindmap__get_map でマップと、枝に付いた関連マップ・リンクを読む。1枚に持ち帰る結論は1つ。見出しは結論の形で短く（全角18字まで）。本文は主要メッセージ3行まで（補助のラベル・具体例・注釈は読みやすさを保てば足してよい）。役割は 表紙・章・本題・図解・実績・まとめ。素材（materials）とnode_idsは消さない。一覧を見せて OK をもらったら slides__put_plan の plan_ok=true
+1. 台本（status=plan）：mindmap__get_map でマップと、枝に付いた関連マップ・リンクを読む。1枚に持ち帰る結論は1つ。見出しは結論の形で短く（全角18字まで）。本文は主要メッセージ3行まで（補助のラベル・具体例・注釈は読みやすさを保てば足してよい）。役割は 表紙・章・本題・図解・実績・まとめ。素材（materials）とnode_idsは消さない。枝に貼った画像は、put_plan のときにその枚（node_ids の枝とその下の枝）の素材へ自動で入る（get_map の「画像」と各行の (画像 住所) でも見える）。枝の「スライドの指示」（種類・参考・デザイン）は台本と絵の指示に反映する。一覧を見せて OK をもらったら slides__put_plan の plan_ok=true
 2. 見本：返り値の anchor_images（見本の画像）を毎回実際に開いて見てから描く。見本が無いデッキは、表紙と本題を1枚ずつ描いて見せ、シアニンが「これ」と言った枚を slides__set_tone の anchors に入れる。見た目を決めたら、色は色番号まで・書体と太さ・字の大きさ・線・余白・絵の作り・使わないものを rules に具体的に書く。前のデッキの見た目を引き継ぐときは slides__start の tone_from
 3. 1枚を組む手順（具体化がいちばん大事）
  a. その枚の枝と関連資料を読む（短い台本だけを材料にしない）
@@ -52,7 +54,7 @@ export const SKILL = `【スライド制作スキル v2（シアニン式スラ�
 4. 組み方：字・表・数字・棒・矢印は、できるだけ実際のフォント（rules の書体）でベクターに組む（PDF）。生成画像はイラスト・画面のモックなど要る部分だけに使う。字を画像生成に任せると崩れる
 5. 描く：横長16:9（1920×1080）。1回5枚まで。描いたら PDF と台帳に置く PNG の両方を、仕上がったものから描き出して目で確かめ、slides__put_image で1枚ずつ書き戻す
 6. 字の読み直し：描き出した画像の字・数字を読み直し、台帳と1字でも違えば、または字化け・切れ・重なりがあれば、その枚を作り直す。確かめた中身を text_check に書く
-7. 実物の素材（実績のスクショ・数字の画像など）は絶対に描き直さない。そのまま空き枠にはめ込む
+7. 素材（materials の画像・実績のスクショ・数字の画像など）は、住所を開いて実物を見てから、その画像そのものを置く。切り抜き・拡大縮小・枠付け・横に注釈は可。描き直し・生成し直し・色や字の書き換え・読めない大きさへの縮小は不可。素材の数字や名前を本文で言い換えない。text_check に「素材○枚をそのまま配置」と書く
 8. 見出しや中身を変えたら、画像だけでなく slides__put_plan で台帳も直す（node_ids と素材は残す）
 ■ 直し
 9. 「◯枚目を…」は slides__feedback に書き、その枚だけ描き直す。見た目についての指示がその1枚だけで終わらないもの（色・絵の作り・密度など）は、rules と見本も直し、描き終えた枚をそろえ直す対象にする
@@ -71,6 +73,26 @@ export function parseDeck(v: unknown): Deck | null {
 }
 
 /** 台本を入れる。番号は 1 から振り直す。描いた画像は、同じ番号で見出しが同じなら残す */
+/** v1.97.0（便2）：台本の各枚に、node_ids の枝とその下の枝に貼った画像を素材として足す。
+ * 下の枝が別の枚の node_ids に入っているときは、その枚のものとして数える（同じ画像を2枚に入れない）。すでにある住所は足さない。1枚6つまで */
+export function withBranchImages<T extends { node_ids?: string[]; materials?: { url: string; note?: string }[] }>(plan: T[], nodes: MNodes, supabaseUrl: string | undefined): T[] {
+  const owner = new Map<string, number>();
+  plan.forEach((p, i) => (p.node_ids || []).forEach(id => { if (!owner.has(id)) owner.set(id, i); }));
+  return plan.map((p, i) => {
+    const mats = [...(p.materials || [])];
+    const seen = new Set(mats.map(m => m.url));
+    const walk = (id: string, top: boolean) => {
+      const n = nodes[id]; if (!n) return;
+      if (!top && owner.has(id) && owner.get(id) !== i) return;
+      const u = imgUrlOf(n, supabaseUrl);
+      if (u && !seen.has(u) && mats.length < 6) { seen.add(u); mats.push({ url: u, note: `枝「${(n.text || "（名前なし）").trim().slice(0, 60)}」の画像（実物・描き直さない）` }); }
+      for (const c of n.children || []) walk(c, false);
+    };
+    for (const id of p.node_ids || []) walk(id, true);
+    return { ...p, materials: mats };
+  });
+}
+
 export function applyPlan(deck: Deck, plan: Omit<Slide, "state" | "no" | "image">[], ok: boolean): Deck {
   const old = new Map(deck.slides.map(s => [s.no, s]));
   const slides: Slide[] = plan.map((p, i) => {
@@ -148,9 +170,15 @@ export function registerSlideTools(server: McpServer, env: Env): void {
     async () => ok({ ok: true, decks: ((await env.OAUTH_KV.get(INDEX_KEY, "json")) as unknown[]) || [] }));
   server.tool("slides__get", "スライドの台帳を読む（いつも最初に呼ぶ）。どこまでできたか（summary・各枚の state）、次に描く枚（next_to_draw）、見本の画像（anchor_images・描く前に毎回開いて見る）、スライド制作スキル（skill）が返る。戻り値: { ok, deck, summary, next_to_draw, anchor_images, skill }",
     { deck_id: z.string().uuid() }, async (a) => ok(view(await loadDeck(env, a.deck_id))));
-  server.tool("slides__put_plan", "台本（全部の枚）を書く。並びの順が番号になる（1 から）。見出しと中身が変わっていない枚の画像は残る。plan_ok=true はシアニンが台本に OK を言ったときだけ。戻り値: { ok, deck, summary }",
+  server.tool("slides__put_plan", "台本（全部の枚）を書く。並びの順が番号になる（1 から）。node_ids の枝とその下の枝に貼った画像は、その枚の素材（materials）へ自動で入る。見出しと中身が変わっていない枚の画像は残る。plan_ok=true はシアニンが台本に OK を言ったときだけ。戻り値: { ok, deck, summary }",
     { deck_id: z.string().uuid(), slides: z.array(PlanZ).min(1).max(200), plan_ok: z.boolean().optional() },
-    async (a) => { const d = applyPlan(await loadDeck(env, a.deck_id), a.slides as Omit<Slide, "state" | "no" | "image">[], !!a.plan_ok); await saveDeck(env, d); return ok(view(d)); });
+    async (a) => {
+      const deck = await loadDeck(env, a.deck_id);
+      let plan = a.slides as Omit<Slide, "state" | "no" | "image">[];
+      const map = /^[\w-]{1,64}$/.test(deck.map_id) ? await readMapNodes(env, deck.map_id).catch(() => null) : null; // 読めなくても台本は入れる
+      if (map) plan = withBranchImages(plan, map.nodes, env.SUPABASE_URL);
+      const d = applyPlan(deck, plan, !!a.plan_ok); await saveDeck(env, d); return ok(view(d));
+    });
   server.tool("slides__set_tone", "トーンの型を決める。anchors＝見本にする枚の番号（シアニンが「これ」と言った枚・1〜3 枚・入れると前のデッキから引き継いだ見本は外れる）。rules＝色（色番号まで）・字・線・余白・絵の作り・使わないもの。見本を変えたら描き終えた枚をそろえ直す。戻り値: { ok, deck }",
     { deck_id: z.string().uuid(), anchors: z.array(z.number().int().min(1)).max(3).optional(), rules: z.string().max(8000).optional(), name: z.string().max(60).optional() },
     async (a) => {

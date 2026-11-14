@@ -1,7 +1,8 @@
 // v1.94.0：スライドの台帳。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, type Deck } from "../src/slides.js";
+import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, type Deck } from "../src/slides.js";
+import { toOutline, imagesOf, splitLink } from "../src/mindmap-core.js";
 
 const base = (): Deck => ({ v: 1, id: "11111111-2222-3333-4444-555555555555", title: "t", map_id: "m", map_url: "u",
   tone: { name: "シアニン標準", rules: "", anchors: [] }, status: "plan", slides: [], created_at: "a", updated_at: "a", log: [] });
@@ -35,7 +36,7 @@ test("台帳の形が違えば止める・無ければ null", () => {
 });
 
 test("スキルに、実物の素材は描き直さない・最初に台帳を読む が入っている", () => {
-  assert.match(SKILL, /実物の素材.*絶対に描き直さない/);
+  assert.match(SKILL, /描き直し・生成し直し.*不可/);
   assert.match(SKILL, /いつも最初に slides__get/);
 });
 
@@ -56,4 +57,27 @@ test("見本の画像：このデッキの見本の枚と、前のデッキか�
   assert.match(SKILL, /anchor_images/);
   assert.match(SKILL, /実際のフォント/);
   assert.match(SKILL, /tone_from/);
+});
+
+test("枝の画像：get_map に住所とスライドの指示が出て、台本の素材へ自動で入る（v1.97.0）", () => {
+  const S = "https://x.supabase.co";
+  const nodes: any = {
+    r: { id: "r", text: "中心", children: ["a", "b"], parent: null },
+    a: { id: "a", text: "実績", children: ["a1"], parent: "r", img: { path: "u/1.png" }, slide: { type: "比較", design: "左右に並べる" } },
+    a1: { id: "a1", text: "スクショ", children: [], parent: "a", img: { path: "u/2.png" } },
+    b: { id: "b", text: "別の枚", children: ["b1"], parent: "r" },
+    b1: { id: "b1", text: "b の子", children: [], parent: "b", img: { path: "../evil.png" } },
+  };
+  const out = toOutline("r", nodes, undefined, S);
+  assert.match(out, /- 実績 \(画像 https:\/\/x\.supabase\.co\/storage\/v1\/object\/public\/mindmap\/u\/1\.png\) \{a\}/);
+  assert.match(out, /スライドの指示: 種類 比較 ／ デザイン 左右に並べる/);
+  assert.match(out, /b の子 \(画像\) \{b1\}/); // 形が変な住所は出さない
+  assert.deepEqual(imagesOf("r", nodes, S).map(x => x.node_id), ["a", "a1"]);
+  assert.equal(splitLink(`- 実績 (画像 ${S}/storage/v1/object/public/mindmap/u/1.png) {a}`.slice(2)).text, "実績");
+  const plan = withBranchImages([{ node_ids: ["a"], materials: [] }, { node_ids: ["a1"] }, { node_ids: ["b"] }], nodes, S);
+  assert.equal(plan[0].materials!.length, 1); // a1 は 2 枚目のもの
+  assert.match(plan[1].materials![0].url, /u\/2\.png$/);
+  assert.equal(plan[2].materials!.length, 0);
+  const again = withBranchImages(plan, nodes, S);
+  assert.equal(again[0].materials!.length, 1); // 同じ住所は足さない
 });
