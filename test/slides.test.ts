@@ -1,7 +1,7 @@
 // v1.94.0：スライドの台帳。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, resolveLayout, layoutStatus, exportPlan, templateOf, refIdsOf, swipeImageOf, okMaterialUrl, toneFromDeck, applyTone, type Deck, type LayoutItem } from "../src/slides.js";
+import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, resolveLayout, layoutStatus, exportPlan, templateOf, refIdsOf, swipeImageOf, okMaterialUrl, toneFromDeck, applyTone, withGslidesLink, searchSlides, type Deck, type LayoutItem } from "../src/slides.js";
 import { toOutline, imagesOf, splitLink } from "../src/mindmap-core.js";
 
 const base = (): Deck => ({ v: 1, id: "11111111-2222-3333-4444-555555555555", title: "t", map_id: "m", map_url: "u",
@@ -145,4 +145,16 @@ test("トーンの棚：今のデッキから作り、別のデッキに当て�
   assert.deepEqual(e.slides.map(s => s.state), ["redo", "redo", "plan"]);
   assert.deepEqual(nextToDraw(e).slice(0, 2), [1, 2]);
   assert.deepEqual(applyTone(d, t, false).slides.map(s => s.state), ["ok", "drawn", "plan"]);
+});
+
+test("回との結び：Google スライドの住所は同じ名前の行を差し替え・過去の枚を言葉で探す（v1.100.0）", () => {
+  const links = [{ url: "https://x.com/a/status/1", label: "ポスト" }, { url: "https://docs.google.com/presentation/d/OLD/edit", label: "Google スライド" }, "壊れた行"];
+  assert.deepEqual(withGslidesLink(links, "https://docs.google.com/presentation/d/NEW/edit"), [{ url: "https://x.com/a/status/1", label: "ポスト" }, { url: "https://docs.google.com/presentation/d/NEW/edit", label: "Google スライド" }]);
+  assert.deepEqual(withGslidesLink(null, "u"), [{ url: "u", label: "Google スライド" }]);
+  const d = applyPlan(base(), [{ role: "図解" as const, title: "成功と停滞の差から仮説", body: "比較する", visual: "採点の表", node_ids: [], materials: [] }, { role: "本題" as const, title: "別の枚", body: "", visual: "", node_ids: [], materials: [] }], true);
+  d.slides[0].image = { file: "001-v1-aaaaaaaa.png", url: "u1", v: 1, at: "t" };
+  d.slides[1].image = { file: "002-v1-bbbbbbbb.png", url: "u2", v: 1, at: "t" };
+  d.gslides = { url: "g", at: "t" };
+  assert.deepEqual(searchSlides([d], "採点 仮説", 10).map(x => [x.no, x.image, x.gslides]), [[1, "u1", "g"]]);
+  assert.equal(searchSlides([d], "", 1).length, 1);
 });
