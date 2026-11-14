@@ -45,6 +45,8 @@ export type Deck = {
   /** v1.100.0（便6）：コンテンツくんのセミナーの回（posts.id）と、最後に書き出した Google スライド */
   post?: { id: string; title: string; date?: string };
   gslides?: { url: string; at: string };
+  /** v1.100.1：add_material で外した素材の住所（枝の画像・参考から自動で入れ直さない） */
+  materials_off?: string[];
   slides: Slide[]; created_at: string; updated_at: string; log: string[];
 };
 
@@ -119,12 +121,12 @@ export function refIdsOf(nodes: MNodes): string[] {
 }
 export type SwipeHit = { id: string; title: string; image: string; url?: string };
 
-export function withBranchImages<T extends { node_ids?: string[]; materials?: { url: string; note?: string }[] }>(plan: T[], nodes: MNodes, supabaseUrl: string | undefined, swipes: Map<string, SwipeHit> = new Map()): T[] {
+export function withBranchImages<T extends { node_ids?: string[]; materials?: { url: string; note?: string }[] }>(plan: T[], nodes: MNodes, supabaseUrl: string | undefined, swipes: Map<string, SwipeHit> = new Map(), off: string[] = []): T[] {
   const owner = new Map<string, number>();
   plan.forEach((p, i) => (p.node_ids || []).forEach(id => { if (!owner.has(id)) owner.set(id, i); }));
   return plan.map((p, i) => {
     const mats = [...(p.materials || [])];
-    const seen = new Set(mats.map(m => m.url));
+    const seen = new Set([...mats.map(m => m.url), ...off]);
     const walk = (id: string, top: boolean) => {
       const n = nodes[id]; if (!n) return;
       if (!top && owner.has(id) && owner.get(id) !== i) return;
@@ -191,7 +193,7 @@ async function loadTones(env: Env): Promise<ToneItem[]> { return ((await env.OAU
 export const GSLIDES_LABEL = "Google スライド";
 export function withGslidesLink(links: unknown, url: string): { url: string; label: string }[] {
   const arr = (Array.isArray(links) ? links : []).filter((l): l is { url: string; label?: string } => !!l && typeof (l as { url?: unknown }).url === "string");
-  return [...arr.filter(l => l.label !== GSLIDES_LABEL && !/^https:\/\/docs\.google\.com\/presentation\//.test(l.url)).map(l => ({ url: l.url, label: l.label || "" })), { url, label: GSLIDES_LABEL }];
+  return [...arr.filter(l => l.label !== GSLIDES_LABEL).map(l => ({ url: l.url, label: l.label || "" })), { url, label: GSLIDES_LABEL }]; // 手で貼ったほかのスライドの住所は消さない
 }
 /** 過去のデッキの描いた枚から、言葉で探す（題名・見出し・本文・絵の指示） */
 export function searchSlides(decks: Deck[], q: string, limit: number): { deck_id: string; deck: string; no: number; title: string; image: string; gslides?: string }[] {
@@ -231,7 +233,7 @@ export function applyPlan(deck: Deck, plan: Omit<Slide, "state" | "no" | "image"
     const keep = prev?.image && prev.title === p.title && prev.body === p.body;
     return {
       no, role: ROLES.includes(p.role) ? p.role : "本題", title: p.title.trim(), body: (p.body || "").trim(), visual: (p.visual || "").trim(),
-      node_ids: p.node_ids || [], materials: p.materials || [], ...(keep ? { image: prev!.image, state: prev!.state } : { state: "plan" as const }),
+      node_ids: p.node_ids || [], materials: p.materials || [], ...(keep ? { image: prev!.image, state: prev!.state, ...(prev!.layout ? { layout: prev!.layout } : {}) } : { state: "plan" as const }),
       ...(prev?.feedback && keep ? { feedback: prev.feedback } : {}),
     };
   });
@@ -271,19 +273,21 @@ export function exportPlan(deck: Deck, onlyOk = false): ExportSlide[] {
   });
 }
 
-/** ひな形：見本の枚の配置表から、面と線だけ残し、字は見出し（いちばん大きい字）と小見出し（見出しの 0.6 倍以上の字）だけを「見出しを入れる」「小見出しを入れる」に置き換える。
- * 本文・注釈・ページ番号・絵は外す（v1.98.1：全部の字を残すと「テキストを入れる」が 30〜40 個並び、使えなかったため） */
+/** ひな形：見本の枚の配置表から、骨組みだけを残す。字は見出し（いちばん大きい字）と小見出し（見出しの 0.6 倍以上・6 つまで）を「見出しを入れる」「小見出しを入れる」に。
+ * 面は大きいもの（スライドの 4% 以上）だけ、線は長い罫線（200px 以上の横線・縦線）だけ。絵・小さな飾り・本文・ページ番号は外す
+ * （v1.98.1 で字を絞り、v1.100.1 で面と線も絞った：書き出しのひな形に点数の棒や画面のモックの枠が残り、複製しても使えなかったため） */
 export function templateOf(items: LayoutItem[]): LayoutItem[] {
   const texts = items.filter((i): i is Extract<LayoutItem, { type: "text" }> => i.type === "text");
   const top = texts.reduce((m, t) => (t.size > m ? t.size : m), 0);
-  let headDone = false;
+  let headDone = false, subs = 0;
   const out: LayoutItem[] = [];
   for (const i of items) {
     if (i.type === "image") continue;
-    if (i.type !== "text") { out.push(i); continue; }
+    if (i.type === "rect") { if (i.w * i.h >= 1920 * 1080 * 0.04) out.push(i); continue; }
+    if (i.type === "line") { if ((i.w >= 200 && i.h <= 8) || (i.h >= 200 && i.w <= 8)) out.push({ ...i, arrow: false }); continue; }
     const head = !headDone && i.size === top;
     if (head) { headDone = true; const { runs: _r, ...rest } = i; out.push({ ...rest, text: "見出しを入れる" }); continue; }
-    if (i.size >= top * 0.6) { const { runs: _r, ...rest } = i; out.push({ ...rest, text: "小見出しを入れる" }); }
+    if (i.size >= top * 0.6 && subs < 6) { subs++; const { runs: _r, ...rest } = i; out.push({ ...rest, text: "小見出しを入れる" }); }
   }
   return out;
 }
@@ -365,7 +369,7 @@ export function registerSlideTools(server: McpServer, env: Env): void {
       const deck = await loadDeck(env, a.deck_id);
       let plan = a.slides as Omit<Slide, "state" | "no" | "image">[];
       const map = /^[\w-]{1,64}$/.test(deck.map_id) ? await readMapNodes(env, deck.map_id).catch(() => null) : null; // 読めなくても台本は入れる
-      if (map) plan = withBranchImages(plan, map.nodes, env.SUPABASE_URL, await swipesByIds(env, refIdsOf(map.nodes)).catch(() => new Map()));
+      if (map) plan = withBranchImages(plan, map.nodes, env.SUPABASE_URL, await swipesByIds(env, refIdsOf(map.nodes)).catch(() => new Map()), deck.materials_off || []);
       const d = applyPlan(deck, plan, !!a.plan_ok); await saveDeck(env, d); return ok(view(d));
     });
   server.tool("slides__set_tone", "トーンの型を決める。anchors＝見本にする枚の番号（シアニンが「これ」と言った枚・1〜3 枚・入れると前のデッキから引き継いだ見本は外れる）。rules＝色（色番号まで）・字・線・余白・絵の作り・使わないもの。見本を変えたら描き終えた枚をそろえ直す。戻り値: { ok, deck }",
@@ -506,12 +510,13 @@ export function registerSlideTools(server: McpServer, env: Env): void {
         url = sw.image; note = note || `スワイプくん「${sw.title.slice(0, 60)}」（実物・描き直さない）`;
       }
       if (!url) return ok({ ok: false, error: "swipe_id か url を渡してください" });
-      if (a.remove) { s.materials = s.materials.filter(m => m.url !== url); }
+      if (a.remove) { s.materials = s.materials.filter(m => m.url !== url); d.materials_off = [...new Set([...(d.materials_off || []), url])].slice(-200); }
       else {
         if (!okMaterialUrl(url, env.SUPABASE_URL)) return ok({ ok: false, error: "仕組みの置き場（スワイプくん・思考整理くん・スライドの画像）の住所だけ素材にできます" });
         if (s.materials.some(m => m.url === url)) return ok({ ok: true, slide: { no: s.no, materials: s.materials }, note: "もう入っています" });
         if (s.materials.length >= 6) return ok({ ok: false, error: "素材は 1 枚 6 つまでです" });
         s.materials = [...s.materials, { url, ...(note ? { note } : {}) }];
+        if (d.materials_off?.includes(url)) d.materials_off = d.materials_off.filter(u => u !== url);
       }
       d.log = [...d.log, `${nowIso()} ${a.no} 枚目 素材${a.remove ? "を外した" : "を足した"}`].slice(-50);
       await saveDeck(env, d);
