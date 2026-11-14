@@ -47,11 +47,11 @@ export type Deck = {
 /** スライド制作スキル（GPT が毎回読む手順）。直すときはここだけ
  * v2（2026-11-14 v1.96.0）：GPT と Naoki が「オンラインビジネスの攻略手順」で 24・35 枚目を仕上げたやり方（Naoki「初めて90点以上」「これを求めた」）を、デッキをまたいで使える手順にした。
  * 見た目（色・字・絵の作り）はデッキの tone.rules、作り方（具体化・組み方・確かめ方・直し方）はここ、と分ける */
-export const SKILL = `【スライド制作スキル v2.2（シアニン式スライドデザイン）】
+export const SKILL = `【スライド制作スキル v2.3（シアニン式スライドデザイン）】
 目的：思考整理くんのマップの内容を、受講者が「何を見て・どう考え・次に何をするか」までわかる、具体的でリッチな図解のスライドにする。中身を考えるのはシアニン、意図を補って図解に組み、描くのはあなた。
 ■ 進め方
 0. いつも最初に slides__get で台帳を読む。続きは台帳の status・各枚の state・next_to_draw から始める。会話の記憶や引き継ぎの資料より台帳を正とし、シアニンの最新の指示をいちばん上に置く
-1. 台本（status=plan）：mindmap__get_map でマップと、枝に付いた関連マップ・リンクを読む。1枚に持ち帰る結論は1つ。見出しは結論の形で短く（全角18字まで）。本文は主要メッセージ3行まで（補助のラベル・具体例・注釈は読みやすさを保てば足してよい）。役割は 表紙・章・本題・図解・実績・まとめ。素材（materials）とnode_idsは消さない。枝に貼った画像は、put_plan のときにその枚（node_ids の枝とその下の枝）の素材へ自動で入る（get_map の「画像」と各行の (画像 住所) でも見える）。枝の「スライドの指示」（種類・参考・デザイン）は台本と絵の指示に反映する。一覧を見せて OK をもらったら slides__put_plan の plan_ok=true
+1. 台本（status=plan）：mindmap__get_map でマップと、枝に付いた関連マップ・リンクを読む。1枚に持ち帰る結論は1つ。見出しは結論の形で短く（全角18字まで）。本文は主要メッセージ3行まで（補助のラベル・具体例・注釈は読みやすさを保てば足してよい）。役割は 表紙・章・本題・図解・実績・まとめ。素材（materials）とnode_idsは消さない。枝に貼った画像は、put_plan のときにその枚（node_ids の枝とその下の枝）の素材へ自動で入る（get_map の「画像」と各行の (画像 住所) でも見える）。枝の「スライドの指示」（種類・参考・デザイン）は台本と絵の指示に反映する。参考にスワイプくんの住所（id 入り）があれば、その画像も put_plan のときに素材へ自動で入る。シアニンが「◯枚目にスワイプくんの△△を入れて」と言ったら slides__find_material で探して候補を見せ、選ばれたものを slides__add_material で入れてから描き直す。参考にした画像のデザインは、決まりだけを取り出して使い、そのまま写さない。一覧を見せて OK をもらったら slides__put_plan の plan_ok=true
 2. 見本：返り値の anchor_images（見本の画像）を毎回実際に開いて見てから描く。見本が無いデッキは、表紙と本題を1枚ずつ描いて見せ、シアニンが「これ」と言った枚を slides__set_tone の anchors に入れる。見た目を決めたら、色は色番号まで・書体と太さ・字の大きさ・線・余白・絵の作り・使わないものを rules に具体的に書く。前のデッキの見た目を引き継ぐときは slides__start の tone_from
 3. 1枚を組む手順（具体化がいちばん大事）
  a. その枚の枝と関連資料を読む（短い台本だけを材料にしない）
@@ -103,7 +103,16 @@ export function resolveLayout(items: LayoutItem[], art: string[], materials: { u
 
 /** v1.97.0（便2）：台本の各枚に、node_ids の枝とその下の枝に貼った画像を素材として足す。
  * 下の枝が別の枚の node_ids に入っているときは、その枚のものとして数える（同じ画像を2枚に入れない）。すでにある住所は足さない。1枚6つまで */
-export function withBranchImages<T extends { node_ids?: string[]; materials?: { url: string; note?: string }[] }>(plan: T[], nodes: MNodes, supabaseUrl: string | undefined): T[] {
+/** v1.99.0（便5a）：枝の「スライドの指示」の参考（ref）に書かれたスワイプくんの id（住所の中の uuid）を集める */
+export const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+export function refIdsOf(nodes: MNodes): string[] {
+  const out = new Set<string>();
+  for (const n of Object.values(nodes || {})) for (const m of String(n.slide?.ref || "").match(UUID_RE) || []) out.add(m.toLowerCase());
+  return [...out];
+}
+export type SwipeHit = { id: string; title: string; image: string; url?: string };
+
+export function withBranchImages<T extends { node_ids?: string[]; materials?: { url: string; note?: string }[] }>(plan: T[], nodes: MNodes, supabaseUrl: string | undefined, swipes: Map<string, SwipeHit> = new Map()): T[] {
   const owner = new Map<string, number>();
   plan.forEach((p, i) => (p.node_ids || []).forEach(id => { if (!owner.has(id)) owner.set(id, i); }));
   return plan.map((p, i) => {
@@ -114,11 +123,48 @@ export function withBranchImages<T extends { node_ids?: string[]; materials?: { 
       if (!top && owner.has(id) && owner.get(id) !== i) return;
       const u = imgUrlOf(n, supabaseUrl);
       if (u && !seen.has(u) && mats.length < 6) { seen.add(u); mats.push({ url: u, note: `枝「${(n.text || "（名前なし）").trim().slice(0, 60)}」の画像（実物・描き直さない）` }); }
+      for (const ref of String(n.slide?.ref || "").match(UUID_RE) || []) {
+        const sw = swipes.get(ref.toLowerCase());
+        if (sw && !seen.has(sw.image) && mats.length < 6) { seen.add(sw.image); mats.push({ url: sw.image, note: `スワイプくん「${sw.title.slice(0, 60)}」（枝の参考から・実物・描き直さない）` }); }
+      }
       for (const c of n.children || []) walk(c, false);
     };
     for (const id of p.node_ids || []) walk(id, true);
     return { ...p, materials: mats };
   });
+}
+
+/** スワイプくんの 1 件の画像（スクショ props.shot か、画像のファイル file_url） */
+export function swipeImageOf(row: { props?: unknown; file_url?: string | null }): string | null {
+  const shot = row.props && typeof row.props === "object" ? (row.props as { shot?: unknown }).shot : null;
+  if (typeof shot === "string" && /^https:\/\//.test(shot)) return shot;
+  const f = row.file_url || "";
+  return /^https:\/\/.+\.(png|jpe?g|webp|gif)(\?|$)/i.test(f) ? f : null;
+}
+const SWIPE_OWNER = "VrMwzeSceqWeXVQOrm8kpu4uVR33";
+const SW_SELECT = "id,title,source_url,source_type,labels,excerpt,props,file_url";
+function sbHead(env: Env) {
+  return { apikey: env.SUPABASE_SERVICE_ROLE_KEY, ...(/^eyJ/.test(String(env.SUPABASE_SERVICE_ROLE_KEY || "")) ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` } : {}) };
+}
+type SwRow = { id: string; title?: string; source_url?: string; source_type?: string; labels?: string[]; excerpt?: string; props?: unknown; file_url?: string | null };
+async function swipeRows(env: Env, query: string): Promise<SwRow[]> {
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/sw_swipes?select=${SW_SELECT}&user_id=eq.${SWIPE_OWNER}&${query}`, { headers: sbHead(env) });
+  if (!res.ok) throw new Error(`スワイプくんを読めません（${res.status}）`);
+  return (await res.json()) as SwRow[];
+}
+export async function swipesByIds(env: Env, ids: string[]): Promise<Map<string, SwipeHit>> {
+  const m = new Map<string, SwipeHit>();
+  if (!ids.length) return m;
+  for (const r of await swipeRows(env, `id=in.(${ids.slice(0, 50).join(",")})`)) {
+    const image = swipeImageOf(r); if (image) m.set(r.id, { id: r.id, title: r.title || "（題なし）", image, url: r.source_url });
+  }
+  return m;
+}
+/** 素材の住所として受けるのは、仕組みの置き場（Supabase の公開の置き場と /slides/img/）だけ（よそのサイトの画像を素材にしない） */
+export function okMaterialUrl(url: string, supabaseUrl: string | undefined): boolean {
+  if (!/^https:\/\//.test(url)) return false;
+  const sb = String(supabaseUrl || "").replace(/\/+$/, "");
+  return (!!sb && url.startsWith(`${sb}/storage/v1/object/public/`)) || url.startsWith(`${ORIGIN}${IMG_PATH}`);
 }
 
 export function applyPlan(deck: Deck, plan: Omit<Slide, "state" | "no" | "image">[], ok: boolean): Deck {
@@ -225,7 +271,7 @@ const LayoutItemZ = z.discriminatedUnion("type", [
   z.object({ type: z.literal("image"), ...Box, src: z.string().max(500).describe("art:N（今回渡した字の無い絵）・material:N（その枚の素材）・https の住所") }),
 ]);
 
-export const SLIDE_TOOLS = ["slides__start", "slides__list", "slides__get", "slides__put_plan", "slides__set_tone", "slides__put_image", "slides__put_layout", "slides__feedback", "slides__set_status", "slides__export_gslides"] as const;
+export const SLIDE_TOOLS = ["slides__find_material", "slides__add_material", "slides__start", "slides__list", "slides__get", "slides__put_plan", "slides__set_tone", "slides__put_image", "slides__put_layout", "slides__feedback", "slides__set_status", "slides__export_gslides"] as const;
 
 export function registerSlideTools(server: McpServer, env: Env): void {
   server.tool("slides__start",
@@ -253,7 +299,7 @@ export function registerSlideTools(server: McpServer, env: Env): void {
       const deck = await loadDeck(env, a.deck_id);
       let plan = a.slides as Omit<Slide, "state" | "no" | "image">[];
       const map = /^[\w-]{1,64}$/.test(deck.map_id) ? await readMapNodes(env, deck.map_id).catch(() => null) : null; // 読めなくても台本は入れる
-      if (map) plan = withBranchImages(plan, map.nodes, env.SUPABASE_URL);
+      if (map) plan = withBranchImages(plan, map.nodes, env.SUPABASE_URL, await swipesByIds(env, refIdsOf(map.nodes)).catch(() => new Map()));
       const d = applyPlan(deck, plan, !!a.plan_ok); await saveDeck(env, d); return ok(view(d));
     });
   server.tool("slides__set_tone", "トーンの型を決める。anchors＝見本にする枚の番号（シアニンが「これ」と言った枚・1〜3 枚・入れると前のデッキから引き継いだ見本は外れる）。rules＝色（色番号まで）・字・線・余白・絵の作り・使わないもの。見本を変えたら描き終えた枚をそろえ直す。戻り値: { ok, deck }",
@@ -317,6 +363,46 @@ export function registerSlideTools(server: McpServer, env: Env): void {
     await saveDeck(env, d);
     return ok({ ok: true, slide: { no: s.no, layout: { v, image_v: s.layout.image_v, items: r.items.length } }, errors: [] });
   });
+  server.tool("slides__find_material",
+    "スライドに入れる素材の画像を探す（v1.99.0）。いま探せるのはスワイプくん（参考のポスト・note・LP などのスクショ）。q は題・抜粋・本文の言葉（空なら新しい順）。label でラベルを含むものに絞れる。画像のある件だけ返す。選んだら slides__add_material でその枚に入れる。マーケくんの実績の棚・メディアの棚はまだ探せない（載せてよい範囲の確かめが要るため）。戻り値: { ok, count, items: [{ source, id, title, image, source_url, labels }] }",
+    { q: z.string().max(100).optional(), label: z.string().max(40).optional(), limit: z.number().int().min(1).max(30).optional() },
+    async (a) => {
+      const clean = (v: string) => v.replace(/[,()*%\\]/g, " ").trim();
+      const parts: string[] = [];
+      const q = clean(a.q || "");
+      if (q) { const w = encodeURIComponent(`*${q}*`); parts.push(`or=(title.ilike.${w},excerpt.ilike.${w},body.ilike.${w})`); }
+      if (a.label) parts.push(`labels=cs.${encodeURIComponent(`{"${clean(a.label)}"}`)}`);
+      parts.push(`order=created_at.desc`, `limit=${Math.min(100, (a.limit || 10) * 3)}`);
+      const rows = await swipeRows(env, parts.join("&"));
+      const items = rows.map(r => ({ r, image: swipeImageOf(r) })).filter(x => x.image).slice(0, a.limit || 10)
+        .map(({ r, image }) => ({ source: "swipe", id: r.id, title: r.title || "（題なし）", image, source_url: r.source_url || null, labels: r.labels || [] }));
+      return ok({ ok: true, count: items.length, items });
+    });
+  server.tool("slides__add_material",
+    "1 枚の素材（materials）に画像を足す（v1.99.0）。swipe_id（slides__find_material の id）か url（仕組みの置き場の画像の住所だけ）を渡す。note に何の画像か・どう使うかを 1 行。同じ住所は足さない。1 枚 6 つまで。remove=true でその住所を外す。足したら、その枚を描き直す（素材は描き直さずにそのまま置く）。戻り値: { ok, slide: { no, materials } }",
+    { deck_id: z.string().uuid(), no: z.number().int().min(1), swipe_id: z.string().uuid().optional(), url: z.string().url().optional(), note: z.string().max(200).optional(), remove: z.boolean().optional() },
+    async (a) => {
+      const d = await loadDeck(env, a.deck_id);
+      const s = d.slides.find(x => x.no === a.no);
+      if (!s) return ok({ ok: false, error: `${a.no} 枚目は台本にありません` });
+      let url = a.url, note = a.note;
+      if (a.swipe_id) {
+        const sw = (await swipesByIds(env, [a.swipe_id.toLowerCase()])).get(a.swipe_id.toLowerCase());
+        if (!sw) return ok({ ok: false, error: "そのスワイプは見つからないか、画像がありません" });
+        url = sw.image; note = note || `スワイプくん「${sw.title.slice(0, 60)}」（実物・描き直さない）`;
+      }
+      if (!url) return ok({ ok: false, error: "swipe_id か url を渡してください" });
+      if (a.remove) { s.materials = s.materials.filter(m => m.url !== url); }
+      else {
+        if (!okMaterialUrl(url, env.SUPABASE_URL)) return ok({ ok: false, error: "仕組みの置き場（スワイプくん・思考整理くん・スライドの画像）の住所だけ素材にできます" });
+        if (s.materials.some(m => m.url === url)) return ok({ ok: true, slide: { no: s.no, materials: s.materials }, note: "もう入っています" });
+        if (s.materials.length >= 6) return ok({ ok: false, error: "素材は 1 枚 6 つまでです" });
+        s.materials = [...s.materials, { url, ...(note ? { note } : {}) }];
+      }
+      d.log = [...d.log, `${nowIso()} ${a.no} 枚目 素材${a.remove ? "を外した" : "を足した"}`].slice(-50);
+      await saveDeck(env, d);
+      return ok({ ok: true, slide: { no: s.no, materials: s.materials } });
+    });
   server.tool("slides__feedback", "1 枚への直しの指示を書く（シアニンの言葉のまま）。その枚は redo になり、次に描く枚の先頭に来る。ok=true はシアニンがその枚に OK を言ったとき（state を ok にする）。戻り値: { ok, slide }",
     { deck_id: z.string().uuid(), no: z.number().int().min(1), text: z.string().max(2000).optional(), ok: z.boolean().optional() },
     async (a) => {

@@ -1,7 +1,7 @@
 // v1.94.0：スライドの台帳。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, resolveLayout, layoutStatus, exportPlan, templateOf, type Deck, type LayoutItem } from "../src/slides.js";
+import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, resolveLayout, layoutStatus, exportPlan, templateOf, refIdsOf, swipeImageOf, okMaterialUrl, type Deck, type LayoutItem } from "../src/slides.js";
 import { toOutline, imagesOf, splitLink } from "../src/mindmap-core.js";
 
 const base = (): Deck => ({ v: 1, id: "11111111-2222-3333-4444-555555555555", title: "t", map_id: "m", map_url: "u",
@@ -111,4 +111,24 @@ test("配置表：src を住所に直し、はみ出しと空の字を止める�
   assert.deepEqual(ex.map(e => [e.no, e.editable]), [[1, true], [2, false], [3, false]]);
   assert.equal((ex[2].items[0] as any).url, "u3");
   assert.deepEqual(exportPlan(d, true).map(e => e.no), [3]);
+});
+
+test("素材：枝の参考のスワイプくん・画像の取り出し・受ける住所（v1.99.0）", () => {
+  const S = "https://x.supabase.co";
+  const id = "16baee35-5935-4f9e-8001-8fff58b294da";
+  const nodes: any = {
+    r: { id: "r", text: "中心", children: ["a"], parent: null },
+    a: { id: "a", text: "LP の例", children: [], parent: "r", slide: { ref: `https://swipe.shia2n.jp/?id=${id.toUpperCase()} を参考` } },
+  };
+  assert.deepEqual(refIdsOf(nodes), [id]);
+  const sw = new Map([[id, { id, title: "LP の見本", image: `${S}/storage/v1/object/public/swipe-files/shots/1.png` }]]);
+  const plan = withBranchImages([{ node_ids: ["a"], materials: [] }], nodes, S, sw);
+  assert.equal(plan[0].materials![0].url, `${S}/storage/v1/object/public/swipe-files/shots/1.png`);
+  assert.match(plan[0].materials![0].note!, /スワイプくん「LP の見本」/);
+  assert.equal(swipeImageOf({ props: { shot: "https://a/b.png" } }), "https://a/b.png");
+  assert.equal(swipeImageOf({ props: {}, file_url: "https://a/c.pdf" }), null);
+  assert.equal(swipeImageOf({ file_url: "https://a/c.JPG" }), "https://a/c.JPG");
+  assert.equal(okMaterialUrl(`${S}/storage/v1/object/public/mindmap/x.png`, S), true);
+  assert.equal(okMaterialUrl("https://shia2n-mcp.gameister1.workers.dev/slides/img/a/b.png", S), true);
+  assert.equal(okMaterialUrl("https://example.com/x.png", S), false);
 });
