@@ -1,7 +1,7 @@
 // v1.94.0：スライドの台帳。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, type Deck } from "../src/slides.js";
+import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, type Deck } from "../src/slides.js";
 
 const base = (): Deck => ({ v: 1, id: "11111111-2222-3333-4444-555555555555", title: "t", map_id: "m", map_url: "u",
   tone: { name: "シアニン標準", rules: "", anchors: [] }, status: "plan", slides: [], created_at: "a", updated_at: "a", log: [] });
@@ -45,4 +45,15 @@ test("画像の住所は決まった形だけ通す", async () => {
   assert.equal(okRes.status, 200);
   assert.equal((await handleSlideImage(new Request("https://x/slides/img/../../backup/x.json"), env)).status, 404);
   assert.equal((await handleSlideImage(new Request("https://x/slides/img/11111111-2222-3333-4444-555555555555/001-v1-aaaaaaaa.png", { method: "POST" }), env)).status, 405);
+});
+
+test("見本の画像：このデッキの見本の枚と、前のデッキから引き継いだ見本を返す（v1.96.0）", () => {
+  const d = applyPlan(base(), [{ role: "表紙", title: "A", body: "", visual: "", node_ids: [], materials: [] }, { role: "図解", title: "B", body: "", visual: "", node_ids: [], materials: [] }], true);
+  d.slides[1].image = { file: "002-v1-bbbbbbbb.png", url: "u2", v: 1, at: "t" };
+  d.tone.anchors = [2, 1];
+  d.tone.refs = [{ url: "old35", note: "前のデッキ「x」35枚目" }];
+  assert.deepEqual(anchorImages(d), [{ no: 2, title: "B", url: "u2" }, { url: "old35", note: "前のデッキ「x」35枚目" }]);
+  assert.match(SKILL, /anchor_images/);
+  assert.match(SKILL, /実際のフォント/);
+  assert.match(SKILL, /tone_from/);
 });

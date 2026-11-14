@@ -28,23 +28,37 @@ export type Slide = {
 };
 export type Deck = {
   v: 1; id: string; title: string; map_id: string; map_url: string;
-  tone: { name: string; rules: string; anchors: number[] };
+  tone: { name: string; rules: string; anchors: number[]; refs?: { url: string; note?: string }[] };
   status: "plan" | "plan_ok" | "drawing" | "done";
   slides: Slide[]; created_at: string; updated_at: string; log: string[];
 };
 
-/** スライド制作スキル（GPT が毎回読む手順）。直すときはここだけ */
-export const SKILL = `【スライド制作スキル v1（シアニンのセミナー用）】
-目的：思考整理くんのマップの内容を、見た目がリッチで、トーンが全部そろったスライドにする。考える（中身）はシアニン、デザインと描くのはあなた。
-0. いつも最初に slides__get で台帳を読む。続きは台帳の status と各枚の state から始める（会話の記憶に頼らない）
-1. 台本（status=plan）：mindmap__get_map でマップを読み、1枚＝伝えることが1つになるように台本を作り、slides__put_plan で全部の枚を書く。枚数の上限は無い。役割は 表紙・章・本題・図解・実績・まとめ のどれか。見出しは短く（全角18字まで）、中身は話す人の補助なので1枚に3行まで。枝に付いた素材（materials）はその枚に残す。書いたら一覧をシアニンに見せて OK をもらう（OK なら slides__put_plan の plan_ok=true）
-2. 見本（トーンの固定）：最初に表紙と本題の2枚だけを描いて見せる。シアニンが「これ」と言った枚を slides__set_tone の anchors に入れる。以降は必ず、その見本の画像と同じ色・字・余白・飾りで描く（言葉だけで描くとずれる。見本を添えて描く）
-3. 描く：横長16:9。1回に描くのは5枚まで（多すぎると上限に当たる・止まっても台帳から続きができる）。描いたら slides__put_image で1枚ずつ書き戻す
-4. 字の読み直し：描いた画像の中の字を読み直し、台帳の見出し・中身と1字でも違えば、その枚だけ描き直す。読み直した字は put_image の text_check に入れる
-5. 実物の素材（実績のスクショ・数字の画像など）は絶対に描き直さない。その枚は「素材を入れる空き枠」を残したデザインにする（はめ込みは仕組みがやる）
-6. 直し：シアニンが「◯枚目を…」と言ったら slides__feedback に書き、その枚だけ描き直す。台帳の直しの指示（feedback）が残っている枚も同じ
-7. 全部の枚が ok になったら status を done にする（slides__set_status）
-トーンの決まり（rules）は台帳の tone に書く。デッキごとに変えてよいが、同じデッキの中では変えない。`;
+/** スライド制作スキル（GPT が毎回読む手順）。直すときはここだけ
+ * v2（2026-11-14 v1.96.0）：GPT と Naoki が「オンラインビジネスの攻略手順」で 24・35 枚目を仕上げたやり方（Naoki「初めて90点以上」「これを求めた」）を、デッキをまたいで使える手順にした。
+ * 見た目（色・字・絵の作り）はデッキの tone.rules、作り方（具体化・組み方・確かめ方・直し方）はここ、と分ける */
+export const SKILL = `【スライド制作スキル v2（シアニン式スライドデザイン）】
+目的：思考整理くんのマップの内容を、受講者が「何を見て・どう考え・次に何をするか」までわかる、具体的でリッチな図解のスライドにする。中身を考えるのはシアニン、意図を補って図解に組み、描くのはあなた。
+■ 進め方
+0. いつも最初に slides__get で台帳を読む。続きは台帳の status・各枚の state・next_to_draw から始める。会話の記憶や引き継ぎの資料より台帳を正とし、シアニンの最新の指示をいちばん上に置く
+1. 台本（status=plan）：mindmap__get_map でマップと、枝に付いた関連マップ・リンクを読む。1枚に持ち帰る結論は1つ。見出しは結論の形で短く（全角18字まで）。本文は主要メッセージ3行まで（補助のラベル・具体例・注釈は読みやすさを保てば足してよい）。役割は 表紙・章・本題・図解・実績・まとめ。素材（materials）とnode_idsは消さない。一覧を見せて OK をもらったら slides__put_plan の plan_ok=true
+2. 見本：返り値の anchor_images（見本の画像）を毎回実際に開いて見てから描く。見本が無いデッキは、表紙と本題を1枚ずつ描いて見せ、シアニンが「これ」と言った枚を slides__set_tone の anchors に入れる。見た目を決めたら、色は色番号まで・書体と太さ・字の大きさ・線・余白・絵の作り・使わないものを rules に具体的に書く。前のデッキの見た目を引き継ぐときは slides__start の tone_from
+3. 1枚を組む手順（具体化がいちばん大事）
+ a. その枚の枝と関連資料を読む（短い台本だけを材料にしない）
+ b.「受講者に何を見て、どう考え、何をしてほしいか」を1文で決める
+ c. 合う具体物を選ぶ：実物に近い画面への注釈、同じ軸での採点比較、工程、判断の分岐、直す前と後、記録の例。文章＋飾りのアイコンだけで終わらせない。すべてを表や3列にせず、意図に合う形を選ぶ
+ d. 観察した事実／解釈・仮説／次に試すこと、を見た目で分ける。その1枚に要る範囲だけ
+ e. 原文の事実と、説明のための仮の例を分ける。仮の点数・架空の画面には「説明用の例」「イメージ」と書く。数字や点の差だけで原因を言い切らない。確かめていない実績は作らない
+ f. 情報を増やしても、結論＞説明＞補助の強弱、余白、読む順（左→右・上→下）を保つ。視線が最後に着く場所を決める
+4. 組み方：字・表・数字・棒・矢印は、できるだけ実際のフォント（rules の書体）でベクターに組む（PDF）。生成画像はイラスト・画面のモックなど要る部分だけに使う。字を画像生成に任せると崩れる
+5. 描く：横長16:9（1920×1080）。1回5枚まで。描いたら PDF と台帳に置く PNG の両方を、仕上がったものから描き出して目で確かめ、slides__put_image で1枚ずつ書き戻す
+6. 字の読み直し：描き出した画像の字・数字を読み直し、台帳と1字でも違えば、または字化け・切れ・重なりがあれば、その枚を作り直す。確かめた中身を text_check に書く
+7. 実物の素材（実績のスクショ・数字の画像など）は絶対に描き直さない。そのまま空き枠にはめ込む
+8. 見出しや中身を変えたら、画像だけでなく slides__put_plan で台帳も直す（node_ids と素材は残す）
+■ 直し
+9. 「◯枚目を…」は slides__feedback に書き、その枚だけ描き直す。見た目についての指示がその1枚だけで終わらないもの（色・絵の作り・密度など）は、rules と見本も直し、描き終えた枚をそろえ直す対象にする
+10. 音声でまとめて直すとき：文字起こしの原文を残したまま、枚ごとの直し・全体の決まり・残すもの・OK・対象があいまいなもの に分ける。番号とタイトルの両方で照らし合わせる（話した順とデッキの番号を混ぜない）。対象がはっきりしたものは slides__feedback、全体の決まりは slides__set_tone。あいまいなものだけまとめて聞き、はっきりしたものは先に進める。数字・名前・否定を推測で直さない。「このままで」と言われた枚だけ ok=true にし、好意的な感想を他の枚の OK に広げない。終わったら「番号／変えたこと／残したもの／保留」を短く返す
+11. 全部の枚が ok になったら slides__set_status で done にする
+見た目（rules）はデッキごと。同じデッキの中では変えず、変えるときは見本ごと変えて描き終えた枚をそろえ直す。`;
 
 export const newId = () => crypto.randomUUID();
 export const nowIso = () => new Date().toISOString();
@@ -96,7 +110,12 @@ async function saveDeck(env: Env, d: Deck): Promise<void> {
   await env.OAUTH_KV.put(INDEX_KEY, JSON.stringify([{ id: d.id, title: d.title, at: d.updated_at }, ...rest].slice(0, 200)));
 }
 const ok = (p: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(p, null, 2) }] });
-const view = (d: Deck) => ({ ok: true, deck: d, summary: summary(d), next_to_draw: nextToDraw(d), skill: SKILL });
+/** 見本の画像（このデッキの見本の枚＋前のデッキから引き継いだ見本）。GPT は描く前に毎回これを開く */
+export function anchorImages(d: Deck): { no?: number; title?: string; url: string; note?: string }[] {
+  const own = d.tone.anchors.map(n => d.slides.find(s => s.no === n)).filter((s): s is Slide => !!s?.image).map(s => ({ no: s.no, title: s.title, url: s.image!.url }));
+  return [...own, ...(d.tone.refs || [])];
+}
+const view = (d: Deck) => ({ ok: true, deck: d, summary: summary(d), next_to_draw: nextToDraw(d), anchor_images: anchorImages(d), skill: SKILL });
 
 const MaterialZ = z.object({ url: z.string().url(), note: z.string().max(200).optional() });
 const PlanZ = z.object({
@@ -111,28 +130,32 @@ export const SLIDE_TOOLS = ["slides__start", "slides__list", "slides__get", "sli
 
 export function registerSlideTools(server: McpServer, env: Env): void {
   server.tool("slides__start",
-    "思考整理くんのマップからスライドの台帳（1 デッキ）を作る。map_id はマップの id か住所。作ったら同じ返り値の skill（スライド制作スキル）の手順どおりに進める。戻り値: { ok, deck, summary, next_to_draw, skill }",
-    { map_id: z.string().min(1).max(300), title: z.string().min(1).max(120), tone_name: z.string().max(60).optional(), tone_rules: z.string().max(3000).optional().describe("色・字・余白・飾りの決まり") },
+    "思考整理くんのマップからスライドの台帳（1 デッキ）を作る。map_id はマップの id か住所。前のデッキの見た目を引き継ぐときは tone_from に前のデッキの id。作ったら同じ返り値の skill（スライド制作スキル）の手順どおりに進める。戻り値: { ok, deck, summary, next_to_draw, skill }",
+    { map_id: z.string().min(1).max(300), title: z.string().min(1).max(120), tone_name: z.string().max(60).optional(), tone_rules: z.string().max(8000).optional().describe("色・字・余白・飾りの決まり"),
+      tone_from: z.string().uuid().optional().describe("見た目を引き継ぐ前のデッキの id（決まりと見本の画像を写す）") },
     async (a) => {
       const id = newId(), at = nowIso();
+      const src = a.tone_from ? await loadDeck(env, a.tone_from) : null;
       const m = a.map_id.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
       const d: Deck = { v: 1, id, title: a.title, map_id: m ? m[0] : a.map_id, map_url: m ? `https://mindmap.shia2n.jp/m/${m[0]}` : a.map_id,
-        tone: { name: a.tone_name || "シアニン標準", rules: a.tone_rules || "", anchors: [] }, status: "plan", slides: [], created_at: at, updated_at: at, log: [`${at} 作った`] };
+        tone: { name: a.tone_name || src?.tone.name || "シアニン標準", rules: a.tone_rules || src?.tone.rules || "", anchors: [],
+          ...(src ? { refs: anchorImages(src).map(x => ({ url: x.url, note: `前のデッキ「${src.title}」${x.no ? `${x.no}枚目` : ""}${x.title ? `「${x.title}」` : x.note ? `（${x.note}）` : ""}`.slice(0, 200) })) } : {}) },
+        status: "plan", slides: [], created_at: at, updated_at: at, log: [`${at} 作った`] };
       await saveDeck(env, d);
       return ok(view(d));
     });
   server.tool("slides__list", "スライドの台帳の一覧（新しい順）。続きをするデッキを探すときに使う。戻り値: { ok, decks: [{ id, title, at }] }", {},
     async () => ok({ ok: true, decks: ((await env.OAUTH_KV.get(INDEX_KEY, "json")) as unknown[]) || [] }));
-  server.tool("slides__get", "スライドの台帳を読む（いつも最初に呼ぶ）。どこまでできたか（summary・各枚の state）、次に描く枚（next_to_draw）、見本の画像の住所、スライド制作スキル（skill）が返る。戻り値: { ok, deck, summary, next_to_draw, skill }",
+  server.tool("slides__get", "スライドの台帳を読む（いつも最初に呼ぶ）。どこまでできたか（summary・各枚の state）、次に描く枚（next_to_draw）、見本の画像（anchor_images・描く前に毎回開いて見る）、スライド制作スキル（skill）が返る。戻り値: { ok, deck, summary, next_to_draw, anchor_images, skill }",
     { deck_id: z.string().uuid() }, async (a) => ok(view(await loadDeck(env, a.deck_id))));
   server.tool("slides__put_plan", "台本（全部の枚）を書く。並びの順が番号になる（1 から）。見出しと中身が変わっていない枚の画像は残る。plan_ok=true はシアニンが台本に OK を言ったときだけ。戻り値: { ok, deck, summary }",
     { deck_id: z.string().uuid(), slides: z.array(PlanZ).min(1).max(200), plan_ok: z.boolean().optional() },
     async (a) => { const d = applyPlan(await loadDeck(env, a.deck_id), a.slides as Omit<Slide, "state" | "no" | "image">[], !!a.plan_ok); await saveDeck(env, d); return ok(view(d)); });
-  server.tool("slides__set_tone", "トーンの型を決める。anchors＝見本にする枚の番号（シアニンが「これ」と言った枚・1〜3 枚）。rules＝色・字・余白・飾りの決まり。同じデッキの中では見本を変えない。戻り値: { ok, deck }",
-    { deck_id: z.string().uuid(), anchors: z.array(z.number().int().min(1)).max(3).optional(), rules: z.string().max(3000).optional(), name: z.string().max(60).optional() },
+  server.tool("slides__set_tone", "トーンの型を決める。anchors＝見本にする枚の番号（シアニンが「これ」と言った枚・1〜3 枚・入れると前のデッキから引き継いだ見本は外れる）。rules＝色（色番号まで）・字・線・余白・絵の作り・使わないもの。見本を変えたら描き終えた枚をそろえ直す。戻り値: { ok, deck }",
+    { deck_id: z.string().uuid(), anchors: z.array(z.number().int().min(1)).max(3).optional(), rules: z.string().max(8000).optional(), name: z.string().max(60).optional() },
     async (a) => {
       const d = await loadDeck(env, a.deck_id);
-      if (a.anchors) { const bad = a.anchors.filter(n => !d.slides.find(s => s.no === n)?.image); if (bad.length) return ok({ ok: false, error: `${bad.join("・")} 枚目はまだ描いていないので見本にできません` }); d.tone.anchors = a.anchors; }
+      if (a.anchors) { const bad = a.anchors.filter(n => !d.slides.find(s => s.no === n)?.image); if (bad.length) return ok({ ok: false, error: `${bad.join("・")} 枚目はまだ描いていないので見本にできません` }); d.tone.anchors = a.anchors; delete d.tone.refs; }
       if (a.rules != null) d.tone.rules = a.rules; if (a.name) d.tone.name = a.name;
       d.log = [...d.log, `${nowIso()} トーン（見本 ${d.tone.anchors.join("・") || "なし"}）`].slice(-50);
       await saveDeck(env, d); return ok(view(d));
