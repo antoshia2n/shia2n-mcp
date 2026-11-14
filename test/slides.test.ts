@@ -99,7 +99,8 @@ test("配置表：src を住所に直し、はみ出しと空の字を止める�
   assert.equal(bad.errors.length, 3);
   const t = templateOf(r.items);
   assert.equal(t.filter(i => i.type === "image").length, 0);
-  assert.deepEqual(t.filter(i => i.type === "text").map(i => (i as any).text), ["見出しを入れる", "テキストを入れる"]);
+  assert.deepEqual(t.filter(i => i.type === "text").map(i => (i as any).text), ["見出しを入れる"]); // 44px の本文は 84px の 0.6 倍未満なので外す
+  assert.deepEqual(templateOf([{ type: "text", x: 0, y: 0, w: 10, h: 10, text: "見", size: 80 }, { type: "text", x: 0, y: 0, w: 10, h: 10, text: "分類", size: 64 }, { type: "text", x: 0, y: 0, w: 10, h: 10, text: "本文", size: 44 }]).map(i => (i as any).text), ["見出しを入れる", "小見出しを入れる"]);
 
   const d = applyPlan(base(), [1, 2, 3].map(n => ({ role: "本題" as const, title: `s${n}`, body: "", visual: "", node_ids: [], materials: [] })), true);
   d.slides[0].image = { file: "001-v2-aaaaaaaa.png", url: "u1", v: 2, at: "t" }; d.slides[0].layout = { v: 1, at: "t", image_v: 2, items: r.items };

@@ -132,7 +132,7 @@ export function applyPlan(deck: Deck, plan: Omit<Slide, "state" | "no" | "image"
       ...(prev?.feedback && keep ? { feedback: prev.feedback } : {}),
     };
   });
-  return { ...deck, slides, status: ok ? "plan_ok" : "plan", updated_at: nowIso(), log: [...deck.log, `${nowIso()} 台本 ${slides.length} 枚${ok ? "（OK）" : ""}`].slice(-50) };
+  return { ...deck, slides, status: ok ? (deck.status === "drawing" || deck.status === "done" ? deck.status : "plan_ok") : "plan", updated_at: nowIso(), log: [...deck.log, `${nowIso()} 台本 ${slides.length} 枚${ok ? "（OK）" : ""}`].slice(-50) };
 }
 
 /** 次に描く枚（直しの指示がある枚 → まだ描いていない枚の順・見本の枚は先） */
@@ -168,17 +168,21 @@ export function exportPlan(deck: Deck, onlyOk = false): ExportSlide[] {
   });
 }
 
-/** ひな形：見本の枚の配置表から、面と線だけ残し、字を「見出し」「テキスト」に置き換える（絵は外す）。あとで足す枚を同じ見た目で作るため */
+/** ひな形：見本の枚の配置表から、面と線だけ残し、字は見出し（いちばん大きい字）と小見出し（見出しの 0.6 倍以上の字）だけを「見出しを入れる」「小見出しを入れる」に置き換える。
+ * 本文・注釈・ページ番号・絵は外す（v1.98.1：全部の字を残すと「テキストを入れる」が 30〜40 個並び、使えなかったため） */
 export function templateOf(items: LayoutItem[]): LayoutItem[] {
   const texts = items.filter((i): i is Extract<LayoutItem, { type: "text" }> => i.type === "text");
   const top = texts.reduce((m, t) => (t.size > m ? t.size : m), 0);
   let headDone = false;
-  return items.filter(i => i.type !== "image").map(i => {
-    if (i.type !== "text") return i;
-    const head = !headDone && i.size === top; if (head) headDone = true;
-    const { runs: _r, ...rest } = i;
-    return { ...rest, text: head ? "見出しを入れる" : "テキストを入れる" };
-  });
+  const out: LayoutItem[] = [];
+  for (const i of items) {
+    if (i.type === "image") continue;
+    if (i.type !== "text") { out.push(i); continue; }
+    const head = !headDone && i.size === top;
+    if (head) { headDone = true; const { runs: _r, ...rest } = i; out.push({ ...rest, text: "見出しを入れる" }); continue; }
+    if (i.size >= top * 0.6) { const { runs: _r, ...rest } = i; out.push({ ...rest, text: "小見出しを入れる" }); }
+  }
+  return out;
 }
 
 async function loadDeck(env: Env, id: string): Promise<Deck> {
