@@ -1,7 +1,7 @@
 // v1.94.0：スライドの台帳。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, resolveLayout, layoutStatus, exportPlan, templateOf, refIdsOf, swipeImageOf, okMaterialUrl, type Deck, type LayoutItem } from "../src/slides.js";
+import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, resolveLayout, layoutStatus, exportPlan, templateOf, refIdsOf, swipeImageOf, okMaterialUrl, toneFromDeck, applyTone, type Deck, type LayoutItem } from "../src/slides.js";
 import { toOutline, imagesOf, splitLink } from "../src/mindmap-core.js";
 
 const base = (): Deck => ({ v: 1, id: "11111111-2222-3333-4444-555555555555", title: "t", map_id: "m", map_url: "u",
@@ -131,4 +131,18 @@ test("素材：枝の参考のスワイプくん・画像の取り出し・受�
   assert.equal(okMaterialUrl(`${S}/storage/v1/object/public/mindmap/x.png`, S), true);
   assert.equal(okMaterialUrl("https://shia2n-mcp.gameister1.workers.dev/slides/img/a/b.png", S), true);
   assert.equal(okMaterialUrl("https://example.com/x.png", S), false);
+});
+
+test("トーンの棚：今のデッキから作り、別のデッキに当てると描いた枚が描き直しになる（v1.99.1）", () => {
+  const d = applyPlan(base(), [1, 2, 3].map(n => ({ role: "本題" as const, title: `s${n}`, body: "", visual: "", node_ids: [], materials: [] })), true);
+  d.slides[0].image = { file: "001-v1-aaaaaaaa.png", url: "u1", v: 1, at: "t" }; d.slides[0].state = "ok";
+  d.slides[1].image = { file: "002-v1-bbbbbbbb.png", url: "u2", v: 1, at: "t" }; d.slides[1].state = "drawn";
+  d.tone = { name: "35枚目基準", rules: "色 #192731", anchors: [1] };
+  const t = toneFromDeck(d, "35枚目基準", "abc12345");
+  assert.deepEqual(t.images.map(x => x.url), ["u1"]);
+  const e = applyTone(d, { ...t, name: "黒板", rules: "黒地に白" }, true);
+  assert.equal(e.tone.name, "黒板"); assert.deepEqual(e.tone.anchors, []); assert.deepEqual(e.tone.refs!.map(x => x.url), ["u1"]);
+  assert.deepEqual(e.slides.map(s => s.state), ["redo", "redo", "plan"]);
+  assert.deepEqual(nextToDraw(e).slice(0, 2), [1, 2]);
+  assert.deepEqual(applyTone(d, t, false).slides.map(s => s.state), ["ok", "drawn", "plan"]);
 });

@@ -39,7 +39,7 @@ export type LayoutItem =
   | { type: "image"; x: number; y: number; w: number; h: number; src: string; url?: string };
 export type Deck = {
   v: 1; id: string; title: string; map_id: string; map_url: string;
-  tone: { name: string; rules: string; anchors: number[]; refs?: { url: string; note?: string }[] };
+  tone: { name: string; rules: string; anchors: number[]; refs?: { url: string; note?: string }[]; inspire?: { url: string; note?: string }[] };
   status: "plan" | "plan_ok" | "drawing" | "done";
   slides: Slide[]; created_at: string; updated_at: string; log: string[];
 };
@@ -47,12 +47,14 @@ export type Deck = {
 /** スライド制作スキル（GPT が毎回読む手順）。直すときはここだけ
  * v2（2026-11-14 v1.96.0）：GPT と Naoki が「オンラインビジネスの攻略手順」で 24・35 枚目を仕上げたやり方（Naoki「初めて90点以上」「これを求めた」）を、デッキをまたいで使える手順にした。
  * 見た目（色・字・絵の作り）はデッキの tone.rules、作り方（具体化・組み方・確かめ方・直し方）はここ、と分ける */
-export const SKILL = `【スライド制作スキル v2.3（シアニン式スライドデザイン）】
+export const SKILL = `【スライド制作スキル v2.4（シアニン式スライドデザイン）】
 目的：思考整理くんのマップの内容を、受講者が「何を見て・どう考え・次に何をするか」までわかる、具体的でリッチな図解のスライドにする。中身を考えるのはシアニン、意図を補って図解に組み、描くのはあなた。
 ■ 進め方
 0. いつも最初に slides__get で台帳を読む。続きは台帳の status・各枚の state・next_to_draw から始める。会話の記憶や引き継ぎの資料より台帳を正とし、シアニンの最新の指示をいちばん上に置く
 1. 台本（status=plan）：mindmap__get_map でマップと、枝に付いた関連マップ・リンクを読む。1枚に持ち帰る結論は1つ。見出しは結論の形で短く（全角18字まで）。本文は主要メッセージ3行まで（補助のラベル・具体例・注釈は読みやすさを保てば足してよい）。役割は 表紙・章・本題・図解・実績・まとめ。素材（materials）とnode_idsは消さない。枝に貼った画像は、put_plan のときにその枚（node_ids の枝とその下の枝）の素材へ自動で入る（get_map の「画像」と各行の (画像 住所) でも見える）。枝の「スライドの指示」（種類・参考・デザイン）は台本と絵の指示に反映する。参考にスワイプくんの住所（id 入り）があれば、その画像も put_plan のときに素材へ自動で入る。シアニンが「◯枚目にスワイプくんの△△を入れて」と言ったら slides__find_material で探して候補を見せ、選ばれたものを slides__add_material で入れてから描き直す。参考にした画像のデザインは、決まりだけを取り出して使い、そのまま写さない。一覧を見せて OK をもらったら slides__put_plan の plan_ok=true
-2. 見本：返り値の anchor_images（見本の画像）を毎回実際に開いて見てから描く。見本が無いデッキは、表紙と本題を1枚ずつ描いて見せ、シアニンが「これ」と言った枚を slides__set_tone の anchors に入れる。見た目を決めたら、色は色番号まで・書体と太さ・字の大きさ・線・余白・絵の作り・使わないものを rules に具体的に書く。前のデッキの見た目を引き継ぐときは slides__start の tone_from
+2. 見本：返り値の anchor_images（見本の画像）を毎回実際に開いて見てから描く。見本が無いデッキは、表紙と本題を1枚ずつ描いて見せ、シアニンが「これ」と言った枚を slides__set_tone の anchors に入れる。見た目を決めたら、色は色番号まで・書体と太さ・字の大きさ・線・余白・絵の作り・使わないものを rules に具体的に書く。前のデッキの見た目を引き継ぐときは slides__start の tone_from、トーンの棚から選ぶときは tone_id（slides__list_tones で見せて選んでもらう）
+2b. トーンを替える：シアニンが「別のトーンで」と言ったら、棚の一覧を見せて選んでもらい slides__switch_tone（描いた枚は描き直しになる）。今のトーンを残したいと言われたら先に slides__save_tone
+2c. 参考デザイン：シアニンが「この画像（スクショ・スワイプくんの1件）のデザインを参考に」と言ったら、slides__set_tone の inspire に入れる。そこから色の役割・字・余白・密度・絵の作りの決まりだけを取り出し（ロゴ・固有の絵柄・文はそのまま写さない）、表紙と本題の見本を2枚描いて見せる。選ばれたら anchors と rules を入れ直し、残すと言われたら slides__save_tone
 3. 1枚を組む手順（具体化がいちばん大事）
  a. その枚の枝と関連資料を読む（短い台本だけを材料にしない）
  b.「受講者に何を見て、どう考え、何をしてほしいか」を1文で決める
@@ -167,6 +169,19 @@ export function okMaterialUrl(url: string, supabaseUrl: string | undefined): boo
   return (!!sb && url.startsWith(`${sb}/storage/v1/object/public/`)) || url.startsWith(`${ORIGIN}${IMG_PATH}`);
 }
 
+/** v1.99.1（便5b）トーンの棚：名前を付けた見た目（決まり＋見本の画像）。デッキをまたいで選んで使う */
+export const TONES_KEY = "slide_tones_v1";
+export type ToneItem = { id: string; name: string; rules: string; images: { url: string; note?: string }[]; from_deck?: string; at: string };
+export function toneFromDeck(d: Deck, name: string, id: string): ToneItem {
+  return { id, name, rules: d.tone.rules, images: anchorImages(d).map(x => ({ url: x.url, note: x.note || `「${d.title}」${x.no ? `${x.no}枚目` : ""}${x.title ? `「${x.title}」` : ""}` })), from_deck: d.id, at: nowIso() };
+}
+/** デッキのトーンを棚の 1 つに替える。redraw なら描いた枚（OK の枚も）を描き直しの対象にする（配置表も描き直しで入れ直す） */
+export function applyTone(d: Deck, t: ToneItem, redraw: boolean): Deck {
+  const slides = d.slides.map(s => (redraw && s.image ? { ...s, state: "redo" as const, feedback: `トーンを「${t.name}」に替えた。anchor_images の見本に合わせて描き直す（字と中身は変えない）` } : s));
+  return { ...d, tone: { name: t.name, rules: t.rules, anchors: [], refs: t.images }, slides, updated_at: nowIso(), log: [...d.log, `${nowIso()} トーンを「${t.name}」に替えた${redraw ? "（描いた枚は描き直し）" : ""}`].slice(-50) };
+}
+async function loadTones(env: Env): Promise<ToneItem[]> { return ((await env.OAUTH_KV.get(TONES_KEY, "json")) as ToneItem[] | null) || []; }
+
 export function applyPlan(deck: Deck, plan: Omit<Slide, "state" | "no" | "image">[], ok: boolean): Deck {
   const old = new Map(deck.slides.map(s => [s.no, s]));
   const slides: Slide[] = plan.map((p, i) => {
@@ -249,7 +264,7 @@ export function anchorImages(d: Deck): { no?: number; title?: string; url: strin
   const own = d.tone.anchors.map(n => d.slides.find(s => s.no === n)).filter((s): s is Slide => !!s?.image).map(s => ({ no: s.no, title: s.title, url: s.image!.url }));
   return [...own, ...(d.tone.refs || [])];
 }
-const view = (d: Deck) => ({ ok: true, deck: d, summary: summary(d), next_to_draw: nextToDraw(d), anchor_images: anchorImages(d), layout: layoutStatus(d), skill: SKILL });
+const view = (d: Deck) => ({ ok: true, deck: d, summary: summary(d), next_to_draw: nextToDraw(d), anchor_images: anchorImages(d), inspire_images: d.tone.inspire || [], layout: layoutStatus(d), skill: SKILL });
 
 const MaterialZ = z.object({ url: z.string().url(), note: z.string().max(200).optional() });
 const PlanZ = z.object({
@@ -271,21 +286,25 @@ const LayoutItemZ = z.discriminatedUnion("type", [
   z.object({ type: z.literal("image"), ...Box, src: z.string().max(500).describe("art:N（今回渡した字の無い絵）・material:N（その枚の素材）・https の住所") }),
 ]);
 
-export const SLIDE_TOOLS = ["slides__find_material", "slides__add_material", "slides__start", "slides__list", "slides__get", "slides__put_plan", "slides__set_tone", "slides__put_image", "slides__put_layout", "slides__feedback", "slides__set_status", "slides__export_gslides"] as const;
+export const SLIDE_TOOLS = ["slides__save_tone", "slides__list_tones", "slides__switch_tone", "slides__find_material", "slides__add_material", "slides__start", "slides__list", "slides__get", "slides__put_plan", "slides__set_tone", "slides__put_image", "slides__put_layout", "slides__feedback", "slides__set_status", "slides__export_gslides"] as const;
 
 export function registerSlideTools(server: McpServer, env: Env): void {
   server.tool("slides__start",
     "思考整理くんのマップからスライドの台帳（1 デッキ）を作る。map_id はマップの id か住所。前のデッキの見た目を引き継ぐときは tone_from に前のデッキの id。作ったら同じ返り値の skill（スライド制作スキル）の手順どおりに進める。戻り値: { ok, deck, summary, next_to_draw, skill }",
     { map_id: z.string().min(1).max(300), title: z.string().min(1).max(120), tone_name: z.string().max(60).optional(), tone_rules: z.string().max(8000).optional().describe("色・字・余白・飾りの決まり"),
-      tone_from: z.string().uuid().optional().describe("見た目を引き継ぐ前のデッキの id（決まりと見本の画像を写す）") },
+      tone_from: z.string().uuid().optional().describe("見た目を引き継ぐ前のデッキの id（決まりと見本の画像を写す）"),
+      tone_id: z.string().max(60).optional().describe("トーンの棚から選ぶ（slides__list_tones の id か名前）。tone_from より優先") },
     async (a) => {
       const id = newId(), at = nowIso();
       const src = a.tone_from ? await loadDeck(env, a.tone_from) : null;
+      const shelf = a.tone_id ? (await loadTones(env)).find(t => t.id === a.tone_id || t.name === a.tone_id) : null;
+      if (a.tone_id && !shelf) return ok({ ok: false, error: `トーンの棚に「${a.tone_id}」がありません（slides__list_tones で確かめる）` });
       const m = a.map_id.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
       const d: Deck = { v: 1, id, title: a.title, map_id: m ? m[0] : a.map_id, map_url: m ? `https://mindmap.shia2n.jp/m/${m[0]}` : a.map_id,
         tone: { name: a.tone_name || src?.tone.name || "シアニン標準", rules: a.tone_rules || src?.tone.rules || "", anchors: [],
           ...(src ? { refs: anchorImages(src).map(x => ({ url: x.url, note: `前のデッキ「${src.title}」${x.no ? `${x.no}枚目` : ""}${x.title ? `「${x.title}」` : x.note ? `（${x.note}）` : ""}`.slice(0, 200) })) } : {}) },
         status: "plan", slides: [], created_at: at, updated_at: at, log: [`${at} 作った`] };
+      if (shelf) d.tone = { name: shelf.name, rules: shelf.rules, anchors: [], refs: shelf.images };
       await saveDeck(env, d);
       return ok(view(d));
     });
@@ -303,9 +322,21 @@ export function registerSlideTools(server: McpServer, env: Env): void {
       const d = applyPlan(deck, plan, !!a.plan_ok); await saveDeck(env, d); return ok(view(d));
     });
   server.tool("slides__set_tone", "トーンの型を決める。anchors＝見本にする枚の番号（シアニンが「これ」と言った枚・1〜3 枚・入れると前のデッキから引き継いだ見本は外れる）。rules＝色（色番号まで）・字・線・余白・絵の作り・使わないもの。見本を変えたら描き終えた枚をそろえ直す。戻り値: { ok, deck }",
-    { deck_id: z.string().uuid(), anchors: z.array(z.number().int().min(1)).max(3).optional(), rules: z.string().max(8000).optional(), name: z.string().max(60).optional() },
+    { deck_id: z.string().uuid(), anchors: z.array(z.number().int().min(1)).max(3).optional(), rules: z.string().max(8000).optional(), name: z.string().max(60).optional(),
+      inspire: z.array(z.object({ swipe_id: z.string().uuid().optional(), url: z.string().url().optional(), note: z.string().max(200).optional() })).max(5).optional().describe("参考にしたいデザインの画像（スワイプくんの id か仕組みの置き場の住所）。空の配列で外す。決まりだけを取り出して使い、そのまま写さない") },
     async (a) => {
       const d = await loadDeck(env, a.deck_id);
+      if (a.inspire) {
+        const sw = await swipesByIds(env, a.inspire.map(x => x.swipe_id?.toLowerCase()).filter((x): x is string => !!x));
+        const list: { url: string; note?: string }[] = [];
+        for (const x of a.inspire) {
+          const hit = x.swipe_id ? sw.get(x.swipe_id.toLowerCase()) : null;
+          const url = hit ? hit.image : x.url;
+          if (!url || !okMaterialUrl(url, env.SUPABASE_URL)) return ok({ ok: false, error: `参考の画像を受けられません（${x.swipe_id || x.url || "空"}）。スワイプくんの id か仕組みの置き場の住所を渡す` });
+          list.push({ url, note: x.note || (hit ? `スワイプくん「${hit.title.slice(0, 60)}」` : undefined) });
+        }
+        d.tone.inspire = list;
+      }
       if (a.anchors) { const bad = a.anchors.filter(n => !d.slides.find(s => s.no === n)?.image); if (bad.length) return ok({ ok: false, error: `${bad.join("・")} 枚目はまだ描いていないので見本にできません` }); d.tone.anchors = a.anchors; delete d.tone.refs; }
       if (a.rules != null) d.tone.rules = a.rules; if (a.name) d.tone.name = a.name;
       d.log = [...d.log, `${nowIso()} トーン（見本 ${d.tone.anchors.join("・") || "なし"}）`].slice(-50);
@@ -363,6 +394,26 @@ export function registerSlideTools(server: McpServer, env: Env): void {
     await saveDeck(env, d);
     return ok({ ok: true, slide: { no: s.no, layout: { v, image_v: s.layout.image_v, items: r.items.length } }, errors: [] });
   });
+  server.tool("slides__save_tone", "今のデッキの見た目（決まり rules と見本の画像）を、名前を付けてトーンの棚に入れる（v1.99.1）。同じ名前があれば上書き。シアニンが「このトーンを残して」と言ったときに使う。戻り値: { ok, tone }",
+    { deck_id: z.string().uuid(), name: z.string().min(1).max(60) },
+    async (a) => {
+      const d = await loadDeck(env, a.deck_id);
+      if (!anchorImages(d).length) return ok({ ok: false, error: "見本の画像が無いので棚に入れられません（先に slides__set_tone の anchors を決める）" });
+      const tones = await loadTones(env); const old = tones.find(t => t.name === a.name);
+      const t = toneFromDeck(d, a.name, old?.id || newId().slice(0, 8));
+      await env.OAUTH_KV.put(TONES_KEY, JSON.stringify([t, ...tones.filter(x => x.id !== t.id)].slice(0, 50)));
+      return ok({ ok: true, tone: { id: t.id, name: t.name, images: t.images.length } });
+    });
+  server.tool("slides__list_tones", "トーンの棚の一覧（v1.99.1）。各トーンの id・名前・見本の画像の住所・決まりの頭 200 字。新しいデッキは slides__start の tone_id、今のデッキを替えるのは slides__switch_tone。戻り値: { ok, tones }", {},
+    async () => ok({ ok: true, tones: (await loadTones(env)).map(t => ({ id: t.id, name: t.name, images: t.images, rules_head: t.rules.slice(0, 200), at: t.at })) }));
+  server.tool("slides__switch_tone", "デッキのトーンを棚の 1 つに替える（v1.99.1）。シアニンが替えると決めたときだけ使う。redraw（既定 true）で描いた枚（OK の枚も）を描き直しの対象にする。替える前のトーンを残したいときは、先に slides__save_tone で棚に入れておく。戻り値: { ok, deck, summary, next_to_draw }",
+    { deck_id: z.string().uuid(), tone_id: z.string().min(1).max(60), redraw: z.boolean().optional() },
+    async (a) => {
+      const t = (await loadTones(env)).find(x => x.id === a.tone_id || x.name === a.tone_id);
+      if (!t) return ok({ ok: false, error: `トーンの棚に「${a.tone_id}」がありません` });
+      const d = applyTone(await loadDeck(env, a.deck_id), t, a.redraw !== false);
+      await saveDeck(env, d); return ok(view(d));
+    });
   server.tool("slides__find_material",
     "スライドに入れる素材の画像を探す（v1.99.0）。いま探せるのはスワイプくん（参考のポスト・note・LP などのスクショ）。q は題・抜粋・本文の言葉（空なら新しい順）。label でラベルを含むものに絞れる。画像のある件だけ返す。選んだら slides__add_material でその枚に入れる。マーケくんの実績の棚・メディアの棚はまだ探せない（載せてよい範囲の確かめが要るため）。戻り値: { ok, count, items: [{ source, id, title, image, source_url, labels }] }",
     { q: z.string().max(100).optional(), label: z.string().max(40).optional(), limit: z.number().int().min(1).max(30).optional() },
