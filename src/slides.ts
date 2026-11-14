@@ -13,6 +13,7 @@ import { z } from "zod";
 import type { Env } from "./index.js";
 import { imgUrlOf, type MNodes } from "./mindmap-core.js";
 import { readMapNodes } from "./tools-mindmap.js";
+import { seminarKeys } from "./seminar-tasks.js";
 
 export const DECK_PREFIX = "slide_deck:";
 export const INDEX_KEY = "slide_decks_index_v1";
@@ -41,13 +42,16 @@ export type Deck = {
   v: 1; id: string; title: string; map_id: string; map_url: string;
   tone: { name: string; rules: string; anchors: number[]; refs?: { url: string; note?: string }[]; inspire?: { url: string; note?: string }[] };
   status: "plan" | "plan_ok" | "drawing" | "done";
+  /** v1.100.0（便6）：コンテンツくんのセミナーの回（posts.id）と、最後に書き出した Google スライド */
+  post?: { id: string; title: string; date?: string };
+  gslides?: { url: string; at: string };
   slides: Slide[]; created_at: string; updated_at: string; log: string[];
 };
 
 /** スライド制作スキル（GPT が毎回読む手順）。直すときはここだけ
  * v2（2026-11-14 v1.96.0）：GPT と Naoki が「オンラインビジネスの攻略手順」で 24・35 枚目を仕上げたやり方（Naoki「初めて90点以上」「これを求めた」）を、デッキをまたいで使える手順にした。
  * 見た目（色・字・絵の作り）はデッキの tone.rules、作り方（具体化・組み方・確かめ方・直し方）はここ、と分ける */
-export const SKILL = `【スライド制作スキル v2.4（シアニン式スライドデザイン）】
+export const SKILL = `【スライド制作スキル v2.5（シアニン式スライドデザイン）】
 目的：思考整理くんのマップの内容を、受講者が「何を見て・どう考え・次に何をするか」までわかる、具体的でリッチな図解のスライドにする。中身を考えるのはシアニン、意図を補って図解に組み、描くのはあなた。
 ■ 進め方
 0. いつも最初に slides__get で台帳を読む。続きは台帳の status・各枚の state・next_to_draw から始める。会話の記憶や引き継ぎの資料より台帳を正とし、シアニンの最新の指示をいちばん上に置く
@@ -70,7 +74,8 @@ export const SKILL = `【スライド制作スキル v2.4（シアニン式ス�
 ■ 直し
 9. 「◯枚目を…」は slides__feedback に書き、その枚だけ描き直す。見た目についての指示がその1枚だけで終わらないもの（色・絵の作り・密度など）は、rules と見本も直し、描き終えた枚をそろえ直す対象にする
 10. 音声でまとめて直すとき：文字起こしの原文を残したまま、枚ごとの直し・全体の決まり・残すもの・OK・対象があいまいなもの に分ける。番号とタイトルの両方で照らし合わせる（話した順とデッキの番号を混ぜない）。対象がはっきりしたものは slides__feedback、全体の決まりは slides__set_tone。あいまいなものだけまとめて聞き、はっきりしたものは先に進める。数字・名前・否定を推測で直さない。「このままで」と言われた枚だけ ok=true にし、好意的な感想を他の枚の OK に広げない。終わったら「番号／変えたこと／残したもの／保留」を短く返す
-11. 全部の枚が ok になったら slides__set_status で done にする。Google スライドが要るときは slides__export_gslides（配置表の無い枚は画像1枚で出るので、先に layout.missing を埋める）
+11. 回との結び：slides__start は、同じマップから作ったコンテンツくんのセミナーの回が1件なら自動で結ぶ。複数なら post_candidates を見せて Naoki に聞き slides__link_post。結んでおくと、書き出した Google スライドの住所が回のリンクに入る。シアニンが「前に作った◯◯のスライドを参考に」と言ったら slides__find_material の from=slides で探して見せる
+12. 全部の枚が ok になったら slides__set_status で done にする。Google スライドが要るときは slides__export_gslides（配置表の無い枚は画像1枚で出るので、先に layout.missing を埋める）
 見た目（rules）はデッキごと。同じデッキの中では変えず、変えるときは見本ごと変えて描き終えた枚をそろえ直す。`;
 
 export const newId = () => crypto.randomUUID();
@@ -182,6 +187,43 @@ export function applyTone(d: Deck, t: ToneItem, redraw: boolean): Deck {
 }
 async function loadTones(env: Env): Promise<ToneItem[]> { return ((await env.OAUTH_KV.get(TONES_KEY, "json")) as ToneItem[] | null) || []; }
 
+/** v1.100.0（便6）：memo_links に Google スライドの住所を入れる（同じ名前の行は差し替え・ほかの行はそのまま） */
+export const GSLIDES_LABEL = "Google スライド";
+export function withGslidesLink(links: unknown, url: string): { url: string; label: string }[] {
+  const arr = (Array.isArray(links) ? links : []).filter((l): l is { url: string; label?: string } => !!l && typeof (l as { url?: unknown }).url === "string");
+  return [...arr.filter(l => l.label !== GSLIDES_LABEL && !/^https:\/\/docs\.google\.com\/presentation\//.test(l.url)).map(l => ({ url: l.url, label: l.label || "" })), { url, label: GSLIDES_LABEL }];
+}
+/** 過去のデッキの描いた枚から、言葉で探す（題名・見出し・本文・絵の指示） */
+export function searchSlides(decks: Deck[], q: string, limit: number): { deck_id: string; deck: string; no: number; title: string; image: string; gslides?: string }[] {
+  const words = q.split(/\s+/).filter(Boolean);
+  const out: { deck_id: string; deck: string; no: number; title: string; image: string; gslides?: string }[] = [];
+  for (const d of decks) for (const s of d.slides) {
+    if (!s.image) continue;
+    const hay = `${d.title} ${s.title} ${s.body} ${s.visual}`;
+    if (words.length && !words.every(w => hay.includes(w))) continue;
+    out.push({ deck_id: d.id, deck: d.title, no: s.no, title: s.title, image: s.image.url, ...(d.gslides ? { gslides: d.gslides.url } : {}) });
+    if (out.length >= limit) return out;
+  }
+  return out;
+}
+type PostRow = { id: number | string; title: string | null; datetime: string | null; mm_url: string | null; memo_links: unknown };
+async function seminarPostsOfMap(env: Env, mapId: string): Promise<PostRow[]> {
+  const uid = encodeURIComponent(env.NAOKI_UID);
+  const ra = await fetch(`${env.SUPABASE_URL}/rest/v1/accounts?select=custom_post_types&user_id=eq.${uid}`, { headers: sbHead(env) });
+  if (!ra.ok) return [];
+  const keys = seminarKeys(await ra.json());
+  if (!keys.length) return [];
+  const inList = encodeURIComponent(keys.map(k => `"${k.replace(/"/g, "")}"`).join(","));
+  const rp = await fetch(`${env.SUPABASE_URL}/rest/v1/posts?select=id,title,datetime,mm_url,memo_links&user_id=eq.${uid}&post_type=in.(${inList})&mm_url=like.*${encodeURIComponent(mapId)}*`, { headers: sbHead(env) });
+  return rp.ok ? (await rp.json()) as PostRow[] : [];
+}
+async function readPost(env: Env, id: string): Promise<PostRow | null> {
+  if (!/^\d{1,20}$/.test(id)) return null;
+  const r = await fetch(`${env.SUPABASE_URL}/rest/v1/posts?select=id,title,datetime,mm_url,memo_links&user_id=eq.${encodeURIComponent(env.NAOKI_UID)}&id=eq.${id}`, { headers: sbHead(env) });
+  return r.ok ? ((await r.json()) as PostRow[])[0] || null : null;
+}
+const postRef = (r: PostRow) => ({ id: String(r.id), title: r.title || "（題なし）", ...(r.datetime ? { date: r.datetime.slice(0, 10) } : {}) });
+
 export function applyPlan(deck: Deck, plan: Omit<Slide, "state" | "no" | "image">[], ok: boolean): Deck {
   const old = new Map(deck.slides.map(s => [s.no, s]));
   const slides: Slide[] = plan.map((p, i) => {
@@ -286,14 +328,15 @@ const LayoutItemZ = z.discriminatedUnion("type", [
   z.object({ type: z.literal("image"), ...Box, src: z.string().max(500).describe("art:N（今回渡した字の無い絵）・material:N（その枚の素材）・https の住所") }),
 ]);
 
-export const SLIDE_TOOLS = ["slides__save_tone", "slides__list_tones", "slides__switch_tone", "slides__find_material", "slides__add_material", "slides__start", "slides__list", "slides__get", "slides__put_plan", "slides__set_tone", "slides__put_image", "slides__put_layout", "slides__feedback", "slides__set_status", "slides__export_gslides"] as const;
+export const SLIDE_TOOLS = ["slides__link_post", "slides__save_tone", "slides__list_tones", "slides__switch_tone", "slides__find_material", "slides__add_material", "slides__start", "slides__list", "slides__get", "slides__put_plan", "slides__set_tone", "slides__put_image", "slides__put_layout", "slides__feedback", "slides__set_status", "slides__export_gslides"] as const;
 
 export function registerSlideTools(server: McpServer, env: Env): void {
   server.tool("slides__start",
     "思考整理くんのマップからスライドの台帳（1 デッキ）を作る。map_id はマップの id か住所。前のデッキの見た目を引き継ぐときは tone_from に前のデッキの id。作ったら同じ返り値の skill（スライド制作スキル）の手順どおりに進める。戻り値: { ok, deck, summary, next_to_draw, skill }",
     { map_id: z.string().min(1).max(300), title: z.string().min(1).max(120), tone_name: z.string().max(60).optional(), tone_rules: z.string().max(8000).optional().describe("色・字・余白・飾りの決まり"),
       tone_from: z.string().uuid().optional().describe("見た目を引き継ぐ前のデッキの id（決まりと見本の画像を写す）"),
-      tone_id: z.string().max(60).optional().describe("トーンの棚から選ぶ（slides__list_tones の id か名前）。tone_from より優先") },
+      tone_id: z.string().max(60).optional().describe("トーンの棚から選ぶ（slides__list_tones の id か名前）。tone_from より優先"),
+      post_id: z.string().max(24).optional().describe("コンテンツくんのセミナーの回の番号（省くと、同じマップから作った回が 1 件だけなら自動で結ぶ）") },
     async (a) => {
       const id = newId(), at = nowIso();
       const src = a.tone_from ? await loadDeck(env, a.tone_from) : null;
@@ -305,8 +348,12 @@ export function registerSlideTools(server: McpServer, env: Env): void {
           ...(src ? { refs: anchorImages(src).map(x => ({ url: x.url, note: `前のデッキ「${src.title}」${x.no ? `${x.no}枚目` : ""}${x.title ? `「${x.title}」` : x.note ? `（${x.note}）` : ""}`.slice(0, 200) })) } : {}) },
         status: "plan", slides: [], created_at: at, updated_at: at, log: [`${at} 作った`] };
       if (shelf) d.tone = { name: shelf.name, rules: shelf.rules, anchors: [], refs: shelf.images };
+      // v1.100.0：どの回のスライドかを結ぶ（post_id が無ければ、同じマップから作ったセミナーの回が 1 件だけのとき自動で）
+      let candidates: { id: string; title: string; date?: string }[] = [];
+      if (a.post_id) { const r = await readPost(env, a.post_id); if (!r) return ok({ ok: false, error: `コンテンツくんの回 ${a.post_id} が見つかりません` }); d.post = postRef(r); }
+      else if (m) { const rows = await seminarPostsOfMap(env, m[0]).catch(() => []); if (rows.length === 1) d.post = postRef(rows[0]); else candidates = rows.map(postRef); }
       await saveDeck(env, d);
-      return ok(view(d));
+      return ok({ ...view(d), ...(candidates.length ? { post_candidates: candidates, note: "同じマップから作ったセミナーの回が複数あります。どの回か Naoki に聞いて slides__link_post で結ぶ" } : {}) });
     });
   server.tool("slides__list", "スライドの台帳の一覧（新しい順）。続きをするデッキを探すときに使う。戻り値: { ok, decks: [{ id, title, at }] }", {},
     async () => ok({ ok: true, decks: ((await env.OAUTH_KV.get(INDEX_KEY, "json")) as unknown[]) || [] }));
@@ -394,6 +441,16 @@ export function registerSlideTools(server: McpServer, env: Env): void {
     await saveDeck(env, d);
     return ok({ ok: true, slide: { no: s.no, layout: { v, image_v: s.layout.image_v, items: r.items.length } }, errors: [] });
   });
+  server.tool("slides__link_post", "デッキを、コンテンツくんのセミナーの回に結ぶ（v1.100.0）。結ぶと、書き出した Google スライドの住所がその回のリンクに入る。post_id を空にすると外す。戻り値: { ok, post }",
+    { deck_id: z.string().uuid(), post_id: z.string().max(24) },
+    async (a) => {
+      const d = await loadDeck(env, a.deck_id);
+      if (!a.post_id) { delete d.post; await saveDeck(env, d); return ok({ ok: true, post: null }); }
+      const r = await readPost(env, a.post_id);
+      if (!r) return ok({ ok: false, error: `コンテンツくんの回 ${a.post_id} が見つかりません` });
+      d.post = postRef(r); d.log = [...d.log, `${nowIso()} 回「${d.post.title}」に結んだ`].slice(-50);
+      await saveDeck(env, d); return ok({ ok: true, post: d.post });
+    });
   server.tool("slides__save_tone", "今のデッキの見た目（決まり rules と見本の画像）を、名前を付けてトーンの棚に入れる（v1.99.1）。同じ名前があれば上書き。シアニンが「このトーンを残して」と言ったときに使う。戻り値: { ok, tone }",
     { deck_id: z.string().uuid(), name: z.string().min(1).max(60) },
     async (a) => {
@@ -415,9 +472,15 @@ export function registerSlideTools(server: McpServer, env: Env): void {
       await saveDeck(env, d); return ok(view(d));
     });
   server.tool("slides__find_material",
-    "スライドに入れる素材の画像を探す（v1.99.0）。いま探せるのはスワイプくん（参考のポスト・note・LP などのスクショ）。q は題・抜粋・本文の言葉（空なら新しい順）。label でラベルを含むものに絞れる。画像のある件だけ返す。選んだら slides__add_material でその枚に入れる。マーケくんの実績の棚・メディアの棚はまだ探せない（載せてよい範囲の確かめが要るため）。戻り値: { ok, count, items: [{ source, id, title, image, source_url, labels }] }",
-    { q: z.string().max(100).optional(), label: z.string().max(40).optional(), limit: z.number().int().min(1).max(30).optional() },
+    "スライドに入れる素材の画像を探す（v1.99.0）。from＝swipe（スワイプくん：参考のポスト・note・LP などのスクショ・既定）／slides（過去に作ったデッキの描いた枚・v1.100.0）。過去の枚は、素材（そのまま置く）・参考デザイン（set_tone の inspire）・台本の参考（中身を流用）に使える。q は題・抜粋・本文の言葉（空なら新しい順）。label でラベルを含むものに絞れる。画像のある件だけ返す。選んだら slides__add_material でその枚に入れる。マーケくんの実績の棚・メディアの棚はまだ探せない（載せてよい範囲の確かめが要るため）。戻り値: { ok, count, items: [{ source, id, title, image, source_url, labels }] }",
+    { q: z.string().max(100).optional(), label: z.string().max(40).optional(), limit: z.number().int().min(1).max(30).optional(), from: z.enum(["swipe", "slides"]).optional() },
     async (a) => {
+      if (a.from === "slides") {
+        const idx = (((await env.OAUTH_KV.get(INDEX_KEY, "json")) as { id: string }[]) || []).slice(0, 40);
+        const decks = (await Promise.all(idx.map(x => loadDeck(env, x.id).catch(() => null)))).filter((x): x is Deck => !!x);
+        const items = searchSlides(decks, (a.q || "").trim(), a.limit || 10).map(x => ({ source: "slides", ...x }));
+        return ok({ ok: true, count: items.length, items });
+      }
       const clean = (v: string) => v.replace(/[,()*%\\]/g, " ").trim();
       const parts: string[] = [];
       const q = clean(a.q || "");
@@ -463,7 +526,7 @@ export function registerSlideTools(server: McpServer, env: Env): void {
       await saveDeck(env, d); return ok({ ok: true, slide: s, summary: summary(d) });
     });
   server.tool("slides__export_gslides",
-    "デッキを Google スライドに書き出す（Naoki のドライブ「スライド」フォルダ）。配置表（put_layout）のある枚は字・面・線を直せる形で、無い枚と配置表が古い枚は描いた PNG を 1 枚の画像として置く。最後に見本の枚から作ったひな形（見出し・テキストの入力欄と面・線だけ）を足す。only_ok=true で OK の枚だけ。書き出すたびに新しいファイルを作る（前のファイルは消さない）。戻り値: { ok, url, slides, editable, image_only, templates }",
+    "デッキを Google スライドに書き出す（Naoki のドライブ「スライド」フォルダ）。回が結ばれていれば、コンテンツくんの回のリンクに住所を入れる（書き出し直すと差し替え）。配置表（put_layout）のある枚は字・面・線を直せる形で、無い枚と配置表が古い枚は描いた PNG を 1 枚の画像として置く。最後に見本の枚から作ったひな形（見出し・テキストの入力欄と面・線だけ）を足す。only_ok=true で OK の枚だけ。書き出すたびに新しいファイルを作る（前のファイルは消さない）。戻り値: { ok, url, slides, editable, image_only, templates }",
     { deck_id: z.string().uuid(), only_ok: z.boolean().optional(), templates: z.boolean().optional().describe("ひな形を足す（既定 true）") },
     async (a) => {
       const d = await loadDeck(env, a.deck_id);
@@ -473,8 +536,17 @@ export function registerSlideTools(server: McpServer, env: Env): void {
       if (!env.ZOOM_ARCHIVE?.createSlidesDeck) return ok({ ok: false, error: "zoom-to-youtube への結び（createSlidesDeck）がありません。zoom-to-youtube を先に本番へ出してください" });
       const out = await env.ZOOM_ARCHIVE.createSlidesDeck({ title: `${d.title}（${new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 16).replace("T", " ")}）`, slides: plan.map(p => ({ items: p.items })), templates: tmpls.map(t => ({ items: t.items })) }) as { ok?: boolean; url?: string; error?: string };
       if (!out?.ok) return ok({ ok: false, error: out?.error || "書き出しに失敗しました" });
+      d.gslides = { url: String(out.url), at: nowIso() };
       d.log = [...d.log, `${nowIso()} Google スライドへ書き出し ${plan.length} 枚`].slice(-50); await saveDeck(env, d);
-      return ok({ ok: true, url: out.url, slides: plan.length, editable: plan.filter(p => p.editable).map(p => p.no), image_only: plan.filter(p => !p.editable).map(p => p.no), templates: tmpls.length });
+      let post_link = "回が結ばれていないので、コンテンツくんには書いていない（slides__link_post で結ぶ）";
+      if (d.post) {
+        const r = await readPost(env, d.post.id);
+        if (r) {
+          const res = await fetch(`${env.SUPABASE_URL}/rest/v1/posts?id=eq.${d.post.id}&user_id=eq.${encodeURIComponent(env.NAOKI_UID)}`, { method: "PATCH", headers: { ...sbHead(env), "Content-Type": "application/json", Prefer: "return=minimal" }, body: JSON.stringify({ memo_links: withGslidesLink(r.memo_links, String(out.url)) }) });
+          post_link = res.ok ? `コンテンツくんの回「${d.post.title}」のリンクに入れた` : `コンテンツくんへ書けなかった（${res.status}）`;
+        } else post_link = "結んだ回が見つからない（消された？）";
+      }
+      return ok({ ok: true, url: out.url, post_link, slides: plan.length, editable: plan.filter(p => p.editable).map(p => p.no), image_only: plan.filter(p => !p.editable).map(p => p.no), templates: tmpls.length });
     });
   server.tool("slides__set_status", "デッキの状態を変える（done＝全部の枚が ok になったとき）。戻り値: { ok, deck }",
     { deck_id: z.string().uuid(), status: z.enum(["plan", "plan_ok", "drawing", "done"]) },
