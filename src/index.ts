@@ -548,6 +548,7 @@
  * v1.47.0（2026-10-26 開発部・X攻略くん 1便目）：xbunseki__get_week と xbunseki__get_account の相手ごとの欄を、画面の書く窓の 3 段（施策の特徴・分析・仮説）の名前で返すようにした。施策の特徴は memo、無い回は層ごとに書いた分を「層の名前：文」で並べる（xbunseki-core の featOf）。分析は ana、仮説は use_text。層ごとに書いた分は「層ごとに書いた分」として添える。道具の名前は変えていない。試験は test/xbunseki-core.test.ts。設定の追加 0 個。
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
+ * v1.98.0（2026-11-14 開発部・スライド制作 便4・作る前の 1 枚に Naoki OK 11:49）：slides__put_layout（1 枚を配置表で書き戻す：字＝text・面＝rect・線＝line・字の無い絵と素材＝image。絵は files で渡し R2 の /slides/img/ に置く）と slides__export_gslides（配置表から Google スライドを作る。中身は zoom-to-youtube 第36版の createSlidesDeck・結び ZOOM_ARCHIVE。配置表の無い枚は PNG 1 枚で出す。見本の枚からひな形を足す）。slides__get が layout（with_layout・stale・missing）を返す。スキル v2.2：PNG と一緒に配置表を入れる。試験は test/slides.test.ts。設定の追加 0 個。zoom-to-youtube を先に本番へ出すこと。
  * v1.97.0（2026-11-14 開発部・スライド制作 便2・作る前の 1 枚に Naoki OK 11:35）：思考整理くんの枝に貼った画像をスライドの素材にする。mindmap__get_map の各行に (画像 住所)・「スライドの指示」（種類・参考・デザイン）を出し、戻り値に 画像 の一覧。slides__put_plan で node_ids の枝とその下の枝の画像を、その枚の materials へ自動で入れる（同じ画像を 2 枚に入れない・1 枚 6 つまで）。スキル v2.1：素材は実物を開いて画像そのものを置き、描き直さない。画像は Supabase の公開の置き場 mindmap（画面と同じ住所）。中身は src/mindmap-core.ts・src/slides.ts、試験は test/slides.test.ts。設定の追加 0 個。
  * v1.96.0（2026-11-14 開発部・Naoki「GPTと色々やった結果」10:39 → 1 枚に OK 10:41）：スライド制作スキルを v2 に書き直した（GPT と仕上げた 24・35 枚目のやり方：具体化の手順・字はフォントで組み絵だけ生成・PDF と PNG を描き出して確かめる・見た目の直しは決まりと見本ごと・音声でまとめて直す流れ）。slides__get が見本の画像の住所 anchor_images を返し、slides__start の tone_from で前のデッキの決まりと見本を引き継げる。決まりの上限を 8000 字へ。中身は src/slides.ts、試験は test/slides.test.ts。設定の追加 0 個。
  * v1.95.0（2026-11-14 開発部・Naoki「リマインドきた。これ件名とか、本文に詳細載せたりできる？」09:32）：TaskMaster のリマインドのメールの件名を「【今日から】タスク名」「【期限切れ N 日】タスク名 ほか N 件」にし、本文にタスクごとの中身（プロジェクト・着手と期限・なんのために・完了条件・進め方〈テンプレ付きはテンプレの進め方〉・チェックの済み/未・メモ・リンク）を足した。送るときだけプロジェクトとテンプレを読む。中身は src/task-remind.ts、試験は test/task-remind.test.ts。設定の追加 0 個。
@@ -700,6 +701,8 @@ export interface Env {
     remove(recId: string, confirm: boolean): Promise<unknown>;
     // v1.80.0：コンテンツくんの依頼の画像をドライブへ写す（zoom-to-youtube 第27版）
     saveContentImages?(input: { post_id: string; title: string; date?: string | null; sub: string; images: { url: string; mime?: string }[] }): Promise<unknown>;
+    // v1.98.0：スライドの台帳の配置表から Google スライドを作る（zoom-to-youtube 第38版）
+    createSlidesDeck?(input: { title: string; slides: { items: unknown[] }[]; templates?: { items: unknown[] }[] }): Promise<unknown>;
   };
   // Zeus
   ZEUS_API_BASE: string;

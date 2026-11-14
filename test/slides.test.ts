@@ -1,7 +1,7 @@
 // v1.94.0：スライドの台帳。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, type Deck } from "../src/slides.js";
+import { applyPlan, nextToDraw, summary, parseDeck, handleSlideImage, SKILL, anchorImages, withBranchImages, resolveLayout, layoutStatus, exportPlan, templateOf, type Deck, type LayoutItem } from "../src/slides.js";
 import { toOutline, imagesOf, splitLink } from "../src/mindmap-core.js";
 
 const base = (): Deck => ({ v: 1, id: "11111111-2222-3333-4444-555555555555", title: "t", map_id: "m", map_url: "u",
@@ -80,4 +80,34 @@ test("枝の画像：get_map に住所とスライドの指示が出て、台本
   assert.equal(plan[2].materials!.length, 0);
   const again = withBranchImages(plan, nodes, S);
   assert.equal(again[0].materials!.length, 1); // 同じ住所は足さない
+});
+
+test("配置表：src を住所に直し、はみ出しと空の字を止める・書き出しの準備（v1.98.0）", () => {
+  const items: LayoutItem[] = [
+    { type: "rect", x: 0, y: 0, w: 1920, h: 1080, fill: "#FFFFFF" },
+    { type: "text", x: 96, y: 60, w: 1200, h: 110, text: "ガワ・仕組み・スキルをそろえる", size: 84, weight: 700, color: "#192731" },
+    { type: "line", x: 96, y: 180, w: 540, h: 1, color: "#BDCCD5", stroke_w: 5 },
+    { type: "image", x: 120, y: 400, w: 500, h: 400, src: "art:1" },
+    { type: "image", x: 700, y: 400, w: 500, h: 400, src: "material:1" },
+    { type: "text", x: 96, y: 300, w: 400, h: 60, runs: [{ text: "ガワ：", color: "#0875B1" }, { text: "LP" }], size: 44 },
+  ];
+  const r = resolveLayout(items, ["https://w/art1.png"], [{ url: "https://s/m1.png" }]);
+  assert.deepEqual(r.errors, []);
+  assert.equal((r.items[3] as any).url, "https://w/art1.png");
+  assert.equal((r.items[4] as any).url, "https://s/m1.png");
+  const bad = resolveLayout([{ type: "image", x: 0, y: 0, w: 10, h: 10, src: "art:2" }, { type: "text", x: 1900, y: 0, w: 200, h: 10, size: 20 }], [], []);
+  assert.equal(bad.errors.length, 3);
+  const t = templateOf(r.items);
+  assert.equal(t.filter(i => i.type === "image").length, 0);
+  assert.deepEqual(t.filter(i => i.type === "text").map(i => (i as any).text), ["見出しを入れる", "テキストを入れる"]);
+
+  const d = applyPlan(base(), [1, 2, 3].map(n => ({ role: "本題" as const, title: `s${n}`, body: "", visual: "", node_ids: [], materials: [] })), true);
+  d.slides[0].image = { file: "001-v2-aaaaaaaa.png", url: "u1", v: 2, at: "t" }; d.slides[0].layout = { v: 1, at: "t", image_v: 2, items: r.items };
+  d.slides[1].image = { file: "002-v2-bbbbbbbb.png", url: "u2", v: 2, at: "t" }; d.slides[1].layout = { v: 1, at: "t", image_v: 1, items: r.items };
+  d.slides[2].image = { file: "003-v1-cccccccc.png", url: "u3", v: 1, at: "t" }; d.slides[2].state = "ok";
+  assert.deepEqual(layoutStatus(d), { with_layout: [1], stale: [2], missing: [3] });
+  const ex = exportPlan(d);
+  assert.deepEqual(ex.map(e => [e.no, e.editable]), [[1, true], [2, false], [3, false]]);
+  assert.equal((ex[2].items[0] as any).url, "u3");
+  assert.deepEqual(exportPlan(d, true).map(e => e.no), [3]);
 });
