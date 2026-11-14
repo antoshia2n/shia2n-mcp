@@ -1,7 +1,7 @@
 // v1.92.0：TaskMaster のリマインド。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pickReminders, buildRemindMail, slotOf, jstSlot } from "../src/task-remind.js";
+import { pickReminders, buildRemindMail, slotOf, jstSlot, detailOf } from "../src/task-remind.js";
 import { buildNewTask } from "../src/taskmaster.js";
 
 const today = "2026-11-14";
@@ -30,8 +30,8 @@ test("期限切れは昨日以前のものを、遅れの大きい順に（今�
 test("メールの中身・知らせるものが無ければ null", () => {
   const m = buildRemindMail({ starts: [{ id: "a", title: "構成を作る", day: today, late: 0 }], overdue: [{ id: "y", title: "スライド", day: "2026-11-10", late: 4 }] }, today);
   assert.ok(m);
-  assert.equal(m!.subject, "TaskMaster のリマインド：今日から 1 件・期限切れ 1 件");
-  assert.match(m!.text, /・スライド（11\/10（火）が期限・4 日過ぎ）/);
+  assert.equal(m!.subject, "【期限切れ 4 日】スライド ほか 1 件");
+  assert.match(m!.text, /◆ スライド（11\/10（火）が期限・4 日過ぎ）/);
   assert.match(m!.text, /https:\/\/taskmaster\.shia2n\.jp\/\?task=a/);
   assert.equal(buildRemindMail({ starts: [], overdue: [] }, today), null);
 });
@@ -62,4 +62,19 @@ test("着手は選んだ時刻の枠だけ（空なら 7:00）・期限切れは
   assert.deepEqual([at21.starts.map(r => r.id), at21.overdue.length], [["b"], 0]);
   assert.equal(buildNewTask({ title: "t", remindAt: "21:00" }).remindAt, "21:00");
   assert.equal("remindAt" in buildNewTask({ title: "t", remindAt: "21:15" }), false);
+});
+
+test("件名は 1 件ならタスクの名前・本文にタスクの中身", () => {
+  const t = { id: "a", title: "構成を作る", projectId: "p1", startDate: today, deadline: "2026-11-16", why: "水曜の回のため", doneWhen: "見出しが並ぶ", templateId: "tp",
+    howto: "古い進め方", notes: "前回の反省", subtasks: [{ title: "枝を見る", done: true }, { text: "並べる" }], links: [{ url: "https://example.com/x", label: "" }, { url: "javascript:x" }] };
+  const d = detailOf(t, { projects: new Map([["p1", "シアラボ｜運営"]]), howtoOf: new Map([["tp", "テンプレの進め方"]]) });
+  assert.equal(d.project, "シアラボ｜運営");
+  assert.equal(d.howto, "テンプレの進め方");
+  assert.deepEqual(d.checks, [{ title: "枝を見る", done: true }, { title: "並べる", done: false }]);
+  assert.deepEqual(d.links, ["https://example.com/x"]);
+  const m = buildRemindMail({ starts: [{ id: "a", title: "構成を作る", day: today, late: 0, detail: d }], overdue: [] }, today)!;
+  assert.equal(m.subject, "【今日から】構成を作る");
+  for (const w of ["プロジェクト：シアラボ｜運営", "なんのために：水曜の回のため", "完了条件：見出しが並ぶ", "テンプレの進め方", "☑ 枝を見る", "☐ 並べる", "前回の反省", "https://example.com/x"]) assert.ok(m.text.includes(w), w);
+  assert.ok(m.html.includes("チェック（1/2）"));
+  assert.equal(detailOf({ id: "b", title: "x" }).project, undefined);
 });
