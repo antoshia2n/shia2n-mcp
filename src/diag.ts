@@ -202,6 +202,12 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
     );
   }
 
+  // v1.106.1（2026-11-15）：?check=skills_write のときだけ、書く鍵が shia2n-skills に書けるかを確かめる。
+  // 一時の枝を作ってすぐ消す（中身は変えない）。鍵の値は返さない。
+  if (new URL(request.url).searchParams.get("check") === "skills_write") {
+    return Response.json({ app: "shia2n-mcp", version: APP_VERSION, skills_write: await checkSkillsWrite(env) }, { headers: { "Cache-Control": "no-store" } });
+  }
+
   // 環境変数の存在確認（値は絶対に返さない）
   const envStatus: Record<string, "present" | "missing"> = {};
   for (const key of ENV_KEYS) {
@@ -294,4 +300,19 @@ export async function handleDiag(request: Request, env: Env): Promise<Response> 
       },
     }
   );
+}
+
+async function checkSkillsWrite(env: Env): Promise<string> {
+  const key = env.GITHUB_TOKEN;
+  if (!key) return "鍵が無い";
+  const api = "https://api.github.com/repos/antoshia2n/shia2n-skills";
+  const headers = { Authorization: `Bearer ${key}`, Accept: "application/vnd.github+json", "User-Agent": "shia2n-mcp", "Content-Type": "application/json" };
+  const main = await fetch(`${api}/git/ref/heads/main`, { headers });
+  if (!main.ok) return `読めない（${main.status}）`;
+  const sha = ((await main.json()) as any).object?.sha;
+  const ref = `claude/write-check-${Date.now()}`;
+  const mk = await fetch(`${api}/git/refs`, { method: "POST", headers, body: JSON.stringify({ ref: `refs/heads/${ref}`, sha }) });
+  if (!mk.ok) return `書けない（${mk.status}）`;
+  const del = await fetch(`${api}/git/refs/heads/${ref}`, { method: "DELETE", headers });
+  return del.ok ? "書ける" : `書けるが一時の枝を消せなかった（${del.status}・${ref}）`;
 }
