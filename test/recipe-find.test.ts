@@ -25,7 +25,7 @@ test("2 文字ずつの単位と英数字の語", () => {
 });
 
 test("10選の依頼には 10選×小ボケ を勧め、レビューを補強に出す（入っているスキルは出さない）", () => {
-  const r = findRecipes("副業初心者がやりがちなミス10選の図解を作って", recipes, skills);
+  const r = findRecipes("副業初心者がやりがちなミス10選の図解を作って。出す前にレビューも", recipes, skills);
   assert.equal(r.おすすめ[0].name, "shia2n-10sen-koboke");
   assert.ok(r.補強の候補.some((x) => x.name === "shia2n-x-review"));
   assert.ok(!r.補強の候補.some((x) => x.name === "shia2n-koboke" || x.name === "shia2n-zukai-10sen"));
@@ -50,4 +50,16 @@ test("何も当たらなければ聞き返す", () => {
   const r = findRecipes("晩ごはんの献立", recipes, skills);
   assert.equal(r.おすすめ.length + r.スキルだけ.length, 0);
   assert.match(r.聞き方, /もう少し教えてください/);
+});
+
+test("助詞（を作って）だけでは当てない。スキルのほうが近ければスキルを勧める", () => {
+  const r = findRecipes("セミナーのスライドを作って", recipes, [...skills, K("shia2n-slide-designer", "セミナースライド", "シアニン式のデザインで、セミナーのスライドを作る・直す", ["スタイル", "手順"], ["セミナー"])]);
+  assert.equal(r.おすすめ.length, 0);
+  assert.equal(r.スキルだけ[0].name, "shia2n-slide-designer");
+});
+
+test("同じカテゴリのスキル（スタイルを 2 つ）は補強に出さない", () => {
+  const r = findRecipes("引用ポストに添える構造図解。10選の図解っぽさも", recipes, skills);
+  assert.equal(r.おすすめ[0].name, "shia2n-kozo-standard");
+  assert.ok(!r.補強の候補.some((x) => x.name === "shia2n-zukai-10sen"));
 });
