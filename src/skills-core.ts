@@ -7,6 +7,8 @@
 
 export const SKILLS_REPO = "antoshia2n/shia2n-skills";
 export const SKILLS_BRANCH = "main";
+/** 生徒に出している版だけを置く枝（2026-11-15 v1.102.0） */
+export const SKILLS_PUBLIC_BRANCH = "public";
 export const META_FIELDS = ["version", "where", "audience", "owner", "updated"] as const;
 
 export type SkillMeta = {
@@ -17,6 +19,8 @@ export type SkillMeta = {
   audience: string[];
   owner: string | null;
   updated: string | null;
+  purpose: string | null;
+  public_version: string | null;
   missing: string[];
 };
 
@@ -49,6 +53,8 @@ export function parseSkillHead(text: string, folder: string): SkillMeta | null {
     audience: list(meta.audience),
     owner: meta.owner || null,
     updated: meta.updated || null,
+    purpose: meta.purpose || null,
+    public_version: meta.public_version || null,
     missing,
   };
 }
