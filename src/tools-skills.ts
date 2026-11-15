@@ -18,8 +18,12 @@ const readKey = (env: Env) => env.GITHUB_READ_TOKEN || env.GITHUB_TOKEN;
 export async function gh(env: Env, path: string, raw = false): Promise<{ ok: true; body: any } | { ok: false; status: number; message: string }> {
   const key = readKey(env);
   if (!key) return { ok: false, status: 0, message: "鍵が設定されていません（GITHUB_READ_TOKEN か GITHUB_TOKEN）" };
-  const r = await fetch(`https://api.github.com/repos/${SKILLS_REPO}${path}`, {
-    headers: { Authorization: `Bearer ${key}`, Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json", "User-Agent": "shia2n-mcp" },
+  // v1.107.2：枝の名前（main・public）で読むときは、毎回ちがう住所にして途中の置き場の写しを使わない。
+  // 2026-11-16 本番で、保存の 10 分後も棚に前の中身（前のコミット）が出た。コミット（40 桁）で読むときは中身が変わらないので付けない
+  const pinned = /[?&]ref=[0-9a-f]{40}\b|\/(?:trees|commits)\/[0-9a-f]{40}\b/i.test(path);
+  const url = `https://api.github.com/repos/${SKILLS_REPO}${path}${pinned ? "" : `${path.includes("?") ? "&" : "?"}_=${Date.now()}`}`;
+  const r = await fetch(url, {
+    headers: { Authorization: `Bearer ${key}`, Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json", "User-Agent": "shia2n-mcp", "Cache-Control": "no-cache" },
     signal: AbortSignal.timeout(15000),
   });
   if (!r.ok) {
