@@ -59,3 +59,11 @@ test("使う場所の言い方をそろえて絞る", () => {
 test("近い名前", () => {
   assert.deepEqual(nearNames("marketing", ["shia2n-marketing-skills", "x-thread-pipeline"]), ["shia2n-marketing-skills"]);
 });
+
+test("v1.102.0：何に使うか・生徒の版を読む。無ければ null", () => {
+  const md = MD.replace('  updated: "2026-10-09"\n', '  updated: "2026-10-09"\n  purpose: "台本を作る"\n  public_version: "2.0"\n');
+  const m = parseSkillHead(md, "x")!;
+  assert.equal(m.purpose, "台本を作る");
+  assert.equal(m.public_version, "2.0");
+  assert.equal(parseSkillHead(MD, "x")!.public_version, null);
+});
