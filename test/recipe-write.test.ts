@@ -139,3 +139,61 @@ test("規格 1.0：表示名・ジャンル・カテゴリ・媒体・参照を�
   const t = parseSkillHead(`---\nname: a\nmetadata:\n  version: "1"\n  category: "スタイル, 手順"\n  refs: "b、c"\n---\n`, "a")!;
   assert.deepEqual([t.category, t.refs, t.title, t.genre], [["スタイル", "手順"], ["b", "c"], null, null]);
 });
+
+test("便 3：前の書き方の流れ（番号つき 1 行）を手順として読む", async () => {
+  const { parseFlow } = await import("../src/recipe-write-core.js");
+  const f = parseFlow(text);
+  assert.deepEqual(f.map((s) => s.title), ["そのまま残る本文"]);
+  let real: string;
+  try { real = readFileSync("/home/claude/shia2n-skills/recipes/shia2n-10sen-koboke/RECIPE.md", "utf8"); } catch { return; }
+  const r = parseFlow(real);
+  assert.equal(r.length, 6);
+  assert.match(r[0].title, /^参考（スワイプくんのポスト）/);
+});
+
+test("便 3：手順（題・説明・スキル・確認・プロンプト）を書いて読み戻すと同じ。ほかの節は残る", async () => {
+  const { renderFlow, replaceFlow, parseFlow } = await import("../src/recipe-write-core.js");
+  const steps = [
+    { title: "項目を決める", detail: "参考と中身を読む\n2 行目", skill: "shia2n-zukai-10sen", check: "シアニンが見る", prompt: "次の参考を読み、\n10 項目を出してください。" },
+    { title: "小ボケを出す", skill: "shia2n-koboke" },
+    { title: "仕上げ" },
+  ];
+  const f = renderFlow(steps, new Set(["shia2n-zukai-10sen", "shia2n-koboke"]));
+  assert.ok(f.ok);
+  if (!f.ok) return;
+  const doc = "---\nname: a\n---\n\n# レシピ\n\n## 流れ\n\n1. 古い\n\n## ぶつかったとき\n\n- そのまま\n";
+  const out = replaceFlow(doc, f.text);
+  assert.match(out, /## ぶつかったとき\n\n- そのまま/);
+  assert.doesNotMatch(out, /1\. 古い/);
+  const back = parseFlow(out);
+  assert.deepEqual(back.map((s) => [s.title, s.detail ?? null, s.skill ?? null, s.check ?? null, s.prompt ?? null]), [
+    ["項目を決める", "参考と中身を読む\n2 行目", "shia2n-zukai-10sen", "シアニンが見る", "次の参考を読み、\n10 項目を出してください。"],
+    ["小ボケを出す", null, "shia2n-koboke", null, null],
+    ["仕上げ", null, null, null, null],
+  ]);
+});
+
+test("便 3：レシピに無いスキル・題の無い手順・``` 入りのプロンプトは止める", async () => {
+  const { renderFlow } = await import("../src/recipe-write-core.js");
+  assert.deepEqual(renderFlow([{ title: "a", skill: "x" }], new Set(["y"])), { ok: false, error: "step_skill_not_in_recipe:x" });
+  assert.deepEqual(renderFlow([{ title: " " }]), { ok: false, error: "step_no_title:1" });
+  assert.deepEqual(renderFlow([{ title: "a", prompt: "```x```" }]), { ok: false, error: "prompt_has_fence:1" });
+});
+
+test("便 3：保存で表示名と流れが入り、版が上がる。流れを渡さなければ本文はそのまま", () => {
+  const r = writeRecipeText(text, { name: "shia2n-10sen-koboke", title: "10選×小ボケ（強）", uses: [{ skill: "shia2n-koboke", pin: "keep" }], flow: [{ title: "小ボケを出す", skill: "shia2n-koboke", prompt: "3 案出す" }] }, ctx());
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  const p = parseRecipeHead(r.text, "x")!;
+  assert.equal(p.title, "10選×小ボケ（強）");
+  assert.match(r.text, /### 1\. 小ボケを出す\n- スキル：shia2n-koboke\n\n```プロンプト\n3 案出す\n```/);
+  const n = writeRecipeText(text, { name: "shia2n-10sen-koboke", uses: [{ skill: "shia2n-koboke", pin: "keep" }] }, ctx());
+  assert.ok(n.ok && n.text.includes("1. そのまま残る本文"));
+});
+
+test("便 3：表示名から ID の案", async () => {
+  const { slugFrom } = await import("../src/recipe-write-core.js");
+  assert.equal(slugFrom("X Review Light"), "x-review-light");
+  assert.equal(slugFrom("小ボケ"), null);
+  assert.equal(slugFrom("10選 koboke"), "10-koboke");
+});

@@ -22,7 +22,7 @@ import { SKILLS_PUBLIC_BRANCH, SKILLS_REPO } from "./skills-core.js";
 import { audienceOpen, buildZip, studentAudience, type ZipEntry } from "./skills-zip.js";
 import { gh, readAll, writeHypotheses, writeSkillsFile } from "./tools-skills.js";
 import { CATEGORIES, GENRES, SKILLS_BRANCH, parseRecipeHead, recipeFolders } from "./skills-core.js";
-import { BASE_LATEST, STRENGTHS, writeRecipeText, type RecipeSaveInput } from "./recipe-write-core.js";
+import { BASE_LATEST, STRENGTHS, parseFlow, writeRecipeText, type RecipeSaveInput } from "./recipe-write-core.js";
 import { HYPOTHESIS_STATUSES, addHypothesis, hypothesisSections, updateHypothesis, type HypothesisStatus } from "./hypothesis-core.js";
 
 const HYPO_SKILL = "shia2n-x-review";
@@ -89,7 +89,7 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     const recipes = tree.ok ? await Promise.all(recipeFolders(tree.body.tree || []).map(async (n) => {
       const f = await gh(this.env, `/contents/recipes/${encodeURIComponent(n)}/RECIPE.md?ref=${ref}`, true);
       const r = f.ok ? parseRecipeHead(String(f.body), n) : null;
-      return r ? { name: n, purpose: r.purpose, version: r.version, updated: r.updated, audience: r.audience, uses: r.uses.map((u) => ({ skill: u.skill, version: u.version, pinned: !!u.commit, commit: u.commit ? u.commit.slice(0, 7) : null, priority: u.priority, strength: u.strength })), bad: r.bad }
+      return r ? { name: n, title: r.title, flow: f.ok ? parseFlow(String(f.body)) : [], purpose: r.purpose, version: r.version, updated: r.updated, audience: r.audience, uses: r.uses.map((u) => ({ skill: u.skill, version: u.version, pinned: !!u.commit, commit: u.commit ? u.commit.slice(0, 7) : null, priority: u.priority, strength: u.strength })), bad: r.bad }
         : { name: n, broken: true };
     })) : [];
     const hypotheses = hyp.ok ? hypothesisSections(String(hyp.body)).map((h) => ({ id: `H${h.id}`, title: h.title, status: h.status, body: h.body.slice(0, 4000) })) : [];

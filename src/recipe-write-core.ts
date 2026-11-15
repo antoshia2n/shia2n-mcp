@@ -17,7 +17,7 @@ export type RecipeUseInput = {
   pin: "keep" | "now" | "latest";
   strength?: string | null;
 };
-export type RecipeSaveInput = { name: string; purpose?: string | null; uses: RecipeUseInput[] };
+export type RecipeSaveInput = { name: string; purpose?: string | null; title?: string | null; uses: RecipeUseInput[]; flow?: FlowStep[] | null };
 /** 今の正本のスキル（版を決めるのに使う）と、いまのレシピの行（keep のとき使う） */
 export type RecipeWriteContext = {
   skills: Map<string, string | null>; // スキル名 → main の今の版
@@ -81,21 +81,29 @@ export function writeRecipeText(text: string | null, input: RecipeSaveInput, c: 
     lines.push(l);
   }
   const purpose = input.purpose != null ? oneLine(String(input.purpose)).slice(0, 120) : null;
+  const title = input.title != null ? oneLine(String(input.title)).slice(0, 60) : null;
+  let flowText: string | null = null;
+  if (input.flow != null) {
+    const f = renderFlow(input.flow, new Set(uses.map((u) => String(u.skill || "").trim())));
+    if (!f.ok) return { ok: false, error: f.error };
+    flowText = f.text;
+  }
 
   if (text === null) {
     if (!purpose) return { ok: false, error: "need_purpose" };
     const version = "1.0";
     const head = [
-      "---", `name: ${name}`, "metadata:", `  version: "${version}"`, `  purpose: "${purpose}"`,
+      "---", `name: ${name}`, "metadata:", ...(title ? [`  title: "${title}"`] : []), `  version: "${version}"`, `  purpose: "${purpose}"`,
       `  where: "claude.ai, Claude Code, GPT"`, `  audience: "本人, 事業部"`, `  owner: "コンテンツ制作"`, `  updated: "${c.date}"`,
       "skills:", ...lines, "---",
     ].join("\n");
     const body = [
-      "", `# レシピ：${purpose}`, "", "マーケくんの管理画面「スキル」の棚で作ったレシピ。流れは使いながら書き足す。", "",
+      "", `# レシピ：${title || purpose}`, "", "マーケくんの管理画面「スキル」の棚で作ったレシピ。流れは使いながら書き足す。", "",
       "## 流れ", "", ...uses.map((u, i) => `${i + 1}. ${u.skill} の手順で進める`), "",
       "## ぶつかったとき", "", "- 優先の順（上の行ほど優先）に従う", "",
     ].join("\n");
-    return { ok: true, text: head + "\n" + body, version };
+    const full = head + "\n" + body;
+    return { ok: true, text: flowText != null ? replaceFlow(full, flowText) : full, version };
   }
 
   const m = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(text);
@@ -111,8 +119,108 @@ export function writeRecipeText(text: string | null, input: RecipeSaveInput, c: 
   setMeta("version", version);
   setMeta("updated", c.date);
   if (purpose) setMeta("purpose", purpose);
+  if (title) setMeta("title", title);
   const block = /^skills:\s*\r?\n(?:[ \t]+.*(?:\r?\n|$))*/m;
   const newBlock = ["skills:", ...lines].join("\n");
   fm = block.test(fm) ? fm.replace(block, newBlock + "\n").replace(/\n+$/, "") : `${fm}\n${newBlock}`;
-  return { ok: true, text: `---\n${fm}\n---${m[2] || "\n"}${text.slice(m[0].length)}`, version };
+  const out = `---\n${fm}\n---${m[2] || "\n"}${text.slice(m[0].length)}`;
+  return { ok: true, text: flowText != null ? replaceFlow(out, flowText) : out, version };
+}
+
+/* ---------- 便 3（2026-11-16 Naoki OK 08:28）：レシピの「流れ」をワークフローにする ----------
+ * 本文の「## 流れ」を手順の並びとして読む・書く。手順 1 つ＝ 題・説明・使うスキル・人の確認・プロンプト。
+ * 書き方（AI がそのまま読める Markdown のまま）：
+ *   ### 1. 題
+ *   説明の文（何行でも）
+ *   - スキル：shia2n-koboke
+ *   - 確認：シアニンが 3〜5 案から選ぶ
+ *
+ *   ```プロンプト
+ *   （そのまま AI に渡す文）
+ *   ```
+ * 前の書き方（「1. 〜」の番号つきの 1 行ずつ）も読める。そのときは 1 行が 1 手順の題になる。
+ */
+export type FlowStep = { title: string; detail?: string | null; skill?: string | null; check?: string | null; prompt?: string | null };
+export const FLOW_HEAD = "## 流れ";
+const FENCE = "```";
+
+/** 本文から「## 流れ」の節（見出しの次から次の「## 」の前まで）を取り出す。無ければ null */
+function flowSection(body: string): { start: number; end: number; text: string } | null {
+  const m = /^## 流れ[^\n]*\n/m.exec(body);
+  if (!m) return null;
+  const start = m.index, from = m.index + m[0].length;
+  const next = /^## /m.exec(body.slice(from));
+  const end = next ? from + next.index : body.length;
+  return { start, end, text: body.slice(from, end) };
+}
+
+export function parseFlow(text: string): FlowStep[] {
+  const body = text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  const sec = flowSection(body);
+  if (!sec) return [];
+  const t = sec.text.replace(/\r\n/g, "\n");
+  if (/^### /m.test(t)) {
+    const parts = t.split(/^### /m).slice(1);
+    return parts.map((p) => {
+      const lines = p.split("\n");
+      const title = lines.shift()!.replace(/^\d+\.\s*/, "").trim();
+      const rest = lines.join("\n");
+      let prompt: string | null = null;
+      const pm = new RegExp(`^${FENCE}プロンプト\\s*\\n([\\s\\S]*?)\\n${FENCE}\\s*$`, "m").exec(rest);
+      let restNoPrompt = rest;
+      if (pm) { prompt = pm[1]; restNoPrompt = rest.slice(0, pm.index) + rest.slice(pm.index + pm[0].length); }
+      const skill = /^- スキル[：:]\s*(.+)$/m.exec(restNoPrompt)?.[1].trim() || null;
+      const check = /^- 確認[：:]\s*(.+)$/m.exec(restNoPrompt)?.[1].trim() || null;
+      const detail = restNoPrompt.split("\n").filter((l) => !/^- (スキル|確認)[：:]/.test(l)).join("\n").trim() || null;
+      return { title, detail, skill, check, prompt };
+    }).filter((s) => s.title);
+  }
+  return t.split("\n").map((l) => /^\s*\d+\.\s+(.+)$/.exec(l)?.[1].trim()).filter((x): x is string => !!x).map((title) => ({ title }));
+}
+
+const clean1 = (s: unknown, n: number) => String(s ?? "").replace(/[\r\n]+/g, " ").trim().slice(0, n);
+const cleanN = (s: unknown, n: number) => String(s ?? "").replace(/\r\n/g, "\n").trim().slice(0, n);
+
+/** 手順の並びを「## 流れ」の節の文にする。形が変なら理由 */
+export function renderFlow(steps: FlowStep[], skills?: Set<string>): { ok: true; text: string } | { ok: false; error: string } {
+  if (!Array.isArray(steps)) return { ok: false, error: "bad_flow" };
+  if (steps.length > 20) return { ok: false, error: "too_many_steps" };
+  const out: string[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i] || ({} as FlowStep);
+    const title = clean1(s.title, 80);
+    if (!title) return { ok: false, error: `step_no_title:${i + 1}` };
+    const detail = cleanN(s.detail, 1000).replace(/^### /gm, "").replace(/^## /gm, "");
+    const skill = clean1(s.skill, 80);
+    if (skill && skills && !skills.has(skill)) return { ok: false, error: `step_skill_not_in_recipe:${skill}` };
+    const check = clean1(s.check, 200);
+    const prompt = cleanN(s.prompt, 4000);
+    if (prompt.includes(FENCE)) return { ok: false, error: `prompt_has_fence:${i + 1}` };
+    out.push(`### ${i + 1}. ${title}`);
+    if (detail) out.push(detail);
+    if (skill) out.push(`- スキル：${skill}`);
+    if (check) out.push(`- 確認：${check}`);
+    if (prompt) out.push("", `${FENCE}プロンプト`, prompt, FENCE);
+    out.push("");
+  }
+  return { ok: true, text: out.join("\n") };
+}
+
+/** 全文の「## 流れ」の節を差し替える。無ければ最初の「## 」の前（無ければ末尾）に足す */
+export function replaceFlow(text: string, flowText: string): string {
+  const hm = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);
+  const head = hm ? hm[0] : "";
+  const body = text.slice(head.length);
+  const block = `${FLOW_HEAD}\n\n${flowText.trim()}\n\n`;
+  const sec = flowSection(body);
+  if (sec) return head + body.slice(0, sec.start) + block + body.slice(sec.end).replace(/^\n+/, "");
+  const first = /^## /m.exec(body);
+  if (first) return head + body.slice(0, first.index) + block + body.slice(first.index);
+  return head + body.replace(/\n*$/, "\n\n") + block;
+}
+
+/** 表示名から ID の案を作る（英字にできない字は落とす）。空になれば null */
+export function slugFrom(s: string): string | null {
+  const t = String(s || "").toLowerCase().normalize("NFKC").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-").slice(0, 60);
+  return t.length >= 2 ? t : null;
 }

@@ -115,7 +115,7 @@ export function nearNames(name: string, names: string[]): string[] {
  *  skills: の下の 1 行＝「- スキル名@版#コミット | 優先 1 | 強さ 標準」。優先・強さは省いてよい
  *  v1.106.0：「- スキル名@最新 | …」は版を固定せず main の最新を読む（commit は null・version は "最新"）。レビューのように外に合わせて動く基本スキル用 */
 export type RecipeUse = { skill: string; version: string; commit: string | null; priority: number | null; strength: string | null };
-export type RecipeMeta = { name: string; version: string | null; purpose: string | null; where: string[]; audience: string[]; owner: string | null; updated: string | null; uses: RecipeUse[]; bad: string[] };
+export type RecipeMeta = { name: string; title: string | null; version: string | null; purpose: string | null; where: string[]; audience: string[]; owner: string | null; updated: string | null; uses: RecipeUse[]; bad: string[] };
 
 export function parseRecipeHead(text: string, folder: string): RecipeMeta | null {
   const head = parseSkillHead(text, folder);
@@ -135,7 +135,7 @@ export function parseRecipeHead(text: string, folder: string): RecipeMeta | null
     uses.push({ skill: r[1], version: latest ? "最新" : r[2], commit: latest ? null : r[3].toLowerCase(), priority: pr ? Number(pr[1]) : null, strength: st ? st[1].trim() : null });
   }
   uses.sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
-  return { name: head.name, version: head.version, purpose: head.purpose, where: head.where, audience: head.audience, owner: head.owner, updated: head.updated, uses, bad };
+  return { name: head.name, title: head.title, version: head.version, purpose: head.purpose, where: head.where, audience: head.audience, owner: head.owner, updated: head.updated, uses, bad };
 }
 
 /** 木から recipes/<名前>/RECIPE.md の名前の並びを作る */
