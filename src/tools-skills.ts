@@ -1,4 +1,5 @@
 import { parseFlow } from "./recipe-write-core.js";
+import { findRecipes } from "./recipe-find-core.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
@@ -118,6 +119,28 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
           ok: true, channel: pin ? `ref ${pin.slice(0, 7)}` : channel || "latest", name: meta?.name || folder, purpose: meta?.purpose ?? null, version: meta?.version ?? null, public_version: meta?.public_version ?? null, where: meta?.where ?? [], audience: meta?.audience ?? [],
           owner: meta?.owner ?? null, updated: meta?.updated ?? null, files, path: p, 本文: body,
         });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // v1.110.0（2026-11-16 開発部・スキルの棚の便 4・Naoki OK 08:50）：入口。依頼の文から合うレシピと補強のスキルを探す（計算は recipe-find-core.ts・AI は呼ばない）
+  server.tool(
+    "recipes__find",
+    "シアニンの制作（X の図解・画像ポスト・長文記事・スレッド・note・台本・スライド・LP など）を頼まれたら、作り始める前に最初に呼ぶ。依頼の文（task）から、合うレシピ（多くて 3 つ）と、いちばん合うレシピに足せる補強のスキル（多くて 3 つ）を返す。返った 聞き方 のとおり「このレシピを使います。補強にこのスキルも使いますか？」と人に聞き、答えを受けてから recipes__get でそのレシピを読み、流れのとおりに進める。補強を使うと言われたら skills__get でそのスキルも読む。レシピが無ければ スキルだけ を返す。読むだけ。戻り値: { ok, 依頼, おすすめ: [{ name, title, purpose, 点, 手がかり, 使うスキル }], 補強の候補: [{ name, title, category, 点, 手がかり, 理由 }], スキルだけ, 聞き方 }。",
+    { task: z.string().min(2).max(2000).describe("依頼の文（人が言ったまま）"), media: z.string().max(30).optional().describe("出す先が分かっていれば（X・note・YouTube・セミナー など）") },
+    async ({ task, media }) => {
+      try {
+        const [all, tree] = await Promise.all([readAll(env, SKILLS_BRANCH), gh(env, `/git/trees/${SKILLS_BRANCH}?recursive=1`)]);
+        if (!all.ok) return asMcpTextResult({ ok: false, message: all.message });
+        if (!tree.ok) return asMcpTextResult({ ok: false, message: tree.message });
+        const recipes = (await Promise.all(recipeFolders(tree.body.tree || []).map(async (n) => {
+          const f = await gh(env, `/contents/recipes/${encodeURIComponent(n)}/RECIPE.md?ref=${SKILLS_BRANCH}`, true);
+          if (!f.ok) return null;
+          const r = parseRecipeHead(String(f.body), n);
+          return r ? { name: r.name, title: r.title, purpose: r.purpose, uses: r.uses, flow: parseFlow(String(f.body)) } : null;
+        }))).filter((x): x is NonNullable<typeof x> => !!x);
+        const skills = all.skills.map((k) => ({ name: k.folder, title: k.title, purpose: k.purpose, description: k.description, genre: k.genre, category: k.category, media: k.media, conflicts: k.conflicts, kind: k.kind }));
+        return asMcpTextResult({ ok: true, ...findRecipes(task, recipes, skills, { media: media || null }), 次: "人の答えを受けてから recipes__get（レシピ）・skills__get（補強のスキル）" });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
