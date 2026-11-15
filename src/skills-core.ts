@@ -10,6 +10,9 @@ export const SKILLS_BRANCH = "main";
 /** 生徒に出している版だけを置く枝（2026-11-15 v1.102.0） */
 export const SKILLS_PUBLIC_BRANCH = "public";
 export const META_FIELDS = ["version", "where", "audience", "owner", "updated"] as const;
+/** シアニン式スキル規格 1.0（2026-11-16 Naoki OK・正本の STANDARD.md）。ジャンルは 1 つ、カテゴリは複数 */
+export const GENRES = ["文章", "図解・デザイン", "分析・レビュー", "戦略・企画", "販売・集客", "運営・仕組み"] as const;
+export const CATEGORIES = ["手順", "スタイル", "コメント", "レビュー", "ガード"] as const;
 
 export type SkillMeta = {
   name: string;
@@ -21,6 +24,14 @@ export type SkillMeta = {
   updated: string | null;
   purpose: string | null;
   public_version: string | null;
+  /** 規格 1.0（v1.108.0）：表示名・ジャンル・カテゴリ・媒体・参照・ぶつかる・基本／選択 */
+  title: string | null;
+  genre: string | null;
+  category: string[];
+  media: string[];
+  refs: string[];
+  conflicts: string[];
+  kind: string | null;
   missing: string[];
 };
 
@@ -55,6 +66,13 @@ export function parseSkillHead(text: string, folder: string): SkillMeta | null {
     updated: meta.updated || null,
     purpose: meta.purpose || null,
     public_version: meta.public_version || null,
+    title: meta.title || null,
+    genre: meta.genre || null,
+    category: list(meta.category),
+    media: list(meta.media),
+    refs: list(meta.refs),
+    conflicts: list(meta.conflicts),
+    kind: meta.kind || null,
     missing,
   };
 }

@@ -21,7 +21,7 @@ import type { Env } from "./index.js";
 import { SKILLS_PUBLIC_BRANCH, SKILLS_REPO } from "./skills-core.js";
 import { audienceOpen, buildZip, studentAudience, type ZipEntry } from "./skills-zip.js";
 import { gh, readAll, writeHypotheses, writeSkillsFile } from "./tools-skills.js";
-import { SKILLS_BRANCH, parseRecipeHead, recipeFolders } from "./skills-core.js";
+import { CATEGORIES, GENRES, SKILLS_BRANCH, parseRecipeHead, recipeFolders } from "./skills-core.js";
 import { BASE_LATEST, STRENGTHS, writeRecipeText, type RecipeSaveInput } from "./recipe-write-core.js";
 import { HYPOTHESIS_STATUSES, addHypothesis, hypothesisSections, updateHypothesis, type HypothesisStatus } from "./hypothesis-core.js";
 
@@ -40,7 +40,7 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     if (!all.ok) return { ok: false, error: all.message };
     const rows = all.skills
       .filter((s) => studentAudience(s.audience).length && audienceOpen(studentAudience(s.audience), k))
-      .map((s) => ({ name: s.name, purpose: s.purpose, version: s.public_version || s.version, updated: s.updated, where: s.where, description: s.description.slice(0, 200), files: s.files.length }));
+      .map((s) => ({ name: s.name, title: s.title, purpose: s.purpose, version: s.public_version || s.version, updated: s.updated, where: s.where, description: s.description.slice(0, 200), files: s.files.length }));
     return { ok: true, commit: all.commit, skills: rows };
   }
 
@@ -83,7 +83,7 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     if (!all.ok) return { ok: false, error: all.message };
     const pubVer = new Map(pub.ok ? pub.skills.map((s) => [s.folder, s.public_version || s.version]) : []);
     const skills = all.skills.map((s) => ({
-      name: s.folder, purpose: s.purpose, version: s.version, student_version: pubVer.get(s.folder) || null, where: s.where, audience: s.audience,
+      name: s.folder, title: s.title, genre: s.genre, category: s.category, media: s.media, refs: s.refs, conflicts: s.conflicts, kind: s.kind, purpose: s.purpose, version: s.version, student_version: pubVer.get(s.folder) || null, where: s.where, audience: s.audience,
       owner: s.owner, updated: s.updated, description: s.description.slice(0, 300), files: s.files.length, missing: s.missing, latest_ok: (BASE_LATEST as readonly string[]).includes(s.folder),
     }));
     const recipes = tree.ok ? await Promise.all(recipeFolders(tree.body.tree || []).map(async (n) => {
@@ -95,7 +95,7 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     const hypotheses = hyp.ok ? hypothesisSections(String(hyp.body)).map((h) => ({ id: `H${h.id}`, title: h.title, status: h.status, body: h.body.slice(0, 4000) })) : [];
     return {
       ok: true, commit: all.commit, repo: `https://github.com/${SKILLS_REPO}`, skills, recipes, hypotheses, hypotheses_skill: HYPO_SKILL,
-      statuses: HYPOTHESIS_STATUSES, strengths: STRENGTHS, base_latest: BASE_LATEST, ...(all.broken.length ? { broken: all.broken } : {}),
+      statuses: HYPOTHESIS_STATUSES, strengths: STRENGTHS, base_latest: BASE_LATEST, genres: GENRES, categories: CATEGORIES, ...(all.broken.length ? { broken: all.broken } : {}),
       ...(pub.ok ? {} : { student_error: pub.message }), ...(hyp.ok ? {} : { hypotheses_error: hyp.message }),
     };
   }
