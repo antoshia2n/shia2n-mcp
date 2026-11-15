@@ -71,7 +71,7 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
           用語集: "言葉の定義は skills__get name=用語集 で読む。スキル・レシピ・カテゴリなどの名前はこれに合わせる",
           版の印: all.commit,
           件数: rows.length,
-          スキル: rows.map((s) => ({ name: s.name, purpose: s.purpose, version: s.version, public_version: s.public_version, where: s.where, audience: s.audience, owner: s.owner, updated: s.updated, description: s.description.slice(0, 160), files: s.files.length })),
+          スキル: rows.map((s) => ({ name: s.name, title: s.title, genre: s.genre, category: s.category, media: s.media, ...(s.refs.length ? { refs: s.refs } : {}), purpose: s.purpose, version: s.version, public_version: s.public_version, where: s.where, audience: s.audience, owner: s.owner, updated: s.updated, description: s.description.slice(0, 160), files: s.files.length })),
           ...(lacking.length ? { 欄が欠けたスキル: lacking } : {}),
           ...(all.broken.length ? { 読めなかったもの: all.broken } : {}),
         });

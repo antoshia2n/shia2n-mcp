@@ -123,3 +123,19 @@ test("仮説の本文を見出しごとに返す", () => {
   assert.match(s[1].body, /誰に当てるか（Naoki の言葉）：生徒だけ/);
   assert.doesNotMatch(s[0].body, /題2/);
 });
+
+test("規格 1.0：表示名・ジャンル・カテゴリ・媒体・参照を読む（実物の小ボケ）", async () => {
+  const { parseSkillHead, GENRES, CATEGORIES } = await import("../src/skills-core.js");
+  let real: string;
+  try { real = readFileSync("/home/claude/shia2n-skills/skills/shia2n-koboke/SKILL.md", "utf8"); } catch { return; }
+  const m = parseSkillHead(real, "shia2n-koboke")!;
+  assert.equal(m.title, "小ボケコメント");
+  assert.ok((GENRES as readonly string[]).includes(m.genre!));
+  assert.deepEqual(m.category, ["コメント"]);
+  assert.deepEqual(m.media, ["X"]);
+  assert.deepEqual(m.conflicts, ["shia2n-zukai-kozo"]);
+  assert.equal(m.kind, "選択スキル");
+  assert.ok(m.category.every((c) => (CATEGORIES as readonly string[]).includes(c)));
+  const t = parseSkillHead(`---\nname: a\nmetadata:\n  version: "1"\n  category: "スタイル, 手順"\n  refs: "b、c"\n---\n`, "a")!;
+  assert.deepEqual([t.category, t.refs, t.title, t.genre], [["スタイル", "手順"], ["b", "c"], null, null]);
+});
