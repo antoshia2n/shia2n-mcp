@@ -1,3 +1,4 @@
+import { parseFlow } from "./recipe-write-core.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
@@ -134,7 +135,7 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
         const rows = await Promise.all(names.map(async (n) => {
           const f = await gh(env, `/contents/recipes/${encodeURIComponent(n)}/RECIPE.md?ref=${SKILLS_BRANCH}`, true);
           const r = f.ok ? parseRecipeHead(String(f.body), n) : null;
-          return r ? { name: r.name, purpose: r.purpose, version: r.version, updated: r.updated, uses: r.uses.map((u) => ({ skill: u.skill, version: u.version, priority: u.priority, strength: u.strength })) } : { name: n, 読めなかった: true };
+          return r ? { name: r.name, title: r.title, purpose: r.purpose, version: r.version, updated: r.updated, uses: r.uses.map((u) => ({ skill: u.skill, version: u.version, priority: u.priority, strength: u.strength })) } : { name: n, 読めなかった: true };
         }));
         return asMcpTextResult({ ok: true, 件数: rows.length, レシピ: rows, 用語集: "言葉の定義は skills__get name=用語集" });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
@@ -143,7 +144,7 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
 
   server.tool(
     "recipes__get",
-    "レシピ 1 本を、使うスキルの本文まで一度に返す（読むだけ）。name にレシピの名前（例 shia2n-10sen-koboke）。各スキルはレシピが固定した版（コミット）の SKILL.md を返すので、スキルが更新されてもレシピの中身は変わらない。ただし @最新 の行（レビューなど）は main の最新を読み、references/ の .md（コードの数字の表・シアニンの仮説）も 参考 に入れて返す。スキルの中の別ファイル（references/ など）は skills__get に name・path・ref（返した commit）を渡して読む。作るときは、本文の流れに従い、優先の順・強さを守る。戻り値: { ok, name, version, purpose, 本文, スキル: [{ skill, version, priority, strength, commit, files, 版の食い違い?, SKILL, 参考? }], 読めなかった? }。",
+    "レシピ 1 本を、使うスキルの本文まで一度に返す（読むだけ）。name にレシピの名前（例 shia2n-10sen-koboke）。各スキルはレシピが固定した版（コミット）の SKILL.md を返すので、スキルが更新されてもレシピの中身は変わらない。ただし @最新 の行（レビューなど）は main の最新を読み、references/ の .md（コードの数字の表・シアニンの仮説）も 参考 に入れて返す。スキルの中の別ファイル（references/ など）は skills__get に name・path・ref（返した commit）を渡して読む。作るときは、流れ（手順の並び）を上から 1 つずつ進め、手順にプロンプトがあればその文で作り、確認があれば人に見せて止まる。優先の順・強さを守る。戻り値: { ok, name, title, version, purpose, 流れ: [{ title, detail?, skill?, check?, prompt? }], 本文, スキル: [{ skill, version, priority, strength, commit, files, 版の食い違い?, SKILL, 参考? }], 読めなかった? }。",
     { name: z.string().min(2).max(80).describe("レシピの名前（フォルダ名）") },
     async ({ name }) => {
       try {
@@ -193,7 +194,7 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
           };
         }));
         return asMcpTextResult({
-          ok: true, name: r.name, version: r.version, purpose: r.purpose, updated: r.updated, 本文: body, スキル: skills,
+          ok: true, name: r.name, title: r.title, version: r.version, purpose: r.purpose, updated: r.updated, 流れ: parseFlow(text), 本文: body, スキル: skills,
           ...(r.bad.length ? { 読めなかった行: r.bad } : {}), ...(failed.length ? { 読めなかった: failed } : {}),
         });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
