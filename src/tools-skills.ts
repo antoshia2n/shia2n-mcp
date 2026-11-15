@@ -63,6 +63,7 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
         return asMcpTextResult({
           ok: true,
           正本: `https://github.com/${SKILLS_REPO}`,
+          用語集: "言葉の定義は skills__get name=用語集 で読む。スキル・レシピ・カテゴリなどの名前はこれに合わせる",
           版の印: all.commit,
           件数: rows.length,
           スキル: rows.map((s) => ({ name: s.name, purpose: s.purpose, version: s.version, public_version: s.public_version, where: s.where, audience: s.audience, owner: s.owner, updated: s.updated, description: s.description.slice(0, 160), files: s.files.length })),
@@ -77,13 +78,19 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
     "skills__get",
     "スキル 1 本の最新版を正本（GitHub の shia2n-skills）から返す（読むだけ）。name にスキルの名前（例 shia2n-marketing-skills）。path を省くと SKILL.md の全文と、版などの欄・同じフォルダのファイルの並び。channel=student で生徒に出している版（public の枝）を返す（既定は最新版）。path に並びの 1 つ（例 references/pitfalls.md）を渡すとそのファイルの中身。手元の写しと版が違うときは、こちらを正とする。戻り値: { ok: true, name, version, where, audience, owner, updated, files, path, 本文 }／見つからない { ok: false, message, 近い名前? }。",
     {
-      name: z.string().min(2).max(80).describe("スキルの名前（フォルダ名）"),
+      name: z.string().min(2).max(80).describe("スキルの名前（フォルダ名）。用語集 を渡すと言葉の定義（GLOSSARY.md）"),
       path: z.string().max(200).optional().describe("同じフォルダの中のファイル。省くと SKILL.md"),
       channel: z.enum(["latest", "student"]).optional().describe("latest＝最新版（main・既定）／student＝生徒に出している版（public の枝）"),
     },
     async ({ name, path, channel }) => {
       try {
         const folder = name.trim();
+        // v1.104.0：用語集（スキル・レシピ・カテゴリなどの言葉の定義）。いつも main の GLOSSARY.md
+        if (folder === "用語集" || folder.toLowerCase() === "glossary") {
+          const g = await gh(env, `/contents/GLOSSARY.md?ref=${SKILLS_BRANCH}`, true);
+          if (!g.ok) return asMcpTextResult({ ok: false, message: g.message });
+          return asMcpTextResult({ ok: true, name: "用語集", path: "GLOSSARY.md", 本文: String(g.body) });
+        }
         if (!/^[a-z0-9][a-z0-9_-]*$/i.test(folder)) return asMcpTextResult({ ok: false, message: "名前は英数字とハイフンだけ" });
         const p = (path || "SKILL.md").trim();
         if (p.includes("..") || p.startsWith("/")) return asMcpTextResult({ ok: false, message: "path はフォルダの中だけ" });
