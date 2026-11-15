@@ -19,7 +19,9 @@ export function grams(s: string): Set<string> {
   const t = norm(s);
   const out = new Set<string>();
   for (const w of t.match(/[a-z0-9]{2,}/g) || []) out.add(w);
-  const ja = t.replace(/[a-z0-9]+/g, " ").replace(/[\s、。・「」『』（）()【】［］\[\]!！?？:：,，.．\-—〜~／/×|]+/g, " ");
+  // ひらがなは区切りとして扱う（「を作って」「のための」のような助詞・語尾が、どの説明にも当たってしまうため）。
+  // 漢字・カタカナの並び（例：図解・スレッド・引用ポスト）だけを 2 文字ずつにする
+  const ja = t.replace(/[a-z0-9]+/g, " ").replace(/[\u3041-\u309f\s、。・「」『』（）()【】［］\[\]!！?？:：,，.．\-—〜~／/×|]+/g, " ");
   for (const chunk of ja.split(" ")) {
     for (let i = 0; i + 1 < chunk.length; i++) {
       const g = chunk.slice(i, i + 2);
@@ -98,14 +100,21 @@ export function findRecipes(task: string, recipes: FindRecipe[], skills: FindSki
     return { r, used, ...s };
   }).filter((x) => x.score >= 2).sort((a, b) => b.score - a.score).slice(0, 3);
 
-  const top = recs[0];
+  // スキル単体のほうが依頼に近ければ、レシピは勧めない（例：「スレッド投稿を作って」に図解のレシピを当てない）
+  const soloAll = skills.map((k) => ({ k, ...scoreSkill(q, k) })).filter((x) => x.score >= 2).sort((a, b) => b.score - a.score);
+  // 比べるのは「それだけで作れる」スキル（手順かスタイル）だけ。レビュー・コメントは補強なので、点が高くてもレシピを外さない
+  const bestRecipe = recs[0];
+  const mainSolo = soloAll.find((x) => x.k.category.some((c) => c === "手順" || c === "スタイル"));
+  const top = bestRecipe && !(mainSolo && mainSolo.score > bestRecipe.score && !bestRecipe.used.some((k) => k.name === mainSolo.k.name)) ? bestRecipe : undefined;
   const inTop = new Set(top ? top.used.map((k) => k.name) : []);
   const conflict = new Set(top ? top.used.flatMap((k) => k.conflicts) : []);
   for (const k of skills) if (k.conflicts.some((c) => inTop.has(c))) conflict.add(k.name);
-  const extra = top ? skills.filter((k) => !inTop.has(k.name) && !conflict.has(k.name) && !k.category.includes("ガード"))
-    .map((k) => ({ k, ...scoreSkill(q, k) })).filter((x) => x.score >= 3).sort((a, b) => b.score - a.score).slice(0, 3) : [];
-  const alone = top ? [] : skills.map((k) => ({ k, ...scoreSkill(q, k) })).filter((x) => x.score >= 2).sort((a, b) => b.score - a.score).slice(0, 3);
-
+  // 補強に出すのは、レシピにまだ無いカテゴリのスキルだけ（選択スキルはカテゴリから 1 つ。スタイルを 2 つ重ねない）。
+  // 手順（それ自体が作り方の流れ）とガード（いつも守る決まり）は補強にしない
+  const haveCat = new Set(top ? top.used.flatMap((k) => k.category) : []);
+  const extra = top ? soloAll.filter((x) => !inTop.has(x.k.name) && !conflict.has(x.k.name) && x.score >= 3
+    && x.k.category.length > 0 && x.k.category.every((c) => c !== "手順" && c !== "ガード" && !haveCat.has(c))).slice(0, 3) : [];
+  const alone = top ? [] : soloAll.slice(0, 3);
   const title = (k: { title: string | null; name: string }) => k.title || k.name;
   const ask = top
     ? `「${title(top.r)}」のレシピを使います（${hints(top.words).slice(0, 3).join("・") || "依頼に近いため"}）。${extra.length ? `補強に「${extra.map((x) => title(x.k)).join("」「")}」も使いますか？` : ""}よければこのまま進めます。`
