@@ -259,32 +259,42 @@ function unb64utf8(s: string): string {
 }
 
 /**
- * hypotheses.md を読み、change で作り直し、main に 1 コミットで書く（2026-11-15 v1.106.0）。
- * 間に別の書き込みが入って食い違ったら、取り直して 1 回だけやり直す。アプリの画面からもこれを呼ぶ。
+ * 正本 shia2n-skills の main のファイル 1 つを読み、change で作り直し、1 コミットで書く（2026-11-16 v1.107.0 で仮説から分けた）。
+ * 間に別の書き込みが入って食い違ったら、取り直して 1 回だけやり直す。create が真なら、無いファイルは change(null) で新しく作る。
+ * change が null を返したら書かない（呼び手が理由を持つ）。
  */
-export async function writeHypotheses(
-  env: Env, skill: string, change: (md: string) => string, message: () => string,
-): Promise<{ ok: true; commit: string; list: Array<{ id: string; title: string; status: string | null }> } | { ok: false; message: string }> {
-  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(skill)) return { ok: false, message: "skill は英数字とハイフンだけ" };
+export async function writeSkillsFile(
+  env: Env, path: string, change: (text: string | null) => string | null, message: () => string, create = false,
+): Promise<{ ok: true; commit: string; text: string } | { ok: false; message: string; missing?: boolean }> {
+  if (!/^[A-Za-z0-9_./-]+$/.test(path) || path.includes("..")) return { ok: false, message: "path が変" };
   const key = env.GITHUB_TOKEN;
   if (!key) return { ok: false, message: "書く鍵（GITHUB_TOKEN）が無い" };
-  const path = `skills/${skill}/references/hypotheses.md`;
   const url = `https://api.github.com/repos/${SKILLS_REPO}/contents/${path}`;
   const headers = { Authorization: `Bearer ${key}`, Accept: "application/vnd.github+json", "User-Agent": "shia2n-mcp", "Content-Type": "application/json" };
   for (let attempt = 0; attempt < 2; attempt++) {
     const cur = await fetch(`${url}?ref=${SKILLS_BRANCH}`, { headers });
-    if (cur.status === 404) return { ok: false, message: `${skill} に references/hypotheses.md が無い` };
-    if (!cur.ok) return { ok: false, message: `読めなかった（${cur.status}）${(await cur.text()).slice(0, 200)}` };
-    const j: any = await cur.json();
-    const before = unb64utf8(String(j.content || ""));
+    if (cur.status === 404 && !create) return { ok: false, message: `${path} が無い`, missing: true };
+    if (!cur.ok && cur.status !== 404) return { ok: false, message: `読めなかった（${cur.status}）${(await cur.text()).slice(0, 200)}` };
+    const j: any = cur.status === 404 ? null : await cur.json();
+    const before = j ? unb64utf8(String(j.content || "")) : null;
     const after = change(before);
-    const list = listHypotheses(after).map((h) => ({ id: `H${h.id}`, title: h.title, status: h.status }));
-    if (after === before) return { ok: true, commit: "変更なし", list };
-    const put = await fetch(url, { method: "PUT", headers, body: JSON.stringify({ message: `${message()}（shia2n-mcp）`, content: b64utf8(after), sha: j.sha, branch: SKILLS_BRANCH }) });
-    if (put.ok) { const pj: any = await put.json(); return { ok: true, commit: String(pj.commit?.sha || ""), list }; }
+    if (after === null) return { ok: false, message: "変えなかった" };
+    if (after === before) return { ok: true, commit: "変更なし", text: after };
+    const put = await fetch(url, { method: "PUT", headers, body: JSON.stringify({ message: `${message()}（shia2n-mcp）`, content: b64utf8(after), ...(j ? { sha: j.sha } : {}), branch: SKILLS_BRANCH }) });
+    if (put.ok) { const pj: any = await put.json(); return { ok: true, commit: String(pj.commit?.sha || ""), text: after }; }
     if (put.status === 409 || put.status === 422) continue;
     if (put.status === 403 || put.status === 404) return { ok: false, message: `書く鍵に shia2n-skills へ書く権限が無い（${put.status}）。GitHub の鍵の設定で shia2n-skills の Contents を Read and write にする` };
     return { ok: false, message: `書けなかった（${put.status}）${(await put.text()).slice(0, 200)}` };
   }
   return { ok: false, message: "別の書き込みと 2 回ぶつかった。少し待ってもう一度" };
+}
+
+/** hypotheses.md を読み、change で作り直して書く（2026-11-15 v1.106.0）。アプリの画面からもこれを呼ぶ */
+export async function writeHypotheses(
+  env: Env, skill: string, change: (md: string) => string, message: () => string,
+): Promise<{ ok: true; commit: string; list: Array<{ id: string; title: string; status: string | null }> } | { ok: false; message: string }> {
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(skill)) return { ok: false, message: "skill は英数字とハイフンだけ" };
+  const r = await writeSkillsFile(env, `skills/${skill}/references/hypotheses.md`, (t) => (t === null ? null : change(t)), message);
+  if (!r.ok) return { ok: false, message: r.missing ? `${skill} に references/hypotheses.md が無い` : r.message };
+  return { ok: true, commit: r.commit, list: listHypotheses(r.text).map((h) => ({ id: `H${h.id}`, title: h.title, status: h.status })) };
 }

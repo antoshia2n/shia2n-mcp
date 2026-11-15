@@ -26,6 +26,16 @@ export function listHypotheses(md: string): HypothesisHead[] {
   return out;
 }
 
+/** 見出しごとの本文（棚の画面で読むため・2026-11-16 v1.107.0）。本文は見出しの次の行から次の見出しの前まで */
+export function hypothesisSections(md: string): Array<HypothesisHead & { body: string }> {
+  const heads = [...md.matchAll(HEAD)];
+  return listHypotheses(md).map((h, i) => {
+    const start = heads[i].index! + heads[i][0].length;
+    const end = i + 1 < heads.length ? heads[i + 1].index! : md.length;
+    return { ...h, body: md.slice(start, end).trim() };
+  });
+}
+
 function oneLine(s: string): string {
   return s.replace(/\r?\n+/g, " ").trim();
 }
