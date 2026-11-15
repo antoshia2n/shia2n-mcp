@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.106.0"; // 2026-11-15 仮説 hypotheses__add・hypotheses__update、レシピの @最新
+export const APP_VERSION = "1.106.1"; // 2026-11-15 仮説 hypotheses__add・hypotheses__update、レシピの @最新
