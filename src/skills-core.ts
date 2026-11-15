@@ -92,3 +92,33 @@ export function nearNames(name: string, names: string[]): string[] {
   const q = name.toLowerCase();
   return names.filter((n) => n.toLowerCase().includes(q) || q.includes(n.toLowerCase())).slice(0, 3);
 }
+
+/** レシピ（recipes/<名前>/RECIPE.md）の頭を読む（2026-11-15 v1.105.0）。
+ *  skills: の下の 1 行＝「- スキル名@版#コミット | 優先 1 | 強さ 標準」。優先・強さは省いてよい */
+export type RecipeUse = { skill: string; version: string; commit: string; priority: number | null; strength: string | null };
+export type RecipeMeta = { name: string; version: string | null; purpose: string | null; where: string[]; audience: string[]; owner: string | null; updated: string | null; uses: RecipeUse[]; bad: string[] };
+
+export function parseRecipeHead(text: string, folder: string): RecipeMeta | null {
+  const head = parseSkillHead(text, folder);
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (!head || !m) return null;
+  const uses: RecipeUse[] = [];
+  const bad: string[] = [];
+  const block = /^skills:\s*\r?\n((?:[ \t]+.*(?:\r?\n|$))+)/m.exec(m[1]);
+  for (const line of block ? block[1].split(/\r?\n/) : []) {
+    const t = line.trim();
+    if (!t) continue;
+    const r = /^-\s*([a-z0-9][a-z0-9_-]*)@([0-9][0-9.]*)#([0-9a-f]{40})\s*(.*)$/i.exec(t);
+    if (!r) { bad.push(t); continue; }
+    const pr = /優先\s*([0-9]+)/.exec(r[4]);
+    const st = /強さ\s*([^|]+)/.exec(r[4]);
+    uses.push({ skill: r[1], version: r[2], commit: r[3].toLowerCase(), priority: pr ? Number(pr[1]) : null, strength: st ? st[1].trim() : null });
+  }
+  uses.sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
+  return { name: head.name, version: head.version, purpose: head.purpose, where: head.where, audience: head.audience, owner: head.owner, updated: head.updated, uses, bad };
+}
+
+/** 木から recipes/<名前>/RECIPE.md の名前の並びを作る */
+export function recipeFolders(tree: Array<{ path: string; type: string }>): string[] {
+  return tree.filter((t) => t.type === "blob").map((t) => /^recipes\/([^/]+)\/RECIPE\.md$/.exec(t.path)?.[1]).filter((x): x is string => !!x).sort();
+}
