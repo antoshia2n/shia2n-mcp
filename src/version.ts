@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.107.0"; // 2026-11-16 スキルの棚の口（SkillsReader.shelf・saveRecipe・仮説）
+export const APP_VERSION = "1.107.1"; // 2026-11-16 棚：保存の直後はコミットで読み直す

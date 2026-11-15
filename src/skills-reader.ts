@@ -70,12 +70,15 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     return { ok: true, filename: `${folder}-${version}.zip`, version, bytes: buildZip(folder, entries) };
   }
 
-  async shelf(): Promise<object> {
+  // v1.107.1：at（保存の直後に返したコミット 40 桁）を渡すと、その時点を読む。GitHub は main の読み取りを 1 分ほど前の形で返すことがあり、
+  // 保存の直後に読み直すと前の中身が出たため（2026-11-16 本番で確かめた）。コミットで読めば必ず保存したあとの中身になる
+  async shelf(at?: string | null): Promise<object> {
+    const ref = typeof at === "string" && /^[0-9a-f]{40}$/i.test(at) ? at.toLowerCase() : SKILLS_BRANCH;
     const [all, pub, tree, hyp] = await Promise.all([
-      readAll(this.env, SKILLS_BRANCH),
+      readAll(this.env, ref),
       readAll(this.env, SKILLS_PUBLIC_BRANCH),
-      gh(this.env, `/git/trees/${SKILLS_BRANCH}?recursive=1`),
-      gh(this.env, `/contents/skills/${HYPO_SKILL}/references/hypotheses.md?ref=${SKILLS_BRANCH}`, true),
+      gh(this.env, `/git/trees/${ref}?recursive=1`),
+      gh(this.env, `/contents/skills/${HYPO_SKILL}/references/hypotheses.md?ref=${ref}`, true),
     ]);
     if (!all.ok) return { ok: false, error: all.message };
     const pubVer = new Map(pub.ok ? pub.skills.map((s) => [s.folder, s.public_version || s.version]) : []);
@@ -84,7 +87,7 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
       owner: s.owner, updated: s.updated, description: s.description.slice(0, 300), files: s.files.length, missing: s.missing, latest_ok: (BASE_LATEST as readonly string[]).includes(s.folder),
     }));
     const recipes = tree.ok ? await Promise.all(recipeFolders(tree.body.tree || []).map(async (n) => {
-      const f = await gh(this.env, `/contents/recipes/${encodeURIComponent(n)}/RECIPE.md?ref=${SKILLS_BRANCH}`, true);
+      const f = await gh(this.env, `/contents/recipes/${encodeURIComponent(n)}/RECIPE.md?ref=${ref}`, true);
       const r = f.ok ? parseRecipeHead(String(f.body), n) : null;
       return r ? { name: n, purpose: r.purpose, version: r.version, updated: r.updated, audience: r.audience, uses: r.uses.map((u) => ({ skill: u.skill, version: u.version, pinned: !!u.commit, commit: u.commit ? u.commit.slice(0, 7) : null, priority: u.priority, strength: u.strength })), bad: r.bad }
         : { name: n, broken: true };
@@ -117,7 +120,7 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     }, () => `${input.create ? "レシピを作る" : "レシピを直す"}：${name} ${version}（棚・${String(by || "").slice(0, 60)}）`, !!input.create);
     if (fail) return { ok: false, error: fail };
     if (!w.ok) return { ok: false, error: w.message };
-    return { ok: true, name, version, commit: w.commit.slice(0, 7) };
+    return { ok: true, name, version, commit: w.commit.slice(0, 7), at: /^[0-9a-f]{40}$/.test(w.commit) ? w.commit : null };
   }
 
   async addHypothesis(input: { title: string; words: string; target?: string }): Promise<object> {
@@ -126,7 +129,7 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     const target = input.target ? String(input.target).trim().slice(0, 200) : undefined;
     let id = 0;
     const r = await writeHypotheses(this.env, HYPO_SKILL, (md) => { const a = addHypothesis(md, { title, words, target, date: jstDate() }); id = a.id; return a.md; }, () => `仮説を足す：H${id} ${title}（棚）`);
-    return r.ok ? { ok: true, id: `H${id}`, commit: r.commit.slice(0, 7) } : { ok: false, error: r.message };
+    return r.ok ? { ok: true, id: `H${id}`, commit: r.commit.slice(0, 7), at: /^[0-9a-f]{40}$/.test(r.commit) ? r.commit : null } : { ok: false, error: r.message };
   }
 
   async updateHypothesis(input: { id: string; status?: string; note?: string }): Promise<object> {
@@ -139,6 +142,6 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     const r = await writeHypotheses(this.env, HYPO_SKILL, (md) => { const o = updateHypothesis(md, { id: n, date: jstDate(), status, note }); if (o === null) { miss = true; return md; } return o; },
       () => `仮説を直す：H${n}${status ? ` ${status}` : ""}${note ? " 追記" : ""}（棚）`);
     if (miss) return { ok: false, error: "not_found" };
-    return r.ok ? { ok: true, id: `H${n}`, commit: r.commit.slice(0, 7) } : { ok: false, error: r.message };
+    return r.ok ? { ok: true, id: `H${n}`, commit: r.commit.slice(0, 7), at: /^[0-9a-f]{40}$/.test(r.commit) ? r.commit : null } : { ok: false, error: r.message };
   }
 }
