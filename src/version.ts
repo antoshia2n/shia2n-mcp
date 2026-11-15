@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.102.0"; // 2026-11-15 スキルの生徒の版（public の枝）を読む
+export const APP_VERSION = "1.103.0"; // 2026-11-15 マーケくんへスキルの zip を渡す口 SkillsReader

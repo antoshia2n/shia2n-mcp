@@ -14,7 +14,7 @@ import { SKILLS_BRANCH, SKILLS_PUBLIC_BRANCH, SKILLS_REPO, filterSkills, groupSk
 
 const readKey = (env: Env) => env.GITHUB_READ_TOKEN || env.GITHUB_TOKEN;
 
-async function gh(env: Env, path: string, raw = false): Promise<{ ok: true; body: any } | { ok: false; status: number; message: string }> {
+export async function gh(env: Env, path: string, raw = false): Promise<{ ok: true; body: any } | { ok: false; status: number; message: string }> {
   const key = readKey(env);
   if (!key) return { ok: false, status: 0, message: "鍵が設定されていません（GITHUB_READ_TOKEN か GITHUB_TOKEN）" };
   const r = await fetch(`https://api.github.com/repos/${SKILLS_REPO}${path}`, {
@@ -28,7 +28,7 @@ async function gh(env: Env, path: string, raw = false): Promise<{ ok: true; body
   return { ok: true, body: raw ? await r.text() : await r.json() };
 }
 
-async function readAll(env: Env, ref: string = SKILLS_BRANCH): Promise<{ ok: true; commit: string; skills: Array<SkillMeta & { folder: string; files: string[] }>; broken: string[] } | { ok: false; message: string }> {
+export async function readAll(env: Env, ref: string = SKILLS_BRANCH): Promise<{ ok: true; commit: string; skills: Array<SkillMeta & { folder: string; files: string[] }>; broken: string[] } | { ok: false; message: string }> {
   const tree = await gh(env, `/git/trees/${ref}?recursive=1`);
   if (!tree.ok) return { ok: false, message: tree.message };
   const groups = groupSkillFiles(tree.body.tree || []);
