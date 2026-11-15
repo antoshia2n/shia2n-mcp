@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.100.2"; // 2026-11-14 スライドのスキル v2.6（Pics の直し・積み上げ）
+export const APP_VERSION = "1.101.0"; // 2026-11-15 スキルの正本を確かめる口（skills__list・skills__get）
