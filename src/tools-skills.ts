@@ -1,7 +1,7 @@
 import { parseFlow } from "./recipe-write-core.js";
 import { findRecipes } from "./recipe-find-core.js";
 import { STRENGTHS, writeRecipeText, type FlowStep } from "./recipe-write-core.js";
-import { checkSkillText, similarSkills, stampUpdated } from "./skill-save-core.js";
+import { checkSkillText, recipeSizeWarning, similarSkills, stampUpdated } from "./skill-save-core.js";
 import { checkGlyph, glyphFromSvg, openaiYaml, skillIconSvg } from "./skill-icon-core.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -306,7 +306,8 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
         }, () => `${create ? "レシピを作る" : "レシピを直す"}：${name} ${version}（AI・recipes__save）`, !!create);
         if (fail) return asMcpTextResult({ ok: false, error: fail });
         if (!w.ok) return asMcpTextResult({ ok: false, error: w.message });
-        return asMcpTextResult({ ok: true, name, version, commit: w.commit.slice(0, 7) });
+        const sizeNote = recipeSizeWarning(uses.map((u) => u.skill), new Map(all.skills.map((k) => [k.folder, k.kind])));
+        return asMcpTextResult({ ok: true, name, version, commit: w.commit.slice(0, 7), ...(sizeNote ? { 注意: [sizeNote] } : {}) });
       } catch (e) { return asMcpTextResult({ ok: false, error: String(e) }); }
     }
   );

@@ -69,3 +69,14 @@ test("似たスキルを返す（同じ表示名・目的なら高い点・遠�
   assert.equal(s[0].name, "shia2n-zukai-10sen");
   assert.ok(!s.some((x) => x.name === "shia2n-invoice"));
 });
+
+test("大きさ：部品（小）は 80 行を超えると注意・手順なら中", async () => {
+  const { skillSize, recipeSizeWarning } = await import("../src/skill-save-core.ts");
+  assert.equal(skillSize(["スタイル"]), "小");
+  assert.equal(skillSize(["スタイル", "手順"]), "中");
+  const long = make({ body: "# 色\n\n## 目的\n\nx\n\n## 使う場面／使わない場面\n\nx\n\n## 手順\n\n" + "1. y\n".repeat(90) + "\n## 決まり\n\nx\n\n## 出力の形\n\nx\n\n## 参照\n\nx" });
+  assert.ok(checkSkillText("shia2n-demo", long, null, []).warnings.some((w) => w.includes("目安 80 行")));
+  const kinds = new Map([["a", "選択スキル"], ["b", "選択スキル"], ["c", "選択スキル"], ["d", "選択スキル"], ["r", "基本スキル"]]);
+  assert.equal(recipeSizeWarning(["a", "b", "c", "r"], kinds), null);
+  assert.match(recipeSizeWarning(["a", "b", "c", "d", "r"], kinds) || "", /4 本/);
+});
