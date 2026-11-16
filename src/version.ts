@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.117.0"; // 2026-11-16 スキルを生徒に出す（skills__publish・unpublish）
+export const APP_VERSION = "1.118.0"; // 2026-11-16 棚から生徒に出す（SkillsReader.publish・unpublish）

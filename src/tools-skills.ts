@@ -468,59 +468,7 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
     },
     async ({ names, keys, accept_hits, check_only }) => {
       try {
-        const ck = checkKeys(keys);
-        const errors: string[] = [];
-        if (ck.bad.length) errors.push(`出す相手に使えないキー：${ck.bad.join("・")}（本人・事業部は社内の印。門番の表のキーを英小文字で）`);
-        if (!ck.keys.length) errors.push("出す相手のキーが無い");
-        const uniq = [...new Set(names)];
-        const [main, pub, mt, pt] = await Promise.all([readAll(env, SKILLS_BRANCH), readAll(env, SKILLS_PUBLIC_BRANCH), gh(env, `/git/trees/${SKILLS_BRANCH}?recursive=1`), gh(env, `/git/trees/${SKILLS_PUBLIC_BRANCH}?recursive=1`)]);
-        if (!main.ok) return asMcpTextResult({ ok: false, message: main.message });
-        if (!pub.ok) return asMcpTextResult({ ok: false, message: pub.message });
-        if (!mt.ok || !pt.ok) return asMcpTextResult({ ok: false, message: (!mt.ok ? mt : pt as any).message });
-        const mainTree: Array<{ path: string; type: string; sha: string }> = mt.body.tree || [];
-        const pubTree: Array<{ path: string; type: string; sha: string }> = pt.body.tree || [];
-        const pubNames = pub.skills.filter((k) => studentAudienceOf(k.audience).length).map((k) => k.folder);
-        const hits: Hit[] = [];
-        const plan: Array<{ name: string; version: string; from: string | null; files: Array<{ path: string; sha: string }>; drop: string[]; skillText: string; mainText: string }> = [];
-        for (const name of uniq) {
-          const meta = main.skills.find((k) => k.folder === name);
-          if (!meta) { errors.push(`${name} は正本に無い`); continue; }
-          if (!meta.version) { errors.push(`${name} に版が無い`); continue; }
-          const files = mainTree.filter((t) => t.type === "blob" && t.path.startsWith(`skills/${name}/`)).map((t) => ({ path: t.path.slice(`skills/${name}/`.length), sha: t.sha }));
-          const texts = await Promise.all(files.map(async (f) => {
-            if (!/\.(md|ya?ml|txt|json)$/i.test(f.path)) return { path: f.path, text: null };
-            const r = await gh(env, `/contents/skills/${encodeURIComponent(name)}/${f.path.split("/").map(encodeURIComponent).join("/")}?ref=${SKILLS_BRANCH}`, true);
-            return { path: f.path, text: r.ok ? String(r.body) : null };
-          }));
-          const sc = scanInternal(texts);
-          if (sc.blocked.length) errors.push(`${name}：生徒の版に入れてはいけないファイル ${sc.blocked.join("・")}（スキルクリエイターで外に分けてから）`);
-          hits.push(...sc.hits.map((h) => ({ ...h, file: `${name}/${h.file}` })));
-          const miss = missingRefs(meta.refs, pubNames, uniq);
-          if (miss.length) errors.push(`${name} が呼ぶスキルが生徒の版に無い：${miss.join("・")}（names に一緒に入れる）`);
-          const mainText = texts.find((t) => t.path === "SKILL.md")?.text;
-          if (!mainText) { errors.push(`${name} の SKILL.md を読めない`); continue; }
-          const aud = audienceWith(meta.audience, ck.keys);
-          const skillText = setMeta(setMeta(mainText, "audience", aud), "public_version", meta.version);
-          const drop = pubTree.filter((t) => t.type === "blob" && t.path.startsWith(`skills/${name}/`)).map((t) => t.path.slice(`skills/${name}/`.length)).filter((p) => !files.some((f) => f.path === p));
-          plan.push({ name, version: meta.version, from: pub.skills.find((k) => k.folder === name)?.public_version || null, files, drop, skillText, mainText: skillText });
-        }
-        if (errors.length) return asMcpTextResult({ ok: false, 直すこと: errors, ...(hits.length ? { 見つかった行: hits.slice(0, 40) } : {}) });
-        const diff = plan.map((p) => ({ name: p.name, 生徒の版: `${p.from ?? "出していない"} → ${p.version}`, 出す相手: ck.keys, 写すファイル: p.files.length, 消すファイル: p.drop }));
-        if (hits.length && !accept_hits) return asMcpTextResult({ ok: false, 直すこと: ["内部の言葉が見つかった。見つかった行を Naoki に見せ、出してよいと言われたら accept_hits: true で呼び直す。直すならスキルクリエイターで直してから"], 見つかった行: hits.slice(0, 40), 差分: diff });
-        if (check_only) return asMcpTextResult({ ok: true, 確かめだけ: true, 差分: diff, ...(hits.length ? { 見つかった行: hits.slice(0, 40) } : {}) });
-        const changes: TreeChange[] = [];
-        for (const p of plan) {
-          for (const f of p.files) changes.push(f.path === "SKILL.md" ? { path: `skills/${p.name}/SKILL.md`, content: p.skillText } : { path: `skills/${p.name}/${f.path}`, sha: f.sha });
-          for (const d of p.drop) changes.push({ path: `skills/${p.name}/${d}`, sha: null });
-        }
-        const c = await commitTree(env, SKILLS_PUBLIC_BRANCH, changes, `生徒に出す版：${plan.map((p) => `${p.name} ${p.version}`).join("・")}（相手 ${ck.keys.join("・")}）`);
-        if (!c.ok) return asMcpTextResult({ ok: false, message: c.message });
-        const mainNotes: string[] = [];
-        for (const p of plan) {
-          const w = await writeSkillsFile(env, `skills/${p.name}/SKILL.md`, (t) => (t === null ? null : setMeta(setMeta(t, "audience", audienceWith(main.skills.find((k) => k.folder === p.name)!.audience, ck.keys)), "public_version", p.version)), () => `生徒の版を付け替え：${p.name} ${p.version}`);
-          if (!w.ok) mainNotes.push(`${p.name}：main の頭の欄を書けなかった（${w.message}）`);
-        }
-        return asMcpTextResult({ ok: true, 出した: plan.map((p) => ({ name: p.name, version: p.version, keys: ck.keys })), commit: c.commit.slice(0, 7), ...(mainNotes.length ? { 注意: mainNotes } : {}), 次: "生徒のマイページの「シアニンのスキル」のカードに出る（出す相手のキーを持つ人だけ）" });
+        return asMcpTextResult(await publishSkills(env, { names, keys, accept_hits, check_only }));
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
@@ -534,30 +482,96 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
     },
     async ({ names, check_only }) => {
       try {
-        const uniq = [...new Set(names)];
-        const [main, pub, pt] = await Promise.all([readAll(env, SKILLS_BRANCH), readAll(env, SKILLS_PUBLIC_BRANCH), gh(env, `/git/trees/${SKILLS_PUBLIC_BRANCH}?recursive=1`)]);
-        if (!main.ok) return asMcpTextResult({ ok: false, message: main.message });
-        if (!pub.ok) return asMcpTextResult({ ok: false, message: pub.message });
-        if (!pt.ok) return asMcpTextResult({ ok: false, message: pt.message });
-        const errors: string[] = [];
-        for (const n of uniq) if (!pub.skills.some((k) => k.folder === n)) errors.push(`${n} は生徒に出していない`);
-        for (const k of pub.skills) if (!uniq.includes(k.folder)) { const used = k.refs.filter((r) => uniq.includes(r)); if (used.length) errors.push(`${k.folder}（生徒の版）が ${used.join("・")} を呼んでいる。一緒に引っ込めるなら names に入れる`); }
-        if (errors.length) return asMcpTextResult({ ok: false, 直すこと: errors });
-        const changes: TreeChange[] = ((pt.body.tree || []) as Array<{ path: string; type: string }>).filter((t) => t.type === "blob" && uniq.some((n) => t.path.startsWith(`skills/${n}/`))).map((t) => ({ path: t.path, sha: null }));
-        if (check_only) return asMcpTextResult({ ok: true, 確かめだけ: true, 引っ込める: uniq, 消すファイル: changes.length });
-        const c = await commitTree(env, SKILLS_PUBLIC_BRANCH, changes, `生徒の版を引っ込める：${uniq.join("・")}`);
-        if (!c.ok) return asMcpTextResult({ ok: false, message: c.message });
-        const notes: string[] = [];
-        for (const n of uniq) {
-          const m = main.skills.find((k) => k.folder === n);
-          if (!m) continue;
-          const w = await writeSkillsFile(env, `skills/${n}/SKILL.md`, (t) => (t === null ? null : setMeta(setMeta(t, "audience", audienceWith(m.audience, [])), "public_version", null)), () => `生徒の版を外す：${n}`);
-          if (!w.ok) notes.push(`${n}：main の頭の欄を書けなかった（${w.message}）`);
-        }
-        return asMcpTextResult({ ok: true, 引っ込めた: uniq, commit: c.commit.slice(0, 7), ...(notes.length ? { 注意: notes } : {}) });
+        return asMcpTextResult(await unpublishSkills(env, { names, check_only }));
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
+}
+
+/** v1.118.0：スキルを生徒に出す中身（AI の道具 skills__publish と、棚の画面の SkillsReader.publish が同じものを使う） */
+export async function publishSkills(env: Env, { names, keys, accept_hits, check_only }: { names: string[]; keys: string[]; accept_hits?: boolean; check_only?: boolean }): Promise<any> {
+    const ck = checkKeys(keys);
+    const errors: string[] = [];
+    if (ck.bad.length) errors.push(`出す相手に使えないキー：${ck.bad.join("・")}（本人・事業部は社内の印。門番の表のキーを英小文字で）`);
+    if (!ck.keys.length) errors.push("出す相手のキーが無い");
+    const uniq = [...new Set(names)];
+    const [main, pub, mt, pt] = await Promise.all([readAll(env, SKILLS_BRANCH), readAll(env, SKILLS_PUBLIC_BRANCH), gh(env, `/git/trees/${SKILLS_BRANCH}?recursive=1`), gh(env, `/git/trees/${SKILLS_PUBLIC_BRANCH}?recursive=1`)]);
+    if (!main.ok) return { ok: false, message: main.message };
+    if (!pub.ok) return { ok: false, message: pub.message };
+    if (!mt.ok || !pt.ok) return { ok: false, message: (!mt.ok ? mt : pt as any).message };
+    const mainTree: Array<{ path: string; type: string; sha: string }> = mt.body.tree || [];
+    const pubTree: Array<{ path: string; type: string; sha: string }> = pt.body.tree || [];
+    const pubNames = pub.skills.filter((k) => studentAudienceOf(k.audience).length).map((k) => k.folder);
+    const hits: Hit[] = [];
+    const plan: Array<{ name: string; version: string; from: string | null; files: Array<{ path: string; sha: string }>; drop: string[]; skillText: string; mainText: string }> = [];
+    for (const name of uniq) {
+      const meta = main.skills.find((k) => k.folder === name);
+      if (!meta) { errors.push(`${name} は正本に無い`); continue; }
+      if (!meta.version) { errors.push(`${name} に版が無い`); continue; }
+      const files = mainTree.filter((t) => t.type === "blob" && t.path.startsWith(`skills/${name}/`)).map((t) => ({ path: t.path.slice(`skills/${name}/`.length), sha: t.sha }));
+      const texts = await Promise.all(files.map(async (f) => {
+        if (!/\.(md|ya?ml|txt|json)$/i.test(f.path)) return { path: f.path, text: null };
+        const r = await gh(env, `/contents/skills/${encodeURIComponent(name)}/${f.path.split("/").map(encodeURIComponent).join("/")}?ref=${SKILLS_BRANCH}`, true);
+        return { path: f.path, text: r.ok ? String(r.body) : null };
+      }));
+      const sc = scanInternal(texts);
+      if (sc.blocked.length) errors.push(`${name}：生徒の版に入れてはいけないファイル ${sc.blocked.join("・")}（スキルクリエイターで外に分けてから）`);
+      hits.push(...sc.hits.map((h) => ({ ...h, file: `${name}/${h.file}` })));
+      const miss = missingRefs(meta.refs, pubNames, uniq);
+      if (miss.length) errors.push(`${name} が呼ぶスキルが生徒の版に無い：${miss.join("・")}（names に一緒に入れる）`);
+      const mainText = texts.find((t) => t.path === "SKILL.md")?.text;
+      if (!mainText) { errors.push(`${name} の SKILL.md を読めない`); continue; }
+      const aud = audienceWith(meta.audience, ck.keys);
+      const skillText = setMeta(setMeta(mainText, "audience", aud), "public_version", meta.version);
+      const drop = pubTree.filter((t) => t.type === "blob" && t.path.startsWith(`skills/${name}/`)).map((t) => t.path.slice(`skills/${name}/`.length)).filter((p) => !files.some((f) => f.path === p));
+      plan.push({ name, version: meta.version, from: pub.skills.find((k) => k.folder === name)?.public_version || null, files, drop, skillText, mainText: skillText });
+    }
+    if (errors.length) return { ok: false, 直すこと: errors, ...(hits.length ? { 見つかった行: hits.slice(0, 40) } : {}) };
+    const diff = plan.map((p) => ({ name: p.name, 生徒の版: `${p.from ?? "出していない"} → ${p.version}`, 出す相手: ck.keys, 写すファイル: p.files.length, 消すファイル: p.drop }));
+    if (hits.length && !accept_hits) return { ok: false, 直すこと: ["内部の言葉が見つかった。見つかった行を Naoki に見せ、出してよいと言われたら accept_hits: true で呼び直す。直すならスキルクリエイターで直してから"], 見つかった行: hits.slice(0, 40), 差分: diff };
+    if (check_only) return { ok: true, 確かめだけ: true, 差分: diff, ...(hits.length ? { 見つかった行: hits.slice(0, 40) } : {}) };
+    const changes: TreeChange[] = [];
+    for (const p of plan) {
+      for (const f of p.files) changes.push(f.path === "SKILL.md" ? { path: `skills/${p.name}/SKILL.md`, content: p.skillText } : { path: `skills/${p.name}/${f.path}`, sha: f.sha });
+      for (const d of p.drop) changes.push({ path: `skills/${p.name}/${d}`, sha: null });
+    }
+    const c = await commitTree(env, SKILLS_PUBLIC_BRANCH, changes, `生徒に出す版：${plan.map((p) => `${p.name} ${p.version}`).join("・")}（相手 ${ck.keys.join("・")}）`);
+    if (!c.ok) return { ok: false, message: c.message };
+    const mainNotes: string[] = [];
+    let at = "";
+    for (const p of plan) {
+      const w = await writeSkillsFile(env, `skills/${p.name}/SKILL.md`, (t) => (t === null ? null : setMeta(setMeta(t, "audience", audienceWith(main.skills.find((k) => k.folder === p.name)!.audience, ck.keys)), "public_version", p.version)), () => `生徒の版を付け替え：${p.name} ${p.version}`);
+      if (!w.ok) mainNotes.push(`${p.name}：main の頭の欄を書けなかった（${w.message}）`);
+      else if (/^[0-9a-f]{40}$/.test(w.commit)) at = w.commit;
+    }
+    return { ok: true, ...(at ? { at } : {}), 出した: plan.map((p) => ({ name: p.name, version: p.version, keys: ck.keys })), commit: c.commit.slice(0, 7), ...(mainNotes.length ? { 注意: mainNotes } : {}), 次: "生徒のマイページの「シアニンのスキル」のカードに出る（出す相手のキーを持つ人だけ）" };
+}
+
+/** v1.118.0：生徒の版を引っ込める中身（skills__unpublish と SkillsReader.unpublish が同じものを使う） */
+export async function unpublishSkills(env: Env, { names, check_only }: { names: string[]; check_only?: boolean }): Promise<any> {
+    const uniq = [...new Set(names)];
+    const [main, pub, pt] = await Promise.all([readAll(env, SKILLS_BRANCH), readAll(env, SKILLS_PUBLIC_BRANCH), gh(env, `/git/trees/${SKILLS_PUBLIC_BRANCH}?recursive=1`)]);
+    if (!main.ok) return { ok: false, message: main.message };
+    if (!pub.ok) return { ok: false, message: pub.message };
+    if (!pt.ok) return { ok: false, message: pt.message };
+    const errors: string[] = [];
+    for (const n of uniq) if (!pub.skills.some((k) => k.folder === n)) errors.push(`${n} は生徒に出していない`);
+    for (const k of pub.skills) if (!uniq.includes(k.folder)) { const used = k.refs.filter((r) => uniq.includes(r)); if (used.length) errors.push(`${k.folder}（生徒の版）が ${used.join("・")} を呼んでいる。一緒に引っ込めるなら names に入れる`); }
+    if (errors.length) return { ok: false, 直すこと: errors };
+    const changes: TreeChange[] = ((pt.body.tree || []) as Array<{ path: string; type: string }>).filter((t) => t.type === "blob" && uniq.some((n) => t.path.startsWith(`skills/${n}/`))).map((t) => ({ path: t.path, sha: null }));
+    if (check_only) return { ok: true, 確かめだけ: true, 引っ込める: uniq, 消すファイル: changes.length };
+    const c = await commitTree(env, SKILLS_PUBLIC_BRANCH, changes, `生徒の版を引っ込める：${uniq.join("・")}`);
+    if (!c.ok) return { ok: false, message: c.message };
+    const notes: string[] = [];
+    let at = "";
+    for (const n of uniq) {
+      const m = main.skills.find((k) => k.folder === n);
+      if (!m) continue;
+      const w = await writeSkillsFile(env, `skills/${n}/SKILL.md`, (t) => (t === null ? null : setMeta(setMeta(t, "audience", audienceWith(m.audience, [])), "public_version", null)), () => `生徒の版を外す：${n}`);
+      if (!w.ok) notes.push(`${n}：main の頭の欄を書けなかった（${w.message}）`);
+      else if (/^[0-9a-f]{40}$/.test(w.commit)) at = w.commit;
+    }
+    return { ok: true, ...(at ? { at } : {}), 引っ込めた: uniq, commit: c.commit.slice(0, 7), ...(notes.length ? { 注意: notes } : {}) };
 }
 
 function jstDate(): string {
