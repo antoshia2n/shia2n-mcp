@@ -2,6 +2,7 @@ import { parseFlow } from "./recipe-write-core.js";
 import { findRecipes } from "./recipe-find-core.js";
 import { STRENGTHS, writeRecipeText, type FlowStep } from "./recipe-write-core.js";
 import { checkSkillText, similarSkills, stampUpdated } from "./skill-save-core.js";
+import { checkGlyph, glyphFromSvg, openaiYaml, skillIconSvg } from "./skill-icon-core.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
@@ -230,15 +231,16 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
   // 規格（STANDARD.md）の確かめ・重複の確かめ・版の上げ方を、AI に任せず道具の側で必ず通す。台帳は正本の push で自動で作り直される。
   server.tool(
     "skills__save",
-    "シアニンのスキル 1 本を正本 shia2n-skills の skills/<name>/SKILL.md に保存する（main に 1 コミット）。スキルクリエイター（shia2n-skill-creator）の手順で、人が OK と言ったあとにだけ呼ぶ。保存の前に規格（STANDARD.md）を必ず確かめ、外れていれば保存せず理由を返す：頭の欄（title・purpose・genre・category・version・where・audience・owner）・ジャンル 6 つ・カテゴリ 5 つ・見出しの順（目的／使う場面／使わない場面／手順／決まり／出力の形／参照）・500 行未満・参照は 1 段まで・新しいスキルは 1.0・本文を変えたら版を上げる・頭の欄だけなら版を上げない。updated は今日の日付に道具がそろえる。新しく作る（create）とき似たスキルがあれば止まり、new_reason（なぜ今のスキルの直しやレシピで足りないか）を渡したときだけ作る。check_only で確かめだけもできる。戻り値: { ok, name, version, commit, 注意? }／止まったとき { ok: false, 直すこと: [...], 似たスキル? }。",
+    "シアニンのスキル 1 本を正本 shia2n-skills の skills/<name>/SKILL.md に保存する（main に 1 コミット）。スキルクリエイター（shia2n-skill-creator）の手順で、人が OK と言ったあとにだけ呼ぶ。保存の前に規格（STANDARD.md）を必ず確かめ、外れていれば保存せず理由を返す：頭の欄（title・purpose・genre・category・version・where・audience・owner）・ジャンル 6 つ・カテゴリ 5 つ・見出しの順（目的／使う場面／使わない場面／手順／決まり／出力の形／参照）・500 行未満・参照は 1 段まで・新しいスキルは 1.0・本文を変えたら版を上げる・頭の欄だけなら版を上げない。updated は今日の日付に道具がそろえる。icon（24×24 の線の絵）を渡すと、ジャンルの色でアイコン（assets/icon.svg・icon-small.svg）と ChatGPT 用の agents/openai.yaml を道具が作る。新しく作る（create）とき似たスキルがあれば止まり、new_reason（なぜ今のスキルの直しやレシピで足りないか）を渡したときだけ作る。check_only で確かめだけもできる。戻り値: { ok, name, version, commit, 注意? }／止まったとき { ok: false, 直すこと: [...], 似たスキル? }。",
     {
       name: z.string().min(2).max(64).describe("AI が呼ぶ名前（フォルダ名）。英小文字・数字・ハイフン"),
       text: z.string().min(50).max(60000).describe("SKILL.md の全文（頭の --- から）"),
       create: z.boolean().optional().describe("新しく作るとき true。直すときは省く"),
       new_reason: z.string().max(500).optional().describe("似たスキルがあっても新しく作る理由（人の言葉）"),
       check_only: z.boolean().optional().describe("true なら確かめだけして保存しない"),
+      icon: z.string().max(2000).optional().describe("アイコンの絵（24×24 の線の中身。path・circle・rect・line・polyline・ellipse だけ）。新しく作るときは渡す。色はジャンルで道具が決める"),
     },
-    async ({ name, text, create, new_reason, check_only }) => {
+    async ({ name, text, create, new_reason, check_only, icon }) => {
       try {
         const all = await readAll(env, SKILLS_BRANCH);
         if (!all.ok) return asMcpTextResult({ ok: false, message: all.message });
@@ -254,6 +256,9 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
           current = String(f.body);
         }
         const c = checkSkillText(name, stamped, current, all.skills);
+        if (icon) { const bad = checkGlyph(icon); if (bad) c.errors.push(`アイコン：${bad}`); }
+        const hasIcon = all.skills.find((k) => k.folder === name)?.files.includes("assets/icon.svg") || false;
+        if (!icon && !hasIcon) c.warnings.push("アイコンが無い。icon に絵（24×24 の線）を渡すと、ジャンルの色で道具が作る（STANDARD.md 7 節）");
         const similar = create && c.meta ? similarSkills(c.meta, all.skills) : [];
         if (c.errors.length) return asMcpTextResult({ ok: false, 直すこと: c.errors, ...(c.warnings.length ? { 注意: c.warnings } : {}), ...(similar.length ? { 似たスキル: similar } : {}) });
         if (similar.length && !new_reason) return asMcpTextResult({ ok: false, 直すこと: ["似たスキルがある。今のスキルの直し・レシピで足りないかを人に聞き、それでも新しく作るなら new_reason に理由を渡す"], 似たスキル: similar });
@@ -265,7 +270,8 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
         }, () => `${create ? "スキルを作る" : c.bodyChanged ? "スキルを直す" : "スキルの頭の欄を直す"}：${name} ${c.meta?.version}${new_reason ? `（新しく作る理由：${new_reason.slice(0, 80)}）` : ""}`, !!create);
         if (fail) return asMcpTextResult({ ok: false, message: fail });
         if (!w.ok) return asMcpTextResult({ ok: false, message: w.message });
-        return asMcpTextResult({ ok: true, name, version: c.meta?.version, commit: w.commit.slice(0, 7), ...(c.warnings.length ? { 注意: c.warnings } : {}), 次: "棚（マーケくん 素材 › スキル）と台帳に出る。レシピに入れるなら recipes__save" });
+        const iconNote = await writeSkillIcon(env, name, c.meta!, icon || null, hasIcon);
+        return asMcpTextResult({ ok: true, name, version: c.meta?.version, ...(iconNote ? { アイコン: iconNote } : {}), commit: w.commit.slice(0, 7), ...(c.warnings.length ? { 注意: c.warnings } : {}), 次: "棚（マーケくん 素材 › スキル）と台帳に出る。レシピに入れるなら recipes__save" });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
@@ -396,6 +402,30 @@ export async function writeSkillsFile(
     return { ok: false, message: `書けなかった（${put.status}）${(await put.text()).slice(0, 200)}` };
   }
   return { ok: false, message: "別の書き込みと 2 回ぶつかった。少し待ってもう一度" };
+}
+
+/**
+ * スキルのアイコンと agents/openai.yaml を書く（v1.112.0）。glyph を渡せばその絵で、無ければ今の icon.svg の絵を
+ * 今のジャンルの色で作り直す（ジャンルを変えたときに色が付いていくため）。中身が同じなら書かない
+ */
+export async function writeSkillIcon(env: Env, name: string, meta: SkillMeta, glyph: string | null, hasIcon: boolean): Promise<string | null> {
+  let g = glyph;
+  if (!g && hasIcon) {
+    const f = await gh(env, `/contents/skills/${encodeURIComponent(name)}/assets/icon.svg?ref=${SKILLS_BRANCH}`, true);
+    g = f.ok ? glyphFromSvg(String(f.body)) : null;
+  }
+  const notes: string[] = [];
+  if (g && meta.genre) {
+    for (const [path, svg] of [["icon.svg", skillIconSvg(meta.genre, g)], ["icon-small.svg", skillIconSvg(meta.genre, g, true, 32)]] as const) {
+      const r = await writeSkillsFile(env, `skills/${name}/assets/${path}`, () => svg + "\n", () => `スキルのアイコン：${name}`, true);
+      if (!r.ok) notes.push(`${path} を書けなかった（${r.message}）`);
+    }
+  }
+  if (meta.title && meta.purpose && meta.genre) {
+    const r = await writeSkillsFile(env, `skills/${name}/agents/openai.yaml`, () => openaiYaml({ title: meta.title!, purpose: meta.purpose!, genre: meta.genre! }), () => `スキルの見た目（ChatGPT）：${name}`, true);
+    if (!r.ok) notes.push(`agents/openai.yaml を書けなかった（${r.message}）`);
+  }
+  return notes.length ? notes.join("／") : null;
 }
 
 /** hypotheses.md を読み、change で作り直して書く（2026-11-15 v1.106.0）。アプリの画面からもこれを呼ぶ */
