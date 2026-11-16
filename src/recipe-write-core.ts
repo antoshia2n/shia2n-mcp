@@ -146,7 +146,8 @@ const FENCE = "```";
 
 /** 本文から「## 流れ」の節（見出しの次から次の「## 」の前まで）を取り出す。無ければ null */
 function flowSection(body: string): { start: number; end: number; text: string } | null {
-  const m = /^## 流れ[^\n]*\n/m.exec(body);
+  // 「## 流れ」ちょうどの見出しだけを取る（v1.115.1：「## 流れの決まり」を流れと取り違えたため）。後ろの括弧書きは許す
+  const m = /^## 流れ[ \t]*(?:[（(][^\n]*[）)])?[ \t]*\n/m.exec(body);
   if (!m) return null;
   const start = m.index, from = m.index + m[0].length;
   const next = /^## /m.exec(body.slice(from));

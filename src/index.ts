@@ -549,6 +549,7 @@
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
+ * v1.115.1（2026-11-16 開発部）：レシピの流れの節は「## 流れ」ちょうどの見出しだけを読む。「## 流れの決まり」を流れと取り違え、書き直しで流れを別の節へ書いたため。設定の追加 0 個。
  * v1.115.0（2026-11-16 開発部・Naoki「直して」12:29）：GPT の入口 /content/mcp に UTAGE の写しを読む 4 本（status・read・search・get）を足した。過去のファネル・シナリオを LP や配信の見本にするため。取り直しの run は出さない。写しの文面は差し込みの印（%name% など）と Naoki 自身の送り元・Zoom だけで、読者の情報は入らない。設定の追加 0 個。
  * v1.114.0（2026-11-16 開発部）：カテゴリに「進め方」。入口は進め方を補強の候補に出さない。
  * v1.113.1（2026-11-16 開発部）：入口が漢字 1 文字＋送りがな（売れ・伸び）を拾う。
