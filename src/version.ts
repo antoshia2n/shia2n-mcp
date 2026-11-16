@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.118.0"; // 2026-11-16 棚から生徒に出す（SkillsReader.publish・unpublish）
+export const APP_VERSION = "1.119.0"; // 2026-11-16 正本の読みを印で使い回す（棚の一覧が 4〜8 秒）

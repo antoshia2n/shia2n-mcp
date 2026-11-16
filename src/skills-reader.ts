@@ -20,7 +20,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./index.js";
 import { SKILLS_PUBLIC_BRANCH, SKILLS_REPO } from "./skills-core.js";
 import { audienceOpen, buildZip, studentAudience, type ZipEntry } from "./skills-zip.js";
-import { gh, publishSkills, readAll, unpublishSkills, writeHypotheses, writeSkillsFile } from "./tools-skills.js";
+import { gh, publishSkills, readAll, treeText, unpublishSkills, writeHypotheses, writeSkillsFile } from "./tools-skills.js";
 import { CATEGORIES, GENRES, SKILLS_BRANCH, parseRecipeHead, recipeFolders } from "./skills-core.js";
 import { BASE_LATEST, STRENGTHS, parseFlow, writeRecipeText, type RecipeSaveInput } from "./recipe-write-core.js";
 import { HYPOTHESIS_STATUSES, addHypothesis, hypothesisSections, updateHypothesis, type HypothesisStatus } from "./hypothesis-core.js";
@@ -90,30 +90,32 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
   // 保存の直後に読み直すと前の中身が出たため（2026-11-16 本番で確かめた）。コミットで読めば必ず保存したあとの中身になる
   async shelf(at?: string | null): Promise<object> {
     const ref = typeof at === "string" && /^[0-9a-f]{40}$/i.test(at) ? at.toLowerCase() : SKILLS_BRANCH;
-    const [all, pub, tree, hyp] = await Promise.all([
-      readAll(this.env, ref),
-      readAll(this.env, SKILLS_PUBLIC_BRANCH),
-      gh(this.env, `/git/trees/${ref}?recursive=1`),
-      gh(this.env, `/contents/skills/${HYPO_SKILL}/references/hypotheses.md?ref=${ref}`, true),
-    ]);
+    // v1.119.0：木は readAll が読んだものを使い回し、中身は印で読む（同じ印は手元から）。前は 1 回に GitHub へ 70 回近く読みに行っていた
+    const [all, pub] = await Promise.all([readAll(this.env, ref), readAll(this.env, SKILLS_PUBLIC_BRANCH)]);
     if (!all.ok) return { ok: false, error: all.message };
+    const tree = all.tree;
     const pubVer = new Map(pub.ok ? pub.skills.map((s) => [s.folder, s.public_version || s.version]) : []);
     // v1.112.0：スキルのアイコン（assets/icon.svg）。棚は img の data: で見せる（同じ id の SVG を並べてもぶつからないため）
-    const icons = new Map(await Promise.all(all.skills.filter((s) => s.files.includes("assets/icon.svg")).map(async (s) => {
-      const f = await gh(this.env, `/contents/skills/${encodeURIComponent(s.folder)}/assets/icon.svg?ref=${ref}`, true);
-      return [s.folder, f.ok ? String(f.body).trim().slice(0, 6000) : null] as const;
-    })));
+    const [iconPairs, recipes, hypText] = await Promise.all([
+      Promise.all(all.skills.filter((s) => s.files.includes("assets/icon.svg")).map(async (s) => {
+        const t = await treeText(this.env, tree, `skills/${s.folder}/assets/icon.svg`);
+        return [s.folder, t ? t.trim().slice(0, 6000) : null] as const;
+      })),
+      Promise.all(recipeFolders(tree).map(async (n) => {
+        const body = await treeText(this.env, tree, `recipes/${n}/RECIPE.md`);
+        const r = body ? parseRecipeHead(body, n) : null;
+        return r ? { name: n, title: r.title, flow: parseFlow(body!), purpose: r.purpose, version: r.version, updated: r.updated, audience: r.audience, uses: r.uses.map((u) => ({ skill: u.skill, version: u.version, pinned: !!u.commit, commit: u.commit ? u.commit.slice(0, 7) : null, priority: u.priority, strength: u.strength })), bad: r.bad }
+          : { name: n, broken: true };
+      })),
+      treeText(this.env, tree, `skills/${HYPO_SKILL}/references/hypotheses.md`),
+    ]);
+    const icons = new Map(iconPairs);
+    const hyp = hypText === null ? { ok: false as const, message: "仮説の 1 枚が無い" } : { ok: true as const, body: hypText };
     const skills = all.skills.map((s) => ({
       icon: icons.get(s.folder) || null,
       name: s.folder, title: s.title, genre: s.genre, category: s.category, media: s.media, refs: s.refs, conflicts: s.conflicts, kind: s.kind, purpose: s.purpose, version: s.version, student_version: pubVer.get(s.folder) || null, where: s.where, audience: s.audience,
       owner: s.owner, updated: s.updated, description: s.description.slice(0, 300), files: s.files.length, missing: s.missing, latest_ok: (BASE_LATEST as readonly string[]).includes(s.folder),
     }));
-    const recipes = tree.ok ? await Promise.all(recipeFolders(tree.body.tree || []).map(async (n) => {
-      const f = await gh(this.env, `/contents/recipes/${encodeURIComponent(n)}/RECIPE.md?ref=${ref}`, true);
-      const r = f.ok ? parseRecipeHead(String(f.body), n) : null;
-      return r ? { name: n, title: r.title, flow: f.ok ? parseFlow(String(f.body)) : [], purpose: r.purpose, version: r.version, updated: r.updated, audience: r.audience, uses: r.uses.map((u) => ({ skill: u.skill, version: u.version, pinned: !!u.commit, commit: u.commit ? u.commit.slice(0, 7) : null, priority: u.priority, strength: u.strength })), bad: r.bad }
-        : { name: n, broken: true };
-    })) : [];
     const hypotheses = hyp.ok ? hypothesisSections(String(hyp.body)).map((h) => ({ id: `H${h.id}`, title: h.title, status: h.status, body: h.body.slice(0, 4000) })) : [];
     return {
       ok: true, commit: all.commit, repo: `https://github.com/${SKILLS_REPO}`, skills, recipes, hypotheses, hypotheses_skill: HYPO_SKILL,

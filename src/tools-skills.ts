@@ -27,7 +27,7 @@ export async function gh(env: Env, path: string, raw = false): Promise<{ ok: tru
   if (!key) return { ok: false, status: 0, message: "鍵が設定されていません（GITHUB_READ_TOKEN か GITHUB_TOKEN）" };
   // v1.107.2：枝の名前（main・public）で読むときは、毎回ちがう住所にして途中の置き場の写しを使わない。
   // 2026-11-16 本番で、保存の 10 分後も棚に前の中身（前のコミット）が出た。コミット（40 桁）で読むときは中身が変わらないので付けない
-  const pinned = /[?&]ref=[0-9a-f]{40}\b|\/(?:trees|commits)\/[0-9a-f]{40}\b/i.test(path);
+  const pinned = /[?&]ref=[0-9a-f]{40}\b|\/(?:trees|commits|blobs)\/[0-9a-f]{40}\b/i.test(path);
   const url = `https://api.github.com/repos/${SKILLS_REPO}${path}${pinned ? "" : `${path.includes("?") ? "&" : "?"}_=${Date.now()}`}`;
   const r = await fetch(url, {
     headers: { Authorization: `Bearer ${key}`, Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json", "User-Agent": "shia2n-mcp", "Cache-Control": "no-cache" },
@@ -40,22 +40,54 @@ export async function gh(env: Env, path: string, raw = false): Promise<{ ok: tru
   return { ok: true, body: raw ? await r.text() : await r.json() };
 }
 
-export async function readAll(env: Env, ref: string = SKILLS_BRANCH): Promise<{ ok: true; commit: string; skills: Array<SkillMeta & { folder: string; files: string[] }>; broken: string[] } | { ok: false; message: string }> {
+// v1.119.0（2026-11-16 開発部・マーケくんの重さ）：ファイルの中身は、木（tree）が持つ印 sha で読み、同じ印は使い回す。
+// 印が同じなら中身も同じなので古い中身が出ることは無い。棚の一覧は GitHub へ 70 回近く読みに行っていて 4〜8 秒かかっていた。
+// 使い回すのは同じ Worker の中の手元だけ（再起動で消える・上限つき）
+const BLOBS = new Map<string, string>();
+const READS = new Map<string, { commit: string; skills: Array<SkillMeta & { folder: string; files: string[] }>; broken: string[] }>();
+function remember<V>(m: Map<string, V>, k: string, v: V, max: number) { if (m.size >= max) m.delete(m.keys().next().value as string); m.set(k, v); }
+export async function blobText(env: Env, sha: string): Promise<{ ok: true; text: string } | { ok: false; message: string }> {
+  const hit = BLOBS.get(sha);
+  if (hit !== undefined) return { ok: true, text: hit };
+  const r = await gh(env, `/git/blobs/${sha}`, true);
+  if (!r.ok) return { ok: false, message: r.message };
+  const text = String(r.body);
+  if (text.length < 200_000) remember(BLOBS, sha, text, 3000);
+  return { ok: true, text };
+}
+export type TreeEntry = { path: string; type: string; sha: string };
+export async function readAll(env: Env, ref: string = SKILLS_BRANCH): Promise<{ ok: true; commit: string; skills: Array<SkillMeta & { folder: string; files: string[] }>; broken: string[]; tree: TreeEntry[] } | { ok: false; message: string }> {
   const tree = await gh(env, `/git/trees/${ref}?recursive=1`);
   if (!tree.ok) return { ok: false, message: tree.message };
-  const groups = groupSkillFiles(tree.body.tree || []);
+  const entries: TreeEntry[] = tree.body.tree || [];
+  const key = String(tree.body.sha || "");
+  const cached = key ? READS.get(key) : undefined;
+  if (cached) return { ok: true, ...cached, skills: cached.skills.map((x) => ({ ...x })), broken: [...cached.broken], tree: entries };
+  const groups = groupSkillFiles(entries);
+  const shaOf = new Map(entries.filter((t) => t.type === "blob").map((t) => [t.path, t.sha]));
   const skills: Array<SkillMeta & { folder: string; files: string[] }> = [];
   const broken: string[] = [];
   await Promise.all([...groups.entries()].map(async ([folder, files]) => {
     if (!files.includes("SKILL.md")) { broken.push(`${folder}（SKILL.md が無い）`); return; }
-    const f = await gh(env, `/contents/skills/${encodeURIComponent(folder)}/SKILL.md?ref=${ref}`, true);
+    const sha = shaOf.get(`skills/${folder}/SKILL.md`);
+    const f = sha ? await blobText(env, sha) : { ok: false as const, message: "印が無い" };
     if (!f.ok) { broken.push(`${folder}（${f.message}）`); return; }
-    const meta = parseSkillHead(String(f.body), folder);
+    const meta = parseSkillHead(f.text, folder);
     if (!meta) { broken.push(`${folder}（頭の --- が無い）`); return; }
     skills.push({ ...meta, folder, files });
   }));
   skills.sort((a, b) => a.name.localeCompare(b.name));
-  return { ok: true, commit: String(tree.body.sha || "").slice(0, 7), skills, broken };
+  const out = { commit: key.slice(0, 7), skills, broken };
+  if (key && !broken.length) remember(READS, key, out, 50);
+  return { ok: true, ...out, skills: skills.map((x) => ({ ...x })), broken: [...broken], tree: entries };
+}
+
+/** 木の中の 1 ファイルを印で読む（無ければ null） */
+export async function treeText(env: Env, tree: TreeEntry[], path: string): Promise<string | null> {
+  const t = tree.find((x) => x.type === "blob" && x.path === path);
+  if (!t) return null;
+  const r = await blobText(env, t.sha);
+  return r.ok ? r.text : null;
 }
 
 export function registerSkillsTools(server: McpServer, env: Env): void {
