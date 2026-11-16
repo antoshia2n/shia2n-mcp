@@ -61,7 +61,7 @@ export function checkSkillText(name: string, text: string, current: string | nul
   else if (lines > 200) warnings.push(`本文が ${lines} 行（目安は 200 行）`);
   // 規格 8 節（2026-11-16）：大きさの目安。小（部品）80 行・中（手順）200 行。止めずに注意だけ
   const size = skillSize(meta.category);
-  if (size === "小" && lines > 80) warnings.push(`部品（小）の目安 80 行を超えている（${lines} 行）。中の references/ に置くか、2 つに分けるかを考える`);
+  if (size === "小" && lines > 80) warnings.push(`タスクスキルの目安 80 行を超えている（${lines} 行）。ワークスキルの references/ に置くか、2 つに分けるかを考える`);
   if (!/^#\s+\S/m.test(body)) errors.push("本文の最初に「# 表示名」が無い");
   const found = [...body.matchAll(/^##\s+(.+?)\s*$/gm)].map((m) => m[1]);
   const pos = HEADINGS.map((h) => found.indexOf(h));
@@ -91,7 +91,7 @@ function headingProblem(body: string): string {
 }
 
 /** 大きさはカテゴリで決まる（規格 8 節）。手順を含めば中、それ以外は小 */
-export function skillSize(category: string[]): "小" | "中" {
+export function skillSize(category: string[]): "小" | "中" { // 小＝タスクスキル・中＝ワークスキル（Naoki 命名 2026-11-16）
   return category.includes("手順") ? "中" : "小";
 }
 
