@@ -20,7 +20,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./index.js";
 import { SKILLS_PUBLIC_BRANCH, SKILLS_REPO } from "./skills-core.js";
 import { audienceOpen, buildZip, studentAudience, type ZipEntry } from "./skills-zip.js";
-import { gh, readAll, writeHypotheses, writeSkillsFile } from "./tools-skills.js";
+import { gh, publishSkills, readAll, unpublishSkills, writeHypotheses, writeSkillsFile } from "./tools-skills.js";
 import { CATEGORIES, GENRES, SKILLS_BRANCH, parseRecipeHead, recipeFolders } from "./skills-core.js";
 import { BASE_LATEST, STRENGTHS, parseFlow, writeRecipeText, type RecipeSaveInput } from "./recipe-write-core.js";
 import { HYPOTHESIS_STATUSES, addHypothesis, hypothesisSections, updateHypothesis, type HypothesisStatus } from "./hypothesis-core.js";
@@ -68,6 +68,22 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     }
     const version = s.public_version || s.version || "0";
     return { ok: true, filename: `${folder}-${version}.zip`, version, bytes: buildZip(folder, entries) };
+  }
+
+  // v1.118.0（2026-11-16 開発部・Naoki OK 15:40）：棚の画面から生徒に出す・引っ込める。中身は AI の道具 skills__publish・skills__unpublish と同じ関数（点検も同じ）
+  async publish(input: { names?: unknown; keys?: unknown; accept_hits?: unknown; check_only?: unknown }): Promise<object> {
+    const names = Array.isArray(input?.names) ? input.names.map(String).filter((n) => /^[a-z0-9][a-z0-9_-]{1,79}$/i.test(n)).slice(0, 10) : [];
+    const keys = Array.isArray(input?.keys) ? input.keys.map(String).slice(0, 10) : [];
+    if (!names.length) return { ok: false, error: "bad_name" };
+    try { return await publishSkills(this.env, { names, keys, accept_hits: input?.accept_hits === true, check_only: input?.check_only === true }); }
+    catch (e) { return { ok: false, error: String(e) }; }
+  }
+
+  async unpublish(input: { names?: unknown; check_only?: unknown }): Promise<object> {
+    const names = Array.isArray(input?.names) ? input.names.map(String).filter((n) => /^[a-z0-9][a-z0-9_-]{1,79}$/i.test(n)).slice(0, 10) : [];
+    if (!names.length) return { ok: false, error: "bad_name" };
+    try { return await unpublishSkills(this.env, { names, check_only: input?.check_only === true }); }
+    catch (e) { return { ok: false, error: String(e) }; }
   }
 
   // v1.107.1：at（保存の直後に返したコミット 40 桁）を渡すと、その時点を読む。GitHub は main の読み取りを 1 分ほど前の形で返すことがあり、
