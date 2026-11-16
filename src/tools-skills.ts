@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
+import { FEEDBACK_HINT, addFeedback, feedbackFiles, feedbackPath, feedbackSummary, listFeedback, recipesUsing, resolveFeedback } from "./feedback-core.js";
 import { HYPOTHESIS_STATUSES, addHypothesis, listHypotheses, updateHypothesis } from "./hypothesis-core.js";
 import { SKILLS_BRANCH, SKILLS_PUBLIC_BRANCH, SKILLS_REPO, filterSkills, groupSkillFiles, nearNames, parseRecipeHead, parseSkillHead, recipeFolders, type SkillMeta } from "./skills-core.js";
 
@@ -239,8 +240,9 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
       new_reason: z.string().max(500).optional().describe("似たスキルがあっても新しく作る理由（人の言葉）"),
       check_only: z.boolean().optional().describe("true なら確かめだけして保存しない"),
       icon: z.string().max(2000).optional().describe("アイコンの絵（24×24 の線の中身。path・circle・rect・line・polyline・ellipse だけ）。新しく作るときは渡す。色はジャンルで道具が決める"),
+      feedback_ids: z.array(z.string().regex(/^F?\d+$/i)).max(50).optional().describe("v1.116.0：この直しで反映した直しの番号（F3 か 3）。保存できたら feedback/<name>.md のその行を「反映済み 新しい版」にする"),
     },
-    async ({ name, text, create, new_reason, check_only, icon }) => {
+    async ({ name, text, create, new_reason, check_only, icon, feedback_ids }) => {
       try {
         const all = await readAll(env, SKILLS_BRANCH);
         if (!all.ok) return asMcpTextResult({ ok: false, message: all.message });
@@ -271,7 +273,25 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
         if (fail) return asMcpTextResult({ ok: false, message: fail });
         if (!w.ok) return asMcpTextResult({ ok: false, message: w.message });
         const iconNote = await writeSkillIcon(env, name, c.meta!, icon || null, hasIcon);
-        return asMcpTextResult({ ok: true, name, version: c.meta?.version, ...(iconNote ? { アイコン: iconNote } : {}), commit: w.commit.slice(0, 7), ...(c.warnings.length ? { 注意: c.warnings } : {}), 次: "棚（マーケくん 素材 › スキル）と台帳に出る。レシピに入れるなら recipes__save" });
+        // v1.116.0：反映した直しに印を付け、このスキルを使っているレシピを並べる（固定している版を上げるか人に 1 回聞くため）
+        const version = c.meta?.version ?? null;
+        let fbNote: Record<string, unknown> | null = null;
+        if (feedback_ids?.length) {
+          const ids = feedback_ids.map((i) => Number(String(i).replace(/^F/i, "")));
+          let res: { changed: number[]; missing: number[] } = { changed: [], missing: ids };
+          const r = await writeSkillsFile(env, feedbackPath(name), (t) => { if (t === null) return null; const o = resolveFeedback(t, { ids, status: "反映済み", version, date }); res = o; return o.md; }, () => `直しを反映済みに：${name} ${version}（${ids.map((i) => `F${i}`).join("・")}）`);
+          fbNote = r.ok ? { 反映済みにした: res.changed.map((i) => `F${i}`), ...(res.missing.length ? { 見つからない・未反映でない: res.missing.map((i) => `F${i}`) } : {}) } : { 直しの印を付けられなかった: r.message };
+        }
+        const using = c.bodyChanged ? recipesUsing(name, await readRecipeHeads(env), version) : [];
+        const bump = using.filter((u) => u.上げる必要);
+        return asMcpTextResult({
+          ok: true, name, version, ...(iconNote ? { アイコン: iconNote } : {}), commit: w.commit.slice(0, 7), ...(c.warnings.length ? { 注意: c.warnings } : {}),
+          ...(fbNote ? { 直し: fbNote } : {}),
+          ...(using.length ? { 使っているレシピ: using } : {}),
+          次: bump.length
+            ? `レシピ ${bump.map((u) => u.title || u.recipe).join("・")} は前の版で固定している。「新しい版で試す」かを人に 1 回だけ聞き、OK なら recipes__save（そのスキルだけ pin: now、ほかは keep）`
+            : "棚（マーケくん 素材 › スキル）と台帳に出る。レシピに入れるなら recipes__save",
+        });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
@@ -356,10 +376,101 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
+
+  // v1.116.0（2026-11-16 開発部・Naoki OK 14:30「直しを貯めるのと、任意の僕のタイミングで改善の両方ができるように」）：
+  // 作業中の Naoki の直しを、スキルごとに正本 shia2n-skills の feedback/<スキル>.md へためる。改善案はスキルクリエイターが読んで出す。
+  server.tool(
+    "skills__feedback_add",
+    "作業中に Naoki が出した直しを 1 件、そのスキルの直しの記録（正本 shia2n-skills の feedback/<スキル>.md）にためる。レシピやスキルで作っている途中・作ったあとに Naoki が「ここ直して」「もっと〇〇に」と言ったら、その回の仕上がりを直すのとは別に、直しが効くスキルを 1 つ決めて呼ぶ（どのスキルか決められないときだけ人に聞く）。words は Naoki の言葉をそのまま渡す（要約・言い換えをしない）。その回だけの話（今回の題の中身など）はためない。スキルは書き換えない。戻り値の 改善の目安 が true なら、作業の区切りで「直しが 2 件たまりました。スキルクリエイターで改善案を出しますか？」と 1 回だけ聞く。戻り値: { ok, skill, id, 未反映, 改善の目安, commit }／失敗 { ok: false, message }。",
+    {
+      skill: z.string().min(2).max(80).describe("直しが効くスキルの名前（フォルダ名）"),
+      words: z.string().min(1).max(2000).describe("Naoki の直しの言葉そのまま"),
+      recipe: z.string().max(80).optional().describe("そのとき使っていたレシピの名前（あれば）"),
+    },
+    async ({ skill, words, recipe }) => {
+      try {
+        if (!/^[a-z0-9][a-z0-9_-]*$/i.test(skill)) return asMcpTextResult({ ok: false, message: "skill は英数字とハイフンだけ" });
+        const has = await gh(env, `/contents/skills/${encodeURIComponent(skill)}/SKILL.md?ref=${SKILLS_BRANCH}`, true);
+        if (!has.ok) return asMcpTextResult({ ok: false, message: has.status === 404 ? `${skill} は正本に無い（skills__list で名前を確かめる）` : has.message });
+        let id = 0;
+        const w = await writeSkillsFile(env, feedbackPath(skill), (t) => { const a = addFeedback(t, skill, { words, recipe: recipe || null, date: jstDate() }); id = a.id; return a.md; }, () => `直しをためる：${skill} F${id}`, true);
+        if (!w.ok) return asMcpTextResult({ ok: false, message: w.message });
+        const sum = feedbackSummary(skill, listFeedback(w.text));
+        return asMcpTextResult({ ok: true, skill, id: `F${id}`, 未反映: sum.未反映, 改善の目安: sum.改善の目安, commit: w.commit.slice(0, 7), ...(sum.改善の目安 ? { 次: `未反映が ${FEEDBACK_HINT} 件以上。作業の区切りで、スキルクリエイターで改善案を出すかを 1 回だけ聞く` } : {}) });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  server.tool(
+    "skills__feedback_list",
+    "ためた直しを読む（読むだけ）。skill を渡すとそのスキルの直しを全部（番号・日付・状態・レシピ・言葉）、省くと直しがあるスキルごとの未反映の数と、改善の目安（未反映 2 件以上）に届いたか。スキルクリエイターが改善案を出す前に呼ぶ。Naoki が「〇〇のスキルを改善して」「たまった直しを見せて」と言ったときも呼ぶ（目安に届いていなくても出してよい）。only_open で未反映だけ。戻り値: { ok, skill?, 直し?: [...], スキル?: [{ skill, 未反映, 改善の目安 }] }。",
+    {
+      skill: z.string().max(80).optional().describe("スキルの名前。省くと全部のスキルのまとめ"),
+      only_open: z.boolean().optional().describe("true なら未反映だけ"),
+    },
+    async ({ skill, only_open }) => {
+      try {
+        if (skill) {
+          if (!/^[a-z0-9][a-z0-9_-]*$/i.test(skill)) return asMcpTextResult({ ok: false, message: "skill は英数字とハイフンだけ" });
+          const f = await gh(env, `/contents/${feedbackPath(skill)}?ref=${SKILLS_BRANCH}`, true);
+          if (!f.ok && f.status !== 404) return asMcpTextResult({ ok: false, message: f.message });
+          const items = f.ok ? listFeedback(String(f.body)) : [];
+          const shown = only_open ? items.filter((i) => i.status === "未反映") : items;
+          return asMcpTextResult({ ok: true, ...feedbackSummary(skill, items), 直し: shown.map((i) => ({ id: `F${i.id}`, 日付: i.date, 状態: i.status, ...(i.recipe ? { レシピ: i.recipe } : {}), 言葉: i.words, ...(i.resolved ? { 結果: i.resolved } : {}) })) });
+        }
+        const tree = await gh(env, `/git/trees/${SKILLS_BRANCH}?recursive=1`);
+        if (!tree.ok) return asMcpTextResult({ ok: false, message: tree.message });
+        const names = feedbackFiles(tree.body.tree || []);
+        const rows = await Promise.all(names.map(async (n) => {
+          const f = await gh(env, `/contents/${feedbackPath(n)}?ref=${SKILLS_BRANCH}`, true);
+          return f.ok ? feedbackSummary(n, listFeedback(String(f.body))) : { skill: n, 読めなかった: true };
+        }));
+        const out = only_open ? rows.filter((r: any) => r.未反映 > 0 || r.読めなかった) : rows;
+        return asMcpTextResult({ ok: true, 件数: out.length, スキル: out, 目安: `同じスキルに未反映 ${FEEDBACK_HINT} 件で改善案。Naoki の合図があればいつでも` });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  server.tool(
+    "skills__feedback_resolve",
+    "ためた直しの状態を変える：反映済み（スキルを直して入れた）／見送り（Naoki が「これはスキルに入れない」と言った）。スキルを直したときは skills__save の feedback_ids で印が付くので、これを呼ぶのは見送りのときと、レシピ側で直したときだけ。note に理由（Naoki の言葉）を付けられる。戻り値: { ok, 変えた, 見つからない?, 未反映, commit }。",
+    {
+      skill: z.string().min(2).max(80).describe("スキルの名前"),
+      ids: z.array(z.string().regex(/^F?\d+$/i)).min(1).max(50).describe("直しの番号（F3 か 3）"),
+      status: z.enum(["反映済み", "見送り"]).describe("新しい状態"),
+      version: z.string().max(20).optional().describe("反映した版（反映済みのとき）"),
+      note: z.string().max(500).optional().describe("理由（Naoki の言葉そのまま）"),
+    },
+    async ({ skill, ids, status, version, note }) => {
+      try {
+        if (!/^[a-z0-9][a-z0-9_-]*$/i.test(skill)) return asMcpTextResult({ ok: false, message: "skill は英数字とハイフンだけ" });
+        const nums = ids.map((i) => Number(String(i).replace(/^F/i, "")));
+        let res: { changed: number[]; missing: number[] } = { changed: [], missing: nums };
+        const w = await writeSkillsFile(env, feedbackPath(skill), (t) => { if (t === null) return null; const o = resolveFeedback(t, { ids: nums, status, version: version || null, date: jstDate(), note: note || null }); res = o; return o.md; }, () => `直しを${status}に：${skill}（${nums.map((i) => `F${i}`).join("・")}）`);
+        if (!w.ok) return asMcpTextResult({ ok: false, message: w.missing ? `${skill} の直しの記録が無い` : w.message });
+        const sum = feedbackSummary(skill, listFeedback(w.text));
+        return asMcpTextResult({ ok: true, 変えた: res.changed.map((i) => `F${i}`), ...(res.missing.length ? { 見つからない: res.missing.map((i) => `F${i}`) } : {}), 未反映: sum.未反映, commit: w.commit.slice(0, 7) });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
 }
 
 function jstDate(): string {
   return new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+}
+
+
+/** レシピの頭（使うスキルと固定した版）を全部読む（v1.116.0：skills__save のあとに使っているレシピを並べるため） */
+async function readRecipeHeads(env: Env): Promise<Array<{ name: string; title: string | null; uses: Array<{ skill: string; version: string | null }> }>> {
+  const tree = await gh(env, `/git/trees/${SKILLS_BRANCH}?recursive=1`);
+  if (!tree.ok) return [];
+  const names = recipeFolders(tree.body.tree || []);
+  const rows = await Promise.all(names.map(async (n) => {
+    const f = await gh(env, `/contents/recipes/${encodeURIComponent(n)}/RECIPE.md?ref=${SKILLS_BRANCH}`, true);
+    const r = f.ok ? parseRecipeHead(String(f.body), n) : null;
+    return r ? { name: r.name, title: r.title ?? null, uses: r.uses.map((u) => ({ skill: u.skill, version: u.version ?? null })) } : null;
+  }));
+  return rows.filter((x): x is NonNullable<typeof x> => !!x);
 }
 
 function b64utf8(s: string): string {
