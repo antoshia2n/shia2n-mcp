@@ -119,7 +119,7 @@ export function findRecipes(task: string, recipes: FindRecipe[], skills: FindSki
   // 手順（それ自体が作り方の流れ）とガード（いつも守る決まり）は補強にしない
   const haveCat = new Set(top ? top.used.flatMap((k) => k.category) : []);
   const extra = top ? soloAll.filter((x) => !inTop.has(x.k.name) && !conflict.has(x.k.name) && x.score >= 3
-    && x.k.category.length > 0 && x.k.category.every((c) => c !== "手順" && c !== "ガード" && !haveCat.has(c))).slice(0, 3) : [];
+    && x.k.category.length > 0 && x.k.category.every((c) => c !== "手順" && c !== "ガード" && c !== "進め方" && !haveCat.has(c))).slice(0, 3) : [];
   const alone = top ? [] : soloAll.slice(0, 3);
   const title = (k: { title: string | null; name: string }) => k.title || k.name;
   const ask = top
