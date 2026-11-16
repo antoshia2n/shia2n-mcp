@@ -1,5 +1,7 @@
 import { parseFlow } from "./recipe-write-core.js";
 import { findRecipes } from "./recipe-find-core.js";
+import { STRENGTHS, writeRecipeText, type FlowStep } from "./recipe-write-core.js";
+import { checkSkillText, similarSkills, stampUpdated } from "./skill-save-core.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
@@ -221,6 +223,85 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
           ...(r.bad.length ? { 読めなかった行: r.bad } : {}), ...(failed.length ? { 読めなかった: failed } : {}),
         });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  // v1.111.0（2026-11-16 開発部・スキルクリエイターの便）：スキルとレシピを AI から正本へ保存する口。
+  // 規格（STANDARD.md）の確かめ・重複の確かめ・版の上げ方を、AI に任せず道具の側で必ず通す。台帳は正本の push で自動で作り直される。
+  server.tool(
+    "skills__save",
+    "シアニンのスキル 1 本を正本 shia2n-skills の skills/<name>/SKILL.md に保存する（main に 1 コミット）。スキルクリエイター（shia2n-skill-creator）の手順で、人が OK と言ったあとにだけ呼ぶ。保存の前に規格（STANDARD.md）を必ず確かめ、外れていれば保存せず理由を返す：頭の欄（title・purpose・genre・category・version・where・audience・owner）・ジャンル 6 つ・カテゴリ 5 つ・見出しの順（目的／使う場面／使わない場面／手順／決まり／出力の形／参照）・500 行未満・参照は 1 段まで・新しいスキルは 1.0・本文を変えたら版を上げる・頭の欄だけなら版を上げない。updated は今日の日付に道具がそろえる。新しく作る（create）とき似たスキルがあれば止まり、new_reason（なぜ今のスキルの直しやレシピで足りないか）を渡したときだけ作る。check_only で確かめだけもできる。戻り値: { ok, name, version, commit, 注意? }／止まったとき { ok: false, 直すこと: [...], 似たスキル? }。",
+    {
+      name: z.string().min(2).max(64).describe("AI が呼ぶ名前（フォルダ名）。英小文字・数字・ハイフン"),
+      text: z.string().min(50).max(60000).describe("SKILL.md の全文（頭の --- から）"),
+      create: z.boolean().optional().describe("新しく作るとき true。直すときは省く"),
+      new_reason: z.string().max(500).optional().describe("似たスキルがあっても新しく作る理由（人の言葉）"),
+      check_only: z.boolean().optional().describe("true なら確かめだけして保存しない"),
+    },
+    async ({ name, text, create, new_reason, check_only }) => {
+      try {
+        const all = await readAll(env, SKILLS_BRANCH);
+        if (!all.ok) return asMcpTextResult({ ok: false, message: all.message });
+        const date = jstDate();
+        const stamped = stampUpdated(text.replace(/\r\n/g, "\n"), date);
+        const exists = all.skills.some((k) => k.folder === name);
+        if (create && exists) return asMcpTextResult({ ok: false, 直すこと: [`${name} はもう正本にある。直すなら create を省く`] });
+        if (!create && !exists) return asMcpTextResult({ ok: false, 直すこと: [`${name} は正本に無い。新しく作るなら create: true`] });
+        let current: string | null = null;
+        if (exists) {
+          const f = await gh(env, `/contents/skills/${encodeURIComponent(name)}/SKILL.md?ref=${SKILLS_BRANCH}`, true);
+          if (!f.ok) return asMcpTextResult({ ok: false, message: f.message });
+          current = String(f.body);
+        }
+        const c = checkSkillText(name, stamped, current, all.skills);
+        const similar = create && c.meta ? similarSkills(c.meta, all.skills) : [];
+        if (c.errors.length) return asMcpTextResult({ ok: false, 直すこと: c.errors, ...(c.warnings.length ? { 注意: c.warnings } : {}), ...(similar.length ? { 似たスキル: similar } : {}) });
+        if (similar.length && !new_reason) return asMcpTextResult({ ok: false, 直すこと: ["似たスキルがある。今のスキルの直し・レシピで足りないかを人に聞き、それでも新しく作るなら new_reason に理由を渡す"], 似たスキル: similar });
+        if (check_only) return asMcpTextResult({ ok: true, 確かめだけ: true, name, version: c.meta?.version, ...(c.warnings.length ? { 注意: c.warnings } : {}), ...(similar.length ? { 似たスキル: similar } : {}) });
+        let fail = "";
+        const w = await writeSkillsFile(env, `skills/${name}/SKILL.md`, (cur) => {
+          if ((cur === null) !== (current === null) || (cur !== null && cur !== current)) { fail = "保存の直前に正本が変わった。読み直してもう一度"; return null; }
+          return stamped;
+        }, () => `${create ? "スキルを作る" : c.bodyChanged ? "スキルを直す" : "スキルの頭の欄を直す"}：${name} ${c.meta?.version}${new_reason ? `（新しく作る理由：${new_reason.slice(0, 80)}）` : ""}`, !!create);
+        if (fail) return asMcpTextResult({ ok: false, message: fail });
+        if (!w.ok) return asMcpTextResult({ ok: false, message: w.message });
+        return asMcpTextResult({ ok: true, name, version: c.meta?.version, commit: w.commit.slice(0, 7), ...(c.warnings.length ? { 注意: c.warnings } : {}), 次: "棚（マーケくん 素材 › スキル）と台帳に出る。レシピに入れるなら recipes__save" });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  server.tool(
+    "recipes__save",
+    "レシピ（スキルの組み合わせ）を正本 shia2n-skills の recipes/<name>/RECIPE.md に作る・直す（main に 1 コミット・版は自動で上がる）。スキルクリエイターで「今のスキルの組み合わせで足りる」と決まり、人が OK と言ったあとにだけ呼ぶ。uses の pin は keep（今の固定のまま）／now（いまの版で固定）／latest（@最新・基本スキル shia2n-x-review だけ）。選択スキルは版で固定する決め（Decisions 2026-11-16）。flow を渡すと「## 流れ」を書き直す（手順＝題・説明・使うスキル・確認・プロンプト・20 個まで）。戻り値: { ok, name, version, commit }／失敗 { ok: false, error }。",
+    {
+      name: z.string().min(2).max(80).describe("レシピの ID（英小文字・数字・ハイフン）"),
+      title: z.string().max(60).optional().describe("表示名（人が見て分かる日本語）"),
+      purpose: z.string().max(200).optional().describe("何に使うか 1 行"),
+      uses: z.array(z.object({ skill: z.string().max(80), pin: z.enum(["keep", "now", "latest"]), strength: z.enum(STRENGTHS).optional() })).min(1).max(12).describe("使うスキル（優先の順）"),
+      flow: z.array(z.object({ title: z.string().max(80), detail: z.string().max(1000).optional(), skill: z.string().max(80).optional(), check: z.string().max(300).optional(), prompt: z.string().max(4000).optional() })).max(20).optional().describe("流れ（手順の並び）"),
+      create: z.boolean().optional().describe("新しく作るとき true"),
+    },
+    async ({ name, title, purpose, uses, flow, create }) => {
+      try {
+        if (!/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(name)) return asMcpTextResult({ ok: false, error: "bad_name" });
+        const [all, c] = await Promise.all([readAll(env, SKILLS_BRANCH), gh(env, `/commits/${SKILLS_BRANCH}`)]);
+        if (!all.ok) return asMcpTextResult({ ok: false, error: all.message });
+        if (!c.ok) return asMcpTextResult({ ok: false, error: c.message });
+        const skills = new Map(all.skills.map((s) => [s.folder, s.version]));
+        let fail = "", version = "";
+        const w = await writeSkillsFile(env, `recipes/${name}/RECIPE.md`, (text) => {
+          if (text === null && !create) { fail = "not_found（新しく作るなら create: true）"; return null; }
+          if (text !== null && create) { fail = "already（もうある。直すなら create を省く）"; return null; }
+          const cur = new Map((text ? parseRecipeHead(text, name)?.uses || [] : []).map((u) => [u.skill, { version: u.version, commit: u.commit }]));
+          const r = writeRecipeText(text, { name, title: title ?? null, purpose: purpose ?? null, uses, flow: (flow as FlowStep[] | undefined) ?? null }, { skills, current: cur, head: String(c.body.sha || ""), date: jstDate() });
+          if (!r.ok) { fail = r.error; return null; }
+          version = r.version;
+          return r.text;
+        }, () => `${create ? "レシピを作る" : "レシピを直す"}：${name} ${version}（AI・recipes__save）`, !!create);
+        if (fail) return asMcpTextResult({ ok: false, error: fail });
+        if (!w.ok) return asMcpTextResult({ ok: false, error: w.message });
+        return asMcpTextResult({ ok: true, name, version, commit: w.commit.slice(0, 7) });
+      } catch (e) { return asMcpTextResult({ ok: false, error: String(e) }); }
     }
   );
 
