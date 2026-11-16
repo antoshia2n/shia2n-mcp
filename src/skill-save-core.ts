@@ -59,6 +59,9 @@ export function checkSkillText(name: string, text: string, current: string | nul
   if (lines >= 500 && curLines >= 500 && lines <= curLines) warnings.push(`本文が ${lines} 行（規格の前のスキル。500 行未満へは references/ に分けて直す）`);
   else if (lines >= 500) errors.push(`本文が ${lines} 行（500 行未満。長い中身は references/ へ）`);
   else if (lines > 200) warnings.push(`本文が ${lines} 行（目安は 200 行）`);
+  // 規格 8 節（2026-11-16）：大きさの目安。小（部品）80 行・中（手順）200 行。止めずに注意だけ
+  const size = skillSize(meta.category);
+  if (size === "小" && lines > 80) warnings.push(`部品（小）の目安 80 行を超えている（${lines} 行）。中の references/ に置くか、2 つに分けるかを考える`);
   if (!/^#\s+\S/m.test(body)) errors.push("本文の最初に「# 表示名」が無い");
   const found = [...body.matchAll(/^##\s+(.+?)\s*$/gm)].map((m) => m[1]);
   const pos = HEADINGS.map((h) => found.indexOf(h));
@@ -85,6 +88,17 @@ function headingProblem(body: string): string {
   const pos = HEADINGS.map((h) => found.indexOf(h));
   if (pos.some((p) => p < 0)) return "missing";
   return pos.some((p, i) => i > 0 && p < pos[i - 1]) ? "order" : "";
+}
+
+/** 大きさはカテゴリで決まる（規格 8 節）。手順を含めば中、それ以外は小 */
+export function skillSize(category: string[]): "小" | "中" {
+  return category.includes("手順") ? "中" : "小";
+}
+
+/** レシピの選んで入れるスキル（基本スキルを除く）が 3 本を超えたら注意（規格 8 節） */
+export function recipeSizeWarning(uses: string[], kinds: Map<string, string | null>): string | null {
+  const picked = uses.filter((u) => kinds.get(u) !== "基本スキル");
+  return picked.length > 3 ? `選んで入れるスキルが ${picked.length} 本（目安は 3 本まで・基本スキルは数えない）。1 本減らすか、レシピを 2 つに分けるかを考える` : null;
 }
 
 /** metadata.updated を date にそろえる（無ければ足す）。人に打たせないため */
