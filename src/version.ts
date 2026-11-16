@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.114.0"; // 2026-11-16 カテゴリに「進め方」
+export const APP_VERSION = "1.115.0"; // 2026-11-16 GPT の入口で UTAGE の写しを読む
