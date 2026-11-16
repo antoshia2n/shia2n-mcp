@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.115.1"; // 2026-11-16 流れの節は「## 流れ」ちょうどだけ
+export const APP_VERSION = "1.116.0"; // 2026-11-16 直しの記録（skills__feedback_*）
