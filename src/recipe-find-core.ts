@@ -28,6 +28,12 @@ export function grams(s: string): Set<string> {
       if (!STOP.has(g)) out.add(g);
     }
   }
+  // 1 文字の漢字の言葉（売れ・伸び・書く）は、漢字＋すぐ後のひらがな 1 文字で拾う（v1.113.1・「売れない」が何にも当たらなかったため）。
+  // ひらがなで始まる 2 文字（を作・の図）は拾わない
+  for (const m of t.matchAll(/(?<![\u4e00-\u9fff\u30a0-\u30ff])([\u4e00-\u9fff])([\u3041-\u309f])/g)) {
+    const g = m[1] + m[2];
+    if (!STOP.has(g) && !/^.[をにのがはでとへもや]$/.test(g)) out.add(g);
+  }
   return out;
 }
 
