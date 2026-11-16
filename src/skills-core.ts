@@ -12,7 +12,7 @@ export const SKILLS_PUBLIC_BRANCH = "public";
 export const META_FIELDS = ["version", "where", "audience", "owner", "updated"] as const;
 /** シアニン式スキル規格 1.0（2026-11-16 Naoki OK・正本の STANDARD.md）。ジャンルは 1 つ、カテゴリは複数 */
 export const GENRES = ["文章", "図解・デザイン", "分析・レビュー", "戦略・企画", "販売・集客", "運営・仕組み"] as const;
-export const CATEGORIES = ["手順", "スタイル", "コメント", "レビュー", "ガード"] as const;
+export const CATEGORIES = ["手順", "スタイル", "コメント", "レビュー", "ガード", "進め方"] as const; // 進め方：AI と人のやり取りの型（2026-11-16 Naoki）
 
 export type SkillMeta = {
   name: string;
