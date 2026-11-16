@@ -7,6 +7,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
+import { audienceWith, checkKeys, missingRefs, scanInternal, setMeta, type Hit } from "./publish-core.js";
 import { FEEDBACK_HINT, addFeedback, feedbackFiles, feedbackPath, feedbackSummary, listFeedback, recipesUsing, resolveFeedback } from "./feedback-core.js";
 import { HYPOTHESIS_STATUSES, addHypothesis, listHypotheses, updateHypothesis } from "./hypothesis-core.js";
 import { SKILLS_BRANCH, SKILLS_PUBLIC_BRANCH, SKILLS_REPO, filterSkills, groupSkillFiles, nearNames, parseRecipeHead, parseSkillHead, recipeFolders, type SkillMeta } from "./skills-core.js";
@@ -453,12 +454,158 @@ export function registerSkillsTools(server: McpServer, env: Env): void {
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );
+
+  // v1.117.0（2026-11-16 開発部・Naoki OK 15:00）：スキルを生徒に出す・引っ込める。出す前の 3 つの確かめは道具の側で必ず通す。
+  // public の枝へは main と同じ中身（ファイルの印 sha をそのまま使う）を 1 コミットで写し、SKILL.md の 見せる相手・生徒の版 だけ書き換える。
+  server.tool(
+    "skills__publish",
+    "スキルを生徒に出す（正本 shia2n-skills の main から、生徒に届く public の枝へそのフォルダを写す）。Naoki が「〇〇のスキルを生徒に出して（基本会員に）」と言ったときだけ呼ぶ。keys に出す相手（門番の表のキー。例 shiarabo_basic）を必ず渡す。人が言っていないキーを足さない。出す前に道具が 3 つを確かめ、外れたら出さずに理由を返す：①入れてはいけないファイル（仮説・X のコードの読み・直しの記録）が無いか、内部の言葉（クライアント名・本名・メール・本人用の道具やアプリの名前）が無いか ②そのスキルが呼ぶスキル（refs）も生徒の版にあるか（names に一緒に入れれば同じ回に出せる）③出す相手のキー。内部の言葉が見つかったら 見つかった行 を Naoki に見せ、それでも出すと言われたときだけ accept_hits: true で呼び直す（言葉を直すならスキルクリエイターで直してから）。先に check_only: true で、写すファイルと版の差分を Naoki に見せてから出す。生徒の版は main のその時の版になり、main の SKILL.md の public_version と audience も付け替わる（頭の欄だけなので版は上げない）。戻り値: { ok, 出した: [{ name, version, keys }], commit }／止まったとき { ok: false, 直すこと, 見つかった行? }。",
+    {
+      names: z.array(z.string().regex(/^[a-z0-9][a-z0-9_-]{1,79}$/i)).min(1).max(10).describe("出すスキルの名前（フォルダ名）"),
+      keys: z.array(z.string().max(40)).min(1).max(10).describe("出す相手（門番の表のキー。例 shiarabo_basic）。Naoki が言ったものだけ"),
+      accept_hits: z.boolean().optional().describe("内部の言葉が見つかった行を Naoki が見て「出してよい」と言ったときだけ true"),
+      check_only: z.boolean().optional().describe("true なら確かめと差分だけ返して出さない"),
+    },
+    async ({ names, keys, accept_hits, check_only }) => {
+      try {
+        const ck = checkKeys(keys);
+        const errors: string[] = [];
+        if (ck.bad.length) errors.push(`出す相手に使えないキー：${ck.bad.join("・")}（本人・事業部は社内の印。門番の表のキーを英小文字で）`);
+        if (!ck.keys.length) errors.push("出す相手のキーが無い");
+        const uniq = [...new Set(names)];
+        const [main, pub, mt, pt] = await Promise.all([readAll(env, SKILLS_BRANCH), readAll(env, SKILLS_PUBLIC_BRANCH), gh(env, `/git/trees/${SKILLS_BRANCH}?recursive=1`), gh(env, `/git/trees/${SKILLS_PUBLIC_BRANCH}?recursive=1`)]);
+        if (!main.ok) return asMcpTextResult({ ok: false, message: main.message });
+        if (!pub.ok) return asMcpTextResult({ ok: false, message: pub.message });
+        if (!mt.ok || !pt.ok) return asMcpTextResult({ ok: false, message: (!mt.ok ? mt : pt as any).message });
+        const mainTree: Array<{ path: string; type: string; sha: string }> = mt.body.tree || [];
+        const pubTree: Array<{ path: string; type: string; sha: string }> = pt.body.tree || [];
+        const pubNames = pub.skills.filter((k) => studentAudienceOf(k.audience).length).map((k) => k.folder);
+        const hits: Hit[] = [];
+        const plan: Array<{ name: string; version: string; from: string | null; files: Array<{ path: string; sha: string }>; drop: string[]; skillText: string; mainText: string }> = [];
+        for (const name of uniq) {
+          const meta = main.skills.find((k) => k.folder === name);
+          if (!meta) { errors.push(`${name} は正本に無い`); continue; }
+          if (!meta.version) { errors.push(`${name} に版が無い`); continue; }
+          const files = mainTree.filter((t) => t.type === "blob" && t.path.startsWith(`skills/${name}/`)).map((t) => ({ path: t.path.slice(`skills/${name}/`.length), sha: t.sha }));
+          const texts = await Promise.all(files.map(async (f) => {
+            if (!/\.(md|ya?ml|txt|json)$/i.test(f.path)) return { path: f.path, text: null };
+            const r = await gh(env, `/contents/skills/${encodeURIComponent(name)}/${f.path.split("/").map(encodeURIComponent).join("/")}?ref=${SKILLS_BRANCH}`, true);
+            return { path: f.path, text: r.ok ? String(r.body) : null };
+          }));
+          const sc = scanInternal(texts);
+          if (sc.blocked.length) errors.push(`${name}：生徒の版に入れてはいけないファイル ${sc.blocked.join("・")}（スキルクリエイターで外に分けてから）`);
+          hits.push(...sc.hits.map((h) => ({ ...h, file: `${name}/${h.file}` })));
+          const miss = missingRefs(meta.refs, pubNames, uniq);
+          if (miss.length) errors.push(`${name} が呼ぶスキルが生徒の版に無い：${miss.join("・")}（names に一緒に入れる）`);
+          const mainText = texts.find((t) => t.path === "SKILL.md")?.text;
+          if (!mainText) { errors.push(`${name} の SKILL.md を読めない`); continue; }
+          const aud = audienceWith(meta.audience, ck.keys);
+          const skillText = setMeta(setMeta(mainText, "audience", aud), "public_version", meta.version);
+          const drop = pubTree.filter((t) => t.type === "blob" && t.path.startsWith(`skills/${name}/`)).map((t) => t.path.slice(`skills/${name}/`.length)).filter((p) => !files.some((f) => f.path === p));
+          plan.push({ name, version: meta.version, from: pub.skills.find((k) => k.folder === name)?.public_version || null, files, drop, skillText, mainText: skillText });
+        }
+        if (errors.length) return asMcpTextResult({ ok: false, 直すこと: errors, ...(hits.length ? { 見つかった行: hits.slice(0, 40) } : {}) });
+        const diff = plan.map((p) => ({ name: p.name, 生徒の版: `${p.from ?? "出していない"} → ${p.version}`, 出す相手: ck.keys, 写すファイル: p.files.length, 消すファイル: p.drop }));
+        if (hits.length && !accept_hits) return asMcpTextResult({ ok: false, 直すこと: ["内部の言葉が見つかった。見つかった行を Naoki に見せ、出してよいと言われたら accept_hits: true で呼び直す。直すならスキルクリエイターで直してから"], 見つかった行: hits.slice(0, 40), 差分: diff });
+        if (check_only) return asMcpTextResult({ ok: true, 確かめだけ: true, 差分: diff, ...(hits.length ? { 見つかった行: hits.slice(0, 40) } : {}) });
+        const changes: TreeChange[] = [];
+        for (const p of plan) {
+          for (const f of p.files) changes.push(f.path === "SKILL.md" ? { path: `skills/${p.name}/SKILL.md`, content: p.skillText } : { path: `skills/${p.name}/${f.path}`, sha: f.sha });
+          for (const d of p.drop) changes.push({ path: `skills/${p.name}/${d}`, sha: null });
+        }
+        const c = await commitTree(env, SKILLS_PUBLIC_BRANCH, changes, `生徒に出す版：${plan.map((p) => `${p.name} ${p.version}`).join("・")}（相手 ${ck.keys.join("・")}）`);
+        if (!c.ok) return asMcpTextResult({ ok: false, message: c.message });
+        const mainNotes: string[] = [];
+        for (const p of plan) {
+          const w = await writeSkillsFile(env, `skills/${p.name}/SKILL.md`, (t) => (t === null ? null : setMeta(setMeta(t, "audience", audienceWith(main.skills.find((k) => k.folder === p.name)!.audience, ck.keys)), "public_version", p.version)), () => `生徒の版を付け替え：${p.name} ${p.version}`);
+          if (!w.ok) mainNotes.push(`${p.name}：main の頭の欄を書けなかった（${w.message}）`);
+        }
+        return asMcpTextResult({ ok: true, 出した: plan.map((p) => ({ name: p.name, version: p.version, keys: ck.keys })), commit: c.commit.slice(0, 7), ...(mainNotes.length ? { 注意: mainNotes } : {}), 次: "生徒のマイページの「シアニンのスキル」のカードに出る（出す相手のキーを持つ人だけ）" });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
+
+  server.tool(
+    "skills__unpublish",
+    "生徒に出しているスキルを引っ込める（public の枝からそのフォルダを消し、main の SKILL.md の public_version と生徒のキーを外す）。Naoki が「〇〇を生徒から引っ込めて」と言ったときだけ呼ぶ。ほかの生徒の版のスキルが呼んでいる（refs）なら止まる（一緒に引っ込めるなら names に入れる）。戻り値: { ok, 引っ込めた, commit }／止まったとき { ok: false, 直すこと }。",
+    {
+      names: z.array(z.string().regex(/^[a-z0-9][a-z0-9_-]{1,79}$/i)).min(1).max(10).describe("引っ込めるスキルの名前"),
+      check_only: z.boolean().optional().describe("true なら確かめだけ"),
+    },
+    async ({ names, check_only }) => {
+      try {
+        const uniq = [...new Set(names)];
+        const [main, pub, pt] = await Promise.all([readAll(env, SKILLS_BRANCH), readAll(env, SKILLS_PUBLIC_BRANCH), gh(env, `/git/trees/${SKILLS_PUBLIC_BRANCH}?recursive=1`)]);
+        if (!main.ok) return asMcpTextResult({ ok: false, message: main.message });
+        if (!pub.ok) return asMcpTextResult({ ok: false, message: pub.message });
+        if (!pt.ok) return asMcpTextResult({ ok: false, message: pt.message });
+        const errors: string[] = [];
+        for (const n of uniq) if (!pub.skills.some((k) => k.folder === n)) errors.push(`${n} は生徒に出していない`);
+        for (const k of pub.skills) if (!uniq.includes(k.folder)) { const used = k.refs.filter((r) => uniq.includes(r)); if (used.length) errors.push(`${k.folder}（生徒の版）が ${used.join("・")} を呼んでいる。一緒に引っ込めるなら names に入れる`); }
+        if (errors.length) return asMcpTextResult({ ok: false, 直すこと: errors });
+        const changes: TreeChange[] = ((pt.body.tree || []) as Array<{ path: string; type: string }>).filter((t) => t.type === "blob" && uniq.some((n) => t.path.startsWith(`skills/${n}/`))).map((t) => ({ path: t.path, sha: null }));
+        if (check_only) return asMcpTextResult({ ok: true, 確かめだけ: true, 引っ込める: uniq, 消すファイル: changes.length });
+        const c = await commitTree(env, SKILLS_PUBLIC_BRANCH, changes, `生徒の版を引っ込める：${uniq.join("・")}`);
+        if (!c.ok) return asMcpTextResult({ ok: false, message: c.message });
+        const notes: string[] = [];
+        for (const n of uniq) {
+          const m = main.skills.find((k) => k.folder === n);
+          if (!m) continue;
+          const w = await writeSkillsFile(env, `skills/${n}/SKILL.md`, (t) => (t === null ? null : setMeta(setMeta(t, "audience", audienceWith(m.audience, [])), "public_version", null)), () => `生徒の版を外す：${n}`);
+          if (!w.ok) notes.push(`${n}：main の頭の欄を書けなかった（${w.message}）`);
+        }
+        return asMcpTextResult({ ok: true, 引っ込めた: uniq, commit: c.commit.slice(0, 7), ...(notes.length ? { 注意: notes } : {}) });
+      } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
+    }
+  );
 }
 
 function jstDate(): string {
   return new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
 }
 
+
+/** 生徒に出す先として数えるキー（本人・事業部を除く） */
+function studentAudienceOf(a: string[]): string[] { return a.filter((x) => x !== "本人" && x !== "事業部"); }
+
+type TreeChange = { path: string; sha?: string | null; content?: string };
+
+/**
+ * 正本 shia2n-skills の枝 1 本に、いくつかのファイルを 1 コミットで書く・消す（v1.117.0）。
+ * sha を渡すと同じリポジトリの中身をそのまま使う（写すだけで中身を運ばない）。sha: null は消す。content は新しい中身。
+ * 間に別の書き込みが入ったら、取り直して 1 回だけやり直す。
+ */
+async function commitTree(env: Env, branch: string, changes: TreeChange[], message: string): Promise<{ ok: true; commit: string } | { ok: false; message: string }> {
+  const key = env.GITHUB_TOKEN;
+  if (!key) return { ok: false, message: "書く鍵（GITHUB_TOKEN）が無い" };
+  if (!changes.length) return { ok: true, commit: "変更なし" };
+  const api = `https://api.github.com/repos/${SKILLS_REPO}`;
+  const headers = { Authorization: `Bearer ${key}`, Accept: "application/vnd.github+json", "User-Agent": "shia2n-mcp", "Content-Type": "application/json" };
+  const call = async (method: string, path: string, body?: unknown) => {
+    const r = await fetch(`${api}${path}`, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) });
+    return { status: r.status, ok: r.ok, body: r.ok ? await r.json() : await r.text() } as { status: number; ok: boolean; body: any };
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ref = await call("GET", `/git/ref/heads/${branch}`);
+    if (!ref.ok) return { ok: false, message: `枝 ${branch} を読めなかった（${ref.status}）` };
+    const head = String(ref.body.object.sha);
+    const hc = await call("GET", `/git/commits/${head}`);
+    if (!hc.ok) return { ok: false, message: `コミットを読めなかった（${hc.status}）` };
+    const tree = await call("POST", `/git/trees`, {
+      base_tree: hc.body.tree.sha,
+      tree: changes.map((c) => c.content !== undefined ? { path: c.path, mode: "100644", type: "blob", content: c.content } : { path: c.path, mode: "100644", type: "blob", sha: c.sha ?? null }),
+    });
+    if (!tree.ok) return { ok: false, message: `中身を組めなかった（${tree.status}）${String(tree.body).slice(0, 200)}` };
+    const commit = await call("POST", `/git/commits`, { message: `${message}（shia2n-mcp）`, tree: tree.body.sha, parents: [head] });
+    if (!commit.ok) return { ok: false, message: `コミットを作れなかった（${commit.status}）` };
+    const up = await call("PATCH", `/git/refs/heads/${branch}`, { sha: commit.body.sha, force: false });
+    if (up.ok) return { ok: true, commit: String(commit.body.sha) };
+    if (up.status === 422 || up.status === 409) continue;
+    if (up.status === 403 || up.status === 404) return { ok: false, message: `書く鍵に shia2n-skills の ${branch} へ書く権限が無い（${up.status}）` };
+    return { ok: false, message: `枝を進められなかった（${up.status}）` };
+  }
+  return { ok: false, message: "別の書き込みと 2 回ぶつかった。少し待ってもう一度" };
+}
 
 /** レシピの頭（使うスキルと固定した版）を全部読む（v1.116.0：skills__save のあとに使っているレシピを並べるため） */
 async function readRecipeHeads(env: Env): Promise<Array<{ name: string; title: string | null; uses: Array<{ skill: string; version: string | null }> }>> {
