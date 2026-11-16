@@ -549,6 +549,9 @@
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
+ * v1.115.0（2026-11-16 開発部・Naoki「直して」12:29）：GPT の入口 /content/mcp に UTAGE の写しを読む 4 本（status・read・search・get）を足した。過去のファネル・シナリオを LP や配信の見本にするため。取り直しの run は出さない。写しの文面は差し込みの印（%name% など）と Naoki 自身の送り元・Zoom だけで、読者の情報は入らない。設定の追加 0 個。
+ * v1.114.0（2026-11-16 開発部）：カテゴリに「進め方」。入口は進め方を補強の候補に出さない。
+ * v1.113.1（2026-11-16 開発部）：入口が漢字 1 文字＋送りがな（売れ・伸び）を拾う。
  * v1.113.0（2026-11-16 開発部・スキルの大きさ・Naoki OK 11:01）：規格 8 節の大きさ（小＝部品・中＝手順・大＝レシピ）の注意。skills__save は部品（手順を含まないカテゴリ）が 80 行を超えると注意、recipes__save は選んで入れるスキル（基本スキルを除く）が 3 本を超えると注意。止めはしない。計算は src/skill-save-core.ts の skillSize・recipeSizeWarning。設定の追加 0 個。
  * v1.112.0（2026-11-16 開発部・スキルのアイコン・Naoki OK 10:18）：スキルのアイコンの決まり（アプリと同じ葉の形・くぼみ・波・線 1 本の絵で、白黒を反転：薄い地に色の線と縁。色はジャンル 6 つで決まる）。skills__save に icon（24×24 の線の絵）を足し、assets/icon.svg・icon-small.svg と ChatGPT／Codex 用の agents/openai.yaml（表示名・何に使う・アイコン・ブランドの色）を道具が作る。絵が無いと注意。ジャンルを変えたら今の絵を新しい色で作り直す。棚（SkillsReader.shelf）が各スキルの icon を返す。計算は src/skill-icon-core.ts、試験は test/skill-icon.test.ts。設定の追加 0 個。
  * v1.111.0（2026-11-16 開発部・スキルクリエイターの便・Naoki 09:56）：skills__save（スキル 1 本を正本へ保存。保存の前に規格 STANDARD.md を道具の側で必ず確かめる：頭の欄・ジャンル 6 つ・カテゴリ 5 つ・見出しの順・500 行未満・参照は 1 段まで・新しいものは 1.0・本文を変えたら版を上げる。新しく作るとき似たスキルがあれば止まり、理由 new_reason があるときだけ作る。check_only で確かめだけ。規格の前の 15 本は見出しと長さを注意にとどめる）と recipes__save（レシピを AI から作る・直す。棚と同じ writeRecipeText を通す）。計算は src/skill-save-core.ts、試験は test/skill-save.test.ts。正本に skills/shia2n-skill-creator（表示名「スキルクリエイター」）。設定の追加 0 個。
@@ -936,7 +939,9 @@ function createAnkenMcpServer(env: Env): McpServer {
  * ChatGPT の予定タスクを、コンテンツくんの依頼（初稿づくり）につなぐため。
  * 出すのは依頼を読む・書き戻す 2 本と、投稿を 1 件読む道具・AI の利用ログを書く道具だけ。投稿の書き換えや予約の道具は出さない。
  */
-const CONTENT_GPT_TOOLS = new Set<string>(["content_os__list_requests", "content_os__put_result", "content_os__get_post", "content_os__list_templates", "content_os__save_template", "ai_log__add", "mindmap__get_map"]);
+const CONTENT_GPT_TOOLS = new Set<string>(["content_os__list_requests", "content_os__put_result", "content_os__get_post", "content_os__list_templates", "content_os__save_template", "ai_log__add", "mindmap__get_map",
+  // v1.115.0：UTAGE の写しを読むだけ（過去のファネル・シナリオを見本にするため）。今すぐ取り直す utage_archive__run は出さない
+  "utage_archive__status", "utage_archive__read", "utage_archive__search", "utage_archive__get"]);
 function createContentMcpServer(env: Env): McpServer {
   const server = new McpServer({ name: "content-mcp", version: APP_VERSION });
   const gate = { tool: (name: string, ...rest: unknown[]) => (CONTENT_GPT_TOOLS.has(name) ? (server.tool as any)(name, ...rest) : undefined) };
@@ -947,6 +952,7 @@ function createContentMcpServer(env: Env): McpServer {
   registerMindmapTools(gate as unknown as McpServer, env); // v1.94.0：スライドのためにマップを読む（mindmap__get_map だけ通す）
   registerSlideTools(server, env); // v1.94.0：スライドの台帳（全部）
   registerSkillsTools(server, env); // v1.101.0：GPT もスキルの最新版を正本から読む（読むだけ）
+  registerUtageArchiveTools(gate as unknown as McpServer, env); // v1.115.0：UTAGE の写しを見本として読む（読むだけ・run は通さない）
   return server;
 }
 
