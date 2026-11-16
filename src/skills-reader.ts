@@ -82,7 +82,13 @@ export class SkillsReader extends WorkerEntrypoint<Env> {
     ]);
     if (!all.ok) return { ok: false, error: all.message };
     const pubVer = new Map(pub.ok ? pub.skills.map((s) => [s.folder, s.public_version || s.version]) : []);
+    // v1.112.0：スキルのアイコン（assets/icon.svg）。棚は img の data: で見せる（同じ id の SVG を並べてもぶつからないため）
+    const icons = new Map(await Promise.all(all.skills.filter((s) => s.files.includes("assets/icon.svg")).map(async (s) => {
+      const f = await gh(this.env, `/contents/skills/${encodeURIComponent(s.folder)}/assets/icon.svg?ref=${ref}`, true);
+      return [s.folder, f.ok ? String(f.body).trim().slice(0, 6000) : null] as const;
+    })));
     const skills = all.skills.map((s) => ({
+      icon: icons.get(s.folder) || null,
       name: s.folder, title: s.title, genre: s.genre, category: s.category, media: s.media, refs: s.refs, conflicts: s.conflicts, kind: s.kind, purpose: s.purpose, version: s.version, student_version: pubVer.get(s.folder) || null, where: s.where, audience: s.audience,
       owner: s.owner, updated: s.updated, description: s.description.slice(0, 300), files: s.files.length, missing: s.missing, latest_ok: (BASE_LATEST as readonly string[]).includes(s.folder),
     }));

@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.111.0"; // 2026-11-16 スキルクリエイターの便（skills__save・recipes__save）
+export const APP_VERSION = "1.112.0"; // 2026-11-16 スキルのアイコン（ジャンルの色・反転の形）
