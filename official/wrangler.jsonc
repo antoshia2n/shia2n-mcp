@@ -1,0 +1,19 @@
+{
+  // 外向けの MCP の窓口（2026-11-17 新設）。Naoki 用の shia2n-mcp とは別の Worker。
+  // Cloudflare の Workers Builds で、このリポジトリの official/ フォルダを根にして作る。
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shia2n-mcp-official",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "observability": { "enabled": true },
+  // 札の置き場。shia2n-mcp の OAUTH_KV とは必ず別にする（同じにすると、ここの札が Naoki 用の窓口に通ってしまう）。
+  // id を書かずに置くと、最初の deploy で新しい置き場が自動で作られる（wrangler 4.45 以上）
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV" }
+  ],
+  // 人と権利は shia2n-mcp の OfficialGate で読む（この Worker に鍵を置かないため）
+  "services": [
+    { "binding": "GATE", "service": "shia2n-mcp", "entrypoint": "OfficialGate" }
+  ]
+}

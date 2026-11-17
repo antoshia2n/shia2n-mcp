@@ -1,0 +1,25 @@
+{
+  "name": "shia2n-mcp-official",
+  "version": "0.1.0",
+  "private": true,
+  "description": "外向けの MCP の窓口（権利で道具の一覧を分ける）",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "type-check": "tsc --noEmit",
+    "test": "esbuild test/*.test.ts --bundle --platform=node --format=esm --outdir=.test-out --out-extension:.js=.mjs --external:cloudflare:workers && node --test .test-out/*.mjs"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "0.0.9",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "agents": "0.10.2",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260401.0",
+    "esbuild": "^0.25.5",
+    "typescript": "^5.9.3",
+    "wrangler": "~4.100.0"
+  }
+}

@@ -549,6 +549,7 @@
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
+ * v1.121.0（2026-11-17 開発部・外向けの窓口・統括の依頼・Naoki OK 15:25）：OfficialGate を足した（src/official-gate.ts）。外向けの MCP の窓口 shia2n-mcp-official（official/ のフォルダ・別の Worker・別の札の置き場）がサービスの結びで呼ぶ。login＝つなぐ画面の Google ログインの札を門番（/gate/resolve と同じ中身・auth_attempt に X-App mcp-official で残る）で確かめて member の番号と権利を返す／rights＝いまの権利（期限切れは外す）と member_access の開くものを返す。名前・メールは返さない。外向けの窓口に Supabase の鍵は渡さない。このファイルの道具・入口・札には触っていない。設定の追加 0 個。
  * v1.120.0（2026-11-17 開発部・タスク「作った画像の保管」・Naoki OK 11:01）：content_os__put_images が投稿（post_id）にも画像を置けるようにし、20 枚まで受ける（4 枚ずつ読んで送る）。投稿へは content-os の /api/internal/put-post-images が本文の末尾に画像として足し、ドライブの「コンテンツくん/月/日付_題/画像ポスト/」へも写す（zoom-to-youtube 第45版で 20 枚まで）。content_os__update_post に x_url を足した。GPT の入口 /content/mcp に content_os__add_post・content_os__update_post を出した（GPT で作って X で直接予約した画像ポストを残すため）。content-os と zoom-to-youtube を先に本番へ出すこと。設定の追加 0 個。
  * v1.119.0（2026-11-16 開発部・Naoki OK 16:04「マーケくん全体的に重い」）：正本 shia2n-skills のファイルを、木の印 sha で読み（/git/blobs）、同じ印は同じ Worker の手元で使い回す（blobText・上限 3000）。readAll は木の印ごとに読んだ結果を使い回し、木（tree）も返す。棚の一覧 shelf は木を 2 本読むだけにし、アイコン・レシピ・仮説も印で読む。測った値：棚の一覧 4.6 秒と 7.8 秒（16:05・Naoki の Chrome）。印が同じなら中身も同じなので古い中身は出ない。設定の追加 0 個。
  * v1.118.0（2026-11-16 開発部・Naoki OK 15:40）：棚の画面（マーケくん 素材 › スキル）から生徒に出す・引っ込めるための SkillsReader.publish・unpublish。中身は skills__publish・skills__unpublish と同じ関数 publishSkills・unpublishSkills に切り出した（点検が 2 か所に分かれないため）。返りに main のコミット at（棚の読み直し用）。設定の追加 0 個。
@@ -645,6 +646,7 @@ export { UtageReader } from "./utage-reader.js";
 export { SalesWriter } from "./sales-writer.js";
 export { TaskmasterWriter } from "./taskmaster-writer.js";
 export { SkillsReader } from "./skills-reader.js";
+export { OfficialGate } from "./official-gate.js"; // v1.121.0：外向けの窓口（shia2n-mcp-official）が人と権利を確かめる口
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
