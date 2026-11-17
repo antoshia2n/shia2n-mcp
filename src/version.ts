@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.120.0"; // 2026-11-17 put_images を投稿にも・20 枚まで
+export const APP_VERSION = "1.121.0"; // 2026-11-17 外向けの窓口が人と権利を確かめる口（OfficialGate）
