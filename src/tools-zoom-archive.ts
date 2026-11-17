@@ -33,7 +33,7 @@ async function call<T>(f: () => Promise<T>): Promise<T> {
 export function registerZoomArchiveTools(server: McpServer, env: Env): void {
   server.tool(
     "zoom_archive__list",
-    "Zoom の録画の自動保管（zoom-to-youtube）の状態を返す。読むだけ。既定は数と失敗だけ：counts（r2・youtube・both・zoom_deleted）・legacy（11/02 より前の録画の移し：total・r2_done・remaining_gb・youtube_none）・failure_count・failures（where：見つける／録画／古い録画／台帳／控え）。failure_count が 0 なら失敗は 0 件。録画を探すときは zoom_archive__search を使う。全部の行が要るときだけ include_rows: true（500 行を超え、とても重い）。行の youtube_url は限定公開の住所なので外へ貼らない",
+    "Zoom の録画の自動保管（zoom-to-youtube）の状態を返す。読むだけ。既定は数と失敗だけ：counts（r2・youtube・both・zoom_deleted）・legacy（11/02 より前の録画の移し：total・r2_done・remaining_gb・youtube_none）・failure_count・failures（where：見つける／録画／古い録画／台帳／控え）・by_year と all（年ごと・全体の count・minutes（長さの合計・分）・no_length（長さが取れない本数）と、naming（ai・no_transcript・blocked・failed・未）ごとの同じ 3 つ。文字起こしの有無の本数と長さはここを見る）。failure_count が 0 なら失敗は 0 件。録画を探すときは zoom_archive__search を使う。全部の行が要るときだけ include_rows: true（500 行を超え、とても重い）。行の youtube_url は限定公開の住所なので外へ貼らない",
     {
       include_rows: z.boolean().optional().describe("全部の行も返すか。既定は false（数と失敗だけ）"),
     },
