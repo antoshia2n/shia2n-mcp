@@ -144,45 +144,92 @@ function toB64(buf: ArrayBuffer): string {
   for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
   return btoa(bin);
 }
+// v1.120.0（2026-11-17 開発部・タスク「作った画像の保管」・Naoki OK 11:01）：
+// 依頼（id）だけでなく投稿（post_id）にも画像を置けるようにし、20 枚まで受ける。
+// GPT で作って X で直接予約した画像ポストを、コンテンツくんの投稿 1 行（正本）に残すため。ドライブは写し。
+// 投稿へは content-os の put-post-images が本文の末尾へ画像として足す。読んで送るのは 4 枚ずつ（Worker の記憶の上限に当たらないように）。
+const BATCH = 4;
+async function readFile(f: { download_url: string; mime_type?: string; file_name?: string }, label: string) {
+  if (!/^https:\/\//.test(f.download_url || "")) throw new Error("https の住所ではありません");
+  const res = await fetch(f.download_url);
+  if (!res.ok) throw new Error(`読めません（${res.status}）`);
+  const buf = await res.arrayBuffer();
+  if (buf.byteLength > 8 * 1024 * 1024) throw new Error("8MB を超えています");
+  const t = (f.mime_type || res.headers.get("content-type") || "").split(";")[0].trim();
+  const mime = ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(t) ? t : /\.jpe?g$/i.test(f.file_name || "") ? "image/jpeg" : "image/png";
+  return { base64: toB64(buf), mime, label };
+}
+async function copyPostToDrive(env: Env, postId: string, images: string[]): Promise<unknown> {
+  try {
+    if (!env.ZOOM_ARCHIVE?.saveContentImages) return { ok: false, error: "zoom-to-youtube への結び（ZOOM_ARCHIVE）がありません" };
+    const got = await callContentOsInternalApi<{ post?: Record<string, any> }>(env, "get-post", { id: postId });
+    const p = got?.post;
+    if (!p) return { ok: false, error: "投稿を読み直せませんでした" };
+    if (!images.length) return { ok: false, error: "写す画像がありません" };
+    return await env.ZOOM_ARCHIVE.saveContentImages({
+      post_id: postId,
+      title: String(p.title || "無題"),
+      date: p.datetime ? String(p.datetime) : null,
+      sub: "画像ポスト",
+      images: images.map((url) => ({ url })),
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
 export function registerContentFileTool(server: McpServer, env: Env): void {
   (server as any).registerTool(
     "content_os__put_images",
     {
       description:
-        "コンテンツくんの依頼に、作った画像をファイルのまま書き戻す（図解・サムネなど。base64 にしなくてよい）。files に画像ファイルを 01・02… の順で 1〜6 枚渡す。labels は各画像の番号と題（同じ順）。replace_images=true で前の画像を外して入れ直す。文の成果やステータスは content_os__put_result で別に書く（この道具は画像だけ。ステータスは変えない）。書き戻すと Naoki のドライブ「コンテンツくん/月/日付_題/種類/」にも写る。戻り値: { ok, request, drive }。",
+        "作った画像をファイルのまま、コンテンツくんの依頼か投稿へ置く（図解・サムネ・画像ポストなど。base64 にしなくてよい）。依頼なら id（依頼の番号 uuid）、投稿なら post_id（content_os__add_post で入れた投稿の番号）のどちらか 1 つを渡す。files に画像ファイルを 01・02… の順で 1〜20 枚。labels は各画像の題（同じ順）。replace_images=true で、前にこの道具で置いた画像を外して入れ直す。投稿へ置くと本文の末尾に画像として入り、Naoki のドライブ「コンテンツくん/月/日付_題/画像ポスト/」にも写る（依頼なら「…/引用図解・サムネ・記事内図解/」）。文の成果やステータスは別の道具で書く（この道具は画像だけ。ステータスは変えない）。戻り値: { ok, request? , post?, images?, drive, errors? }。",
       inputSchema: {
-        id: z.string().describe("依頼の番号（uuid）"),
-        files: z.array(OpenAIFile).min(1).max(6).describe("画像ファイル（01 から順に）"),
-        labels: z.array(z.string().max(100)).max(6).optional(),
+        id: z.string().optional().describe("依頼の番号（uuid）。投稿に置くときは省く"),
+        post_id: z.union([z.string(), z.number()]).optional().describe("投稿の番号（content_os__add_post の post.id）。依頼に置くときは省く"),
+        files: z.array(OpenAIFile).min(1).max(20).describe("画像ファイル（01 から順に・20 枚まで）"),
+        labels: z.array(z.string().max(100)).max(20).optional(),
         replace_images: z.boolean().optional(),
       },
       _meta: { "openai/fileParams": ["files"] },
     },
-    async (args: { id: string; files: { download_url: string; mime_type?: string; file_name?: string }[]; labels?: string[]; replace_images?: boolean }) => {
-      const images: { base64: string; mime?: string; label?: string }[] = [];
+    async (args: { id?: string; post_id?: string | number; files: { download_url: string; mime_type?: string; file_name?: string }[]; labels?: string[]; replace_images?: boolean }) => {
+      const postId = args.post_id === undefined || args.post_id === "" ? "" : String(args.post_id);
+      if (!!postId === !!args.id) return asMcpTextResult({ ok: false, error: "id（依頼）か post_id（投稿）のどちらか 1 つを渡してください" });
       const errors: string[] = [];
-      for (let i = 0; i < args.files.length; i++) {
-        const f = args.files[i];
-        try {
-          if (!/^https:\/\//.test(f.download_url || "")) throw new Error("https の住所ではありません");
-          const res = await fetch(f.download_url);
-          if (!res.ok) throw new Error(`読めません（${res.status}）`);
-          const buf = await res.arrayBuffer();
-          if (buf.byteLength > 8 * 1024 * 1024) throw new Error("8MB を超えています");
-          const t = (f.mime_type || res.headers.get("content-type") || "").split(";")[0].trim();
-          const mime = ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(t) ? t : /\.jpe?g$/i.test(f.file_name || "") ? "image/jpeg" : "image/png";
-          images.push({ base64: toB64(buf), mime, label: args.labels?.[i] || f.file_name || String(i + 1).padStart(2, "0") });
-        } catch (e) {
-          errors.push(`${i + 1} 枚目：${e instanceof Error ? e.message : String(e)}`);
-        }
+      let keep: string | undefined;
+      if (!postId) {
+        const cur = await callContentOsInternalApi<{ requests?: Array<{ status?: string }> }>(env, "list-requests", { id: args.id });
+        const status = cur?.requests?.[0]?.status;
+        keep = status === "drafting" || status === "review" || status === "done" ? status : "review";
       }
-      if (!images.length) return asMcpTextResult({ ok: false, error: "画像を 1 枚も読めませんでした", errors });
-      const cur = await callContentOsInternalApi<{ requests?: Array<{ status?: string }> }>(env, "list-requests", { id: args.id });
-      const status = cur?.requests?.[0]?.status;
-      const keep = status === "drafting" || status === "review" || status === "done" ? status : "review";
-      const out = await callContentOsInternalApi<Record<string, unknown>>(env, "put-result", { id: args.id, status: keep, images, replace_images: args.replace_images });
-      if (out && (out as { ok?: boolean }).ok !== false) (out as Record<string, unknown>).drive = await copyToDrive(env, args.id);
-      if (errors.length) (out as Record<string, unknown>).errors = errors;
+      let out: Record<string, unknown> | null = null;
+      let placed = 0;
+      for (let s = 0; s < args.files.length; s += BATCH) {
+        const images: { base64: string; mime?: string; label?: string }[] = [];
+        for (let i = s; i < Math.min(s + BATCH, args.files.length); i++) {
+          const f = args.files[i];
+          try {
+            images.push(await readFile(f, args.labels?.[i] || f.file_name || String(i + 1).padStart(2, "0")));
+          } catch (e) {
+            errors.push(`${i + 1} 枚目：${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+        if (!images.length) continue;
+        const replace = placed === 0 ? args.replace_images : false;
+        const r = postId
+          ? await callContentOsInternalApi<Record<string, unknown>>(env, "put-post-images", { post_id: postId, images, replace_images: replace })
+          : await callContentOsInternalApi<Record<string, unknown>>(env, "put-result", { id: args.id, status: keep, images, replace_images: replace });
+        if (!r || (r as { ok?: boolean }).ok === false) {
+          errors.push(`${s + 1}〜${s + images.length} 枚目：${String((r as { message?: string; error?: string })?.message || (r as { error?: string })?.error || "書けませんでした")}`);
+          break;
+        }
+        out = r;
+        placed += images.length;
+      }
+      if (!out) return asMcpTextResult({ ok: false, error: "画像を 1 枚も置けませんでした", errors });
+      out.placed = placed;
+      out.drive = postId ? await copyPostToDrive(env, postId, (out.images as string[]) || []) : await copyToDrive(env, String(args.id));
+      if (errors.length) out.errors = errors;
       return asMcpTextResult(out);
     }
   );
