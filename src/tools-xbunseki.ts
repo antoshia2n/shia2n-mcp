@@ -43,8 +43,8 @@ async function ownerOf(env: Env): Promise<string> {
   const ids = [...new Set(rows.map(r => r.user_id).filter(Boolean))];
   return ids.length === 1 ? String(ids[0]) : OWNER_FALLBACK;
 }
-async function loadBase(env: Env) {
-  const uid = await ownerOf(env); const own = `user_id=eq.${encodeURIComponent(uid)}`;
+async function loadBase(env: Env, uidOf: () => Promise<string> = () => ownerOf(env)) {
+  const uid = await uidOf(); const own = `user_id=eq.${encodeURIComponent(uid)}`;
   const [weeks, accounts] = await Promise.all([
     sbGet(env, `/xa_weeks?select=*&${own}&order=sort.desc`),
     sbGet(env, `/xa_accounts?select=*&${own}&order=sort.asc`),
@@ -61,7 +61,11 @@ const refsOf = (i: Row) => (i.src || []).filter((s: Row) => s && s.ref).map((s: 
 const tasksOf = (i: Row) => (i.src || []).filter((s: Row) => s && s.task).map((s: Row) => ({ id: s.task.id, 題: s.task.title || "", 期限: s.task.deadline || null }));
 const itemOut = (i: Row) => ({ id: i.id, 層: layerName(i.layer), 段: KINDS[i.kind] || i.kind, 中身: i.body, ...(String(i.memo || "").trim() ? { メモ: i.memo } : {}), ...(i.grade ? { 見込み: i.grade } : {}), ...(i.verdict ? { 振り返り: VERDICT[i.verdict] || i.verdict } : {}), ...(refsOf(i).length ? { 参考ポスト: refsOf(i) } : {}), ...(tasksOf(i).length ? { TaskMasterへ送ったタスク: tasksOf(i) } : {}), いつから: i.from_month, アーカイブ: !!i.archived, ...(i.archived_why ? { やめた理由: i.archived_why } : {}) });
 
-export function registerXbunsekiTools(server: McpServer, env: Env): void {
+/**
+ * uidOf を渡すと、その人の行だけを読む・書く（2026-11-17 v1.122.0 外向けの窓口 shia2n-mcp-official から本人の番号で呼ぶため）。
+ * 省略すると今までどおり Naoki の行（ownerOf）。
+ */
+export function registerXbunsekiTools(server: McpServer, env: Env, uidOf?: () => Promise<string>): void {
 
   // ─── 1. xbunseki__list_weeks ─────────────────────────────────────
   server.tool(
@@ -70,7 +74,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
     { limit: z.number().int().min(1).max(60).optional().describe("何回分まで（省略時 12）") },
     async ({ limit }) => {
       try {
-        const { own, weeks } = await loadBase(env);
+        const { own, weeks } = await loadBase(env, uidOf);
         const obs = await sbGet(env, `/xa_obs?select=week_id&${own}`);
         const n = new Map<string, number>(); obs.forEach(o => n.set(o.week_id, (n.get(o.week_id) || 0) + 1));
         const list = weeks.slice(0, limit ?? 12);
@@ -86,7 +90,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
     { week: z.string().max(40).optional().describe("「10月4週」「今週」など。省略でいちばん新しい回") },
     async ({ week }) => {
       try {
-        const { own, weeks, accounts } = await loadBase(env);
+        const { own, weeks, accounts } = await loadBase(env, uidOf);
         const w = pickWeek(weeks, week);
         if (!w) return asMcpTextResult({ ok: false, message: `週「${week}」が見つかりません`, 週: weeks.slice(0, 12).map(x => x.label) });
         const [obs, items] = await Promise.all([
@@ -123,7 +127,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
     { handle: z.string().max(60).describe("相手の @ID か名前（例: ushi_butyo／うし部長）"), limit: z.number().int().min(1).max(60).optional().describe("何回分まで（省略時 12）") },
     async ({ handle, limit }) => {
       try {
-        const { own, weeks, accounts } = await loadBase(env);
+        const { own, weeks, accounts } = await loadBase(env, uidOf);
         const h = handle.replace(/^@/, "").trim();
         const a = accounts.find(x => x.handle.toLowerCase() === h.toLowerCase()) || accounts.find(x => (x.name || "") === h);
         if (!a) return asMcpTextResult({ ok: false, message: `「${handle}」は見る相手にいません`, 見る相手: accounts.map(x => `${x.name}（@${x.handle}）`) });
@@ -152,7 +156,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
     { month: z.string().regex(/^\d{4}-\d{2}$/).optional().describe("例 2026-10。省略で今月（日本時間）"), include_archived: z.boolean().optional() },
     async ({ month, include_archived }) => {
       try {
-        const { own } = await loadBase(env);
+        const { own } = await loadBase(env, uidOf);
         const d = new Date(Date.now() + 9 * 3600 * 1000);
         const m = month || `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
         const items = await sbGet(env, `/xa_items?select=*&${own}&order=sort.asc`);
@@ -173,7 +177,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
     { week: z.string().optional().describe("省略で今週") },
     async ({ week }) => {
       try {
-        const { uid, own, weeks } = await loadBase(env);
+        const { uid, own, weeks } = await loadBase(env, uidOf);
         const w = pickWeek(weeks, week || "今週") || pickWeek(weeks);
         if (!w) return asMcpTextResult({ ok: false, message: "回がまだない" });
         const [items, sets, accs] = await Promise.all([
@@ -200,7 +204,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
     },
     async ({ week, imp, fol, kiji, qt }) => {
       try {
-        const { own, weeks } = await loadBase(env);
+        const { own, weeks } = await loadBase(env, uidOf);
         const w = pickWeek(weeks, week ?? "今週");
         if (!w) return asMcpTextResult({ ok: false, message: `週「${week ?? "今週"}」が X攻略くんにまだありません。画面で開くと今週のページができます`, 住所: APP_URL });
         const { next, changed } = mergeMetrics(w.metrics, { imp, fol, kiji, qt });
@@ -219,7 +223,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
     { kind: z.enum(["仮説", "ノウハウ"]).optional().describe("省略で両方"), folder: z.string().max(30).optional().describe("フォルダの名前。未分類は空文字") },
     async ({ kind, folder }) => {
       try {
-        const { own, weeks, accounts } = await loadBase(env);
+        const { own, weeks, accounts } = await loadBase(env, uidOf);
         const items = await sbGet(env, `/xa_items?select=*&${own}&kind=in.(hy,kn,st)`);
         const list = xbStockOf(items, weeks, accounts, kind ? STOCK_KIND[kind] : undefined, folder);
         const folders = [...new Set(list.map(x => x.フォルダ).filter(f => f && f !== "未分類"))];
@@ -240,7 +244,7 @@ export function registerXbunsekiTools(server: McpServer, env: Env): void {
       })).min(1).max(30) },
     async ({ items: input }) => {
       try {
-        const { uid, own } = await loadBase(env);
+        const { uid, own } = await loadBase(env, uidOf);
         const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
         const have = await sbGet(env, `/xa_items?select=id,kind,body,archived&${own}&kind=in.(hy,kn)`);
         const rows: Row[] = [], skipped: string[] = [];

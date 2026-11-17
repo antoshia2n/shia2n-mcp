@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { allowedToolNames, canConnect, type Rights } from "../src/rights.js";
 import { buildServer } from "../src/server.js";
-import { OFFICIAL_TOOL_NAMES } from "../src/tools.js";
+import { OFFICIAL_TOOL_NAMES, GATE_TOOL_NAMES } from "../src/tools.js";
 import { createAuthHandler, freshSignIn } from "../src/auth.js";
 
 const MEMBER = "327ce031-0a0c-4b5b-9cb2-38e62f506fab";
@@ -13,13 +13,18 @@ const NAOKI_ONLY = ["okane__", "sales_manager__", "members__", "rumin_doc__"];
 const ok = (keys: string[], targets: string[]): Extract<Rights, { ok: true }> => ({ ok: true, member_id: MEMBER, keys, targets });
 
 async function listAndCall(rightsAtList: Extract<Rights, { ok: true }>, rightsAtCall: Rights = rightsAtList) {
-  const gate = { rights: async () => rightsAtCall };
+  const runs: any[] = [];
+  const gate = {
+    rights: async () => rightsAtCall,
+    tools: async (names: string[]) => names.map((n) => ({ name: n, description: "d " + n, inputSchema: { type: "object", properties: {} } })),
+    run: async (m: string, name: string, args: unknown) => { runs.push({ m, name, args }); return { ok: true as const, result: { content: [{ type: "text", text: JSON.stringify({ ok: true, by: m }) }] } }; },
+  };
   const server = buildServer(gate, MEMBER, rightsAtList);
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "t", version: "0" });
   await Promise.all([server.connect(a), client.connect(b)]);
   const names = (await client.listTools()).tools.map((t) => t.name);
-  return { client, names };
+  return { client, names, runs };
 }
 
 test("名簿に Naoki 用の道具は 1 本も無い", () => {
@@ -121,4 +126,26 @@ test("古いログインの札は受けない", async () => {
 
 test("名簿の道具の名前は、表の target の決まり（^[a-z0-9_-]{2,40}$）に収まる", () => {
   for (const n of OFFICIAL_TOOL_NAMES) assert.match("mcp-" + n, /^[a-z0-9_-]{2,40}$/, n);
+});
+
+const X8 = GATE_TOOL_NAMES.map((n) => "mcp-" + n);
+
+test("先行（pilot）：X攻略くんの 8 本が見える", async () => {
+  const { names } = await listAndCall(ok(["shiarabo_basic", "shiarabo_pilot"], ["mcp_official", ...X8]));
+  assert.deepEqual(names, [...GATE_TOOL_NAMES]);
+});
+
+test("X攻略くんの道具は、つないだ本人の番号で shia2n-mcp へ渡る", async () => {
+  const listed = ok(["shiarabo_pilot"], ["mcp_official", ...X8]);
+  const { client, runs } = await listAndCall(listed);
+  const r = await client.callTool({ name: "xbunseki__list_weeks", arguments: { limit: 3 } });
+  assert.notEqual(r.isError, true);
+  assert.deepEqual(runs, [{ m: MEMBER, name: "xbunseki__list_weeks", args: { limit: 3 } }]);
+});
+
+test("X攻略くんの道具も、使う前に権利が外れたら shia2n-mcp へ渡さない", async () => {
+  const { client, runs } = await listAndCall(ok(["shiarabo_pilot"], ["mcp_official", ...X8]), ok(["shiarabo_basic"], ["mcp_official"]));
+  const r = await client.callTool({ name: "xbunseki__list_weeks", arguments: {} });
+  assert.equal(r.isError, true);
+  assert.equal(runs.length, 0);
 });

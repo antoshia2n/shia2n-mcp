@@ -39,4 +39,13 @@ export const OFFICIAL_TOOLS: readonly OfficialTool[] = [
   },
 ];
 
-export const OFFICIAL_TOOL_NAMES: readonly string[] = OFFICIAL_TOOLS.map((t) => t.name);
+/**
+ * shia2n-mcp の OfficialGate を通して本人の番号で動く道具（中身と鍵は shia2n-mcp の側）。
+ * shia2n-mcp の側にも同じ名簿（src/official-gate.ts の OFFICIAL_GATE_TOOLS）があり、両方に載っていないと動かない。
+ */
+export const GATE_TOOL_NAMES: readonly string[] = [
+  "xbunseki__list_weeks", "xbunseki__get_week", "xbunseki__get_account", "xbunseki__get_strategy",
+  "xbunseki__get_moves", "xbunseki__put_metrics", "xbunseki__get_stock", "xbunseki__put_stock",
+];
+
+export const OFFICIAL_TOOL_NAMES: readonly string[] = [...OFFICIAL_TOOLS.map((t) => t.name), ...GATE_TOOL_NAMES];
