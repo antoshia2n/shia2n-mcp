@@ -28,11 +28,11 @@ test("名簿に Naoki 用の道具は 1 本も無い", () => {
 
 test("mcp_official が無ければ、つなげず、道具も 0 本", () => {
   assert.equal(canConnect(["portal", "manabu"]), false);
-  assert.deepEqual(allowedToolNames(OFFICIAL_TOOL_NAMES, ["mcp:official__my_rights"]), []);
+  assert.deepEqual(allowedToolNames(OFFICIAL_TOOL_NAMES, ["mcp-official__my_rights"]), []);
 });
 
 test("表に Naoki 用の道具の名前を書いても、名簿に無いので出ない", () => {
-  const t = ["mcp_official", "mcp:okane__list_plans", "mcp:sales_manager__list_payments", "mcp:members__search", "mcp:rumin_doc__replace_text"];
+  const t = ["mcp_official", "mcp-okane__list_plans", "mcp-sales_manager__list_payments", "mcp-members__search", "mcp-rumin_doc__replace_text"];
   assert.deepEqual(allowedToolNames(OFFICIAL_TOOL_NAMES, t), []);
 });
 
@@ -41,13 +41,13 @@ test("生徒（mcp_official だけ）：一覧は空", async () => {
   assert.deepEqual(names, []);
 });
 
-test("権利に mcp:道具 がある人にだけ、その道具が見える", async () => {
-  const { names } = await listAndCall(ok(["guest"], ["mcp_official", "mcp:official__my_rights", "mcp:okane__list_plans"]));
+test("権利に mcp-道具 がある人にだけ、その道具が見える", async () => {
+  const { names } = await listAndCall(ok(["guest"], ["mcp_official", "mcp-official__my_rights", "mcp-okane__list_plans"]));
   assert.deepEqual(names, ["official__my_rights"]);
 });
 
 test("道具を使うときにも権利を取り直す（使う前に外れたら断る）", async () => {
-  const listed = ok(["guest"], ["mcp_official", "mcp:official__my_rights"]);
+  const listed = ok(["guest"], ["mcp_official", "mcp-official__my_rights"]);
   const { client } = await listAndCall(listed, ok([], []));
   const r = await client.callTool({ name: "official__my_rights", arguments: {} });
   assert.equal(r.isError, true);
@@ -55,7 +55,7 @@ test("道具を使うときにも権利を取り直す（使う前に外れた�
 });
 
 test("使えるときは自分の権利だけを返す", async () => {
-  const listed = ok(["guest"], ["mcp_official", "mcp:official__my_rights"]);
+  const listed = ok(["guest"], ["mcp_official", "mcp-official__my_rights"]);
   const { client } = await listAndCall(listed);
   const r = await client.callTool({ name: "official__my_rights", arguments: {} });
   assert.notEqual(r.isError, true);
@@ -117,4 +117,8 @@ test("古いログインの札は受けない", async () => {
   assert.equal(res.status, 401);
   assert.equal(completed.length, 0);
   assert.equal(freshSignIn(tk(now() - 60)), true);
+});
+
+test("名簿の道具の名前は、表の target の決まり（^[a-z0-9_-]{2,40}$）に収まる", () => {
+  for (const n of OFFICIAL_TOOL_NAMES) assert.match("mcp-" + n, /^[a-z0-9_-]{2,40}$/, n);
 });

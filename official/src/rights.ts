@@ -3,13 +3,14 @@
  *
  * 決まり（2026-11-17 Naoki OK）：
  *   ・つなげるのは、開くもの（member_access の target）に mcp_official がある人だけ
- *   ・見える道具は、プログラムの名簿（tools.ts の OFFICIAL_TOOLS）と、開くものの「mcp:道具の名前」の両方に載っているものだけ
+ *   ・見える道具は、プログラムの名簿（tools.ts の OFFICIAL_TOOLS）と、開くものの「mcp-道具の名前」の両方に載っているものだけ
  *     → 表に Naoki 用の道具の名前を書き間違えても、名簿に無いので出ようがない
- *   ・新しいプランは member_access に「プランの権利 × mcp_official」と「プランの権利 × mcp:道具の名前」を足すだけ
+ *   ・新しいプランは member_access に「プランの権利 × mcp_official」と「プランの権利 × mcp-道具の名前」を足すだけ
  */
 
 export const CONNECT_TARGET = "mcp_official";
-export const TOOL_TARGET_PREFIX = "mcp:";
+// 表の target の決まり（^[a-z0-9_-]{2,40}$）に合わせて「:」ではなく「-」でつなぐ
+export const TOOL_TARGET_PREFIX = "mcp-";
 
 /** 門番の口（shia2n-mcp の OfficialGate）が返す形 */
 export type Rights = { ok: true; member_id: string; keys: string[]; targets: string[] } | { ok: false; reason: string };
