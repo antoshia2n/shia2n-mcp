@@ -421,6 +421,11 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
         .nullable()
         .optional()
         .describe("マインドマップ（Whimsical など）の住所。メモから作ったマインドマップのリンクを入れる。空の文字か null を渡すと空に戻る"),
+      x_url: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("X のポストの住所（https://x.com/…/status/…）。X で直接予約した投稿が出たあとに入れる。null で空に戻す"),
     },
     async (args) => {
       const payload: Record<string, unknown> = { id: args.id };
@@ -435,6 +440,7 @@ export function registerContentOsTools(server: McpServer, env: Env): void {
       if (args.labels !== undefined) payload.labels = args.labels;
       if (args.buffer_post_id !== undefined) payload.buffer_post_id = args.buffer_post_id;
       if (args.mm_url !== undefined) payload.mm_url = args.mm_url;
+      if (args.x_url !== undefined) payload.x_url = args.x_url;
 
       const result = await callContentOsInternalApi(env, "update-post", payload);
       return asMcpTextResult(result);
