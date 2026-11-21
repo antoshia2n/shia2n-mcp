@@ -6,7 +6,7 @@
  * 表と関数を作る SQL は sql/manager.sql（ブラウザからは読めない・管理者キーだけ）。
  */
 import type { Env } from "./index.js";
-import { markerNo, parseChatRef, pickChats, type CaptureCheck } from "./manager-core.js";
+import { chatPageOf, markerNo, parseChatRef, pickChats, type CaptureCheck } from "./manager-core.js";
 
 type Row = Record<string, any>;
 type SbEnv = Pick<Env, "SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY">;
@@ -157,7 +157,7 @@ export const PANEL_SURFACE = "シアニンパネル"; // 拡張が作った行�
 
 /**
  * 読んだ全文を台帳の 1 行に結んで上書きする。結び方は 3 段：
- *   ① 住所が台帳にある行 ② 全文の中の「台帳 #N」の行（住所が空か同じときだけ・住所を入れる） ③ 新しい行
+ *   ① 住所が台帳にある行 ② 全文の中の「台帳 #N」の行（住所が空・同じ・拡張で読めないページのときだけ・住所を入れる） ③ 新しい行
  */
 export async function applyCapture(env: SbEnv, cap: Extract<CaptureCheck, { ok: true }>): Promise<{ no: number; how: "url" | "marker" | "new"; name: string }> {
   const now = new Date().toISOString();
@@ -172,7 +172,9 @@ export async function applyCapture(env: SbEnv, cap: Extract<CaptureCheck, { ok: 
   const m = markerNo(cap.transcript);
   if (m) {
     const c = await chatByNo(env, m);
-    if (c && (!c.url || c.url === cap.url)) {
+    // v1.126.1：印の行の住所が空・同じ・拡張では読めないページ（AI が渡した Claude Code の住所など）のときは結ぶ。
+    // 別の Claude・ChatGPT のチャットの住所が入っている行は、写した印（引用）とみなして結ばない
+    if (c && (!c.url || c.url === cap.url || !chatPageOf(c.url))) {
       const r = await updateChat(env, m, { ...body, url: cap.url });
       return { no: Number(r.no), how: "marker", name: String(r.name) };
     }
