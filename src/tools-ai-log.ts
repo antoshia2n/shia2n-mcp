@@ -38,7 +38,7 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
   // ─── 1. ai_log__add ──────────────────────────────────────────────
   server.tool(
     "ai_log__add",
-    `AI の利用ログに 1 件残し、同時にマネージャーくんの台帳にこのチャットの行を作る。各役割（統括・秘書・開発部・るーみん・おかぜり・予約タスク など）の会話の最初に 1 回だけ呼ぶ。時刻（日本時間）はサーバーが付ける。where は ${WHERE_VALUES.join("・")} のどれか。title はその会話の要件を短く（200 字まで・台帳のチャットの名前になる）。このチャットの住所が分かれば chat_url に渡す（Claude Code はセッションの住所、分からなければ省く）。戻り値の チャット.番号 を覚えておき、ピン（manager__pin）と状態の書き直し（manager__update）に渡す。戻り値: 成功 { ok: true, 時刻, role, where, title, チャット: { 番号, 名前, 状態, … }, warnings? }／失敗 { ok: false, message }。`,
+    `AI の利用ログに 1 件残し、同時にマネージャーくんの台帳にこのチャットの行を作る。各役割（統括・秘書・開発部・るーみん・おかぜり・予約タスク など）の会話の最初に 1 回だけ呼ぶ。時刻（日本時間）はサーバーが付ける。where は ${WHERE_VALUES.join("・")} のどれか。title はその会話の要件を短く（200 字まで・台帳のチャットの名前になる）。このチャットの住所が分かれば chat_url に渡す（Claude Code はセッションの住所、分からなければ省く）。戻り値の チャット.番号 を覚えておき、ピン（manager__pin）と状態の書き直し（manager__update）に渡す。戻り値の 次に に書かれたことはそのとおりにする。戻り値: 成功 { ok: true, 時刻, role, where, title, チャット: { 番号, 名前, 状態, … }, warnings? }／失敗 { ok: false, message }。`,
     {
       role: z.string().max(30).describe(`役割。決まった名前：${KNOWN_ROLES.join("・")}`),
       where: z.string().max(30).describe(`使った場所：${WHERE_VALUES.join("・")}`),
@@ -71,7 +71,8 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
           chat = chatOut(row);
         } catch (e) { warnings.push(`マネージャーくんの台帳に行を作れませんでした：${String((e as Error)?.message || e).slice(0, 200)}`); }
         return asMcpTextResult({ ok: true, 時刻: toJst(String(r.at)), role: r.role, where: r.surface, title: r.title,
-          ...(chat ? { チャット: chat, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update に chat=${chat.番号} を渡す` } : {}),
+          ...(chat ? { チャット: chat, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update に chat=${chat.番号} を渡す` +
+            (chat.住所 || c.row.surface === "予約タスク" ? "" : `。最初の返事の末尾に「（台帳 #${chat.番号}）」と 1 回だけ書く（シアニンパネルがこの字でチャットの住所を結ぶ）`) } : {}),
           ...(warnings.length ? { warnings } : {}) });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }

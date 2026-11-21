@@ -168,6 +168,8 @@ export function chatOut(r: Row) {
     ピンの数: Number(r.pin_count || 0),
     最後に触った: jstShort(r.touched_at),
     作った: jstShort(r.created_at),
+    全文を読んだ: r.transcript_at ? jstShort(r.transcript_at) : null,
+    往復: r.turns == null ? null : Number(r.turns),
   };
 }
 
@@ -182,4 +184,63 @@ export function pinOut(p: Row, chat?: Row | null, full = false) {
     ...(chat ? { チャットの名前: String(chat.name ?? ""), チャットの住所: chat.url ? String(chat.url) : null } : {}),
     ...(full ? { 全文: String(p.body ?? ""), 字数: String(p.body ?? "").length } : {}),
   };
+}
+
+/* ─── v1.126.0（2026-11-21 2便目）：シアニンパネルが自動で読んだチャットを受ける ─── */
+
+/** チャットの住所なら、どちらの AI か。住所の形が違えば null（Claude Code のセッションは受けない） */
+export function chatPageOf(u: unknown): { url: string; service: "claude" | "chatgpt" } | null {
+  let x: URL;
+  try { x = new URL(String(u ?? "")); } catch { return null; }
+  if (x.protocol !== "https:") return null;
+  const path = x.pathname.replace(/\/+$/, "");
+  if (x.hostname === "claude.ai" && /^\/chat\/[0-9a-f-]{8,}$/i.test(path)) return { url: `https://claude.ai${path}`, service: "claude" };
+  if ((x.hostname === "chatgpt.com" || x.hostname === "chat.openai.com") && /^(?:\/g\/[A-Za-z0-9_-]+)?\/c\/[A-Za-z0-9-]{8,}$/.test(path)) return { url: `https://chatgpt.com${path}`, service: "chatgpt" };
+  return null;
+}
+
+/** 全文の中の「台帳 #12」（全角も）から番号を取る。いちばん最初のものだけ */
+export function markerNo(text: unknown): number | null {
+  const m = String(text ?? "").normalize("NFKC").match(/台帳\s*#\s*(\d{1,9})/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n > 0 ? n : null;
+}
+
+export type Turn = { user: string; reply: string };
+/** 往復を 1 枚の文にする（## Naoki ／ ## Claude か ChatGPT） */
+export function transcriptOf(turns: Turn[], service: "claude" | "chatgpt"): string {
+  const ai = service === "chatgpt" ? "ChatGPT" : "Claude";
+  return turns.map((t) => `## Naoki\n${String(t.user ?? "").trim()}\n\n## ${ai}\n${String(t.reply ?? "").trim()}`).join("\n\n").trim();
+}
+
+export type CaptureCheck =
+  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number }
+  | { ok: false; message: string };
+/** 拡張から来た 1 件を確かめる。題は 120 字まで（無ければ最初の発言から）、全文は 2,000,000 字まで */
+export function checkCapture(body: Record<string, unknown>): CaptureCheck {
+  const page = chatPageOf(body.url);
+  if (!page) return { ok: false, message: "Claude か ChatGPT のチャットの住所ではありません" };
+  const raw = Array.isArray(body.turns) ? body.turns : [];
+  const turns: Turn[] = raw
+    .map((t: any) => ({ user: String(t?.user ?? ""), reply: String(t?.reply ?? "") }))
+    .filter((t) => t.user.trim() || t.reply.trim());
+  if (!turns.length) return { ok: false, message: "往復が 1 つもありません" };
+  const transcript = transcriptOf(turns, page.service);
+  if (transcript.length > 2000000) return { ok: false, message: "全文が 2,000,000 字を超えています" };
+  const fallback = turns[0].user.trim().replace(/\s+/g, " ").slice(0, 60) || "名前のないチャット";
+  const title = chatName(String(body.title ?? "").replace(/\s*[-|｜]\s*(ChatGPT|Claude)\s*$/, "")) || fallback;
+  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length };
+}
+
+/** 鍵の文字列 → sha256（16 進）。鍵そのものは台帳に置かない */
+export async function keyHash(key: string): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** 新しい鍵（mk_ で始まる 43 字の乱数） */
+export function newKey(): string {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  return "mk_" + btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
