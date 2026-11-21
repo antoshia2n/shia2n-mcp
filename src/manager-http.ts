@@ -15,14 +15,17 @@
  *   GET  /manager/api/ext-status      … 鍵がつながっているか・最後に使った時刻（v1.126.0）
  *   POST /manager/ext/capture         … シアニンパネルが読んだチャットの全文を受ける。拡張の鍵（書くだけ）で通す（v1.126.0）
  *   manager.shia2n.jp の / は /manager と同じ画面（v1.126.0）
+ *   v1.128.0（4便目）：chats に area（分野で絞る）と areas（棚ごとの数）、chat にやったことと最後の頼みごと、
+ *   GET /manager/api/activity?range=today|week … 今日・今週やったこと（拡張だけのチャットは最後の頼みごとで代わりに出す）
+ *   POST /manager/api/update に area（画面で決めた分野は拡張が上書きしない）
  *
  * 守り方は案件くんの受け口（anken-sheet-http.ts）と同じ：Firebase のログインの札を確かめ、Naoki 本人（NAOKI_UID）のときだけ読む・書く。
  * 画面と読み口は同じ住所なので、ほかの住所からの呼び出し（Origin が違うもの）は断る。
  */
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
-import { STATES, checkCapture, checkUpdate, chatOut, jstShort, keyHash, newKey, normState, pinOut } from "./manager-core.js";
-import { ManagerError, applyCapture, chatByNo, issueKey, keyStatus, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { STATES, areaName, checkCapture, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
+import { ManagerError, applyCapture, areaCounts, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
 import { managerPage } from "./manager-page.js";
@@ -70,19 +73,38 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const st = raw === "すべて" ? "すべて" : raw ? normState(raw) : null;
       if (raw && !st) return reply({ ok: false, message: `state は ${STATES.join("・")}・すべて のどれかです` }, 400);
       const ai = (sp.get("ai") || "").trim();
-      const [rows, counts] = await Promise.all([
-        listChats(env, { state: st, ai: ai === "claude" || ai === "gpt" ? ai : null, limit: 300, initiative: sp.get("initiative") }),
+      const [rows, counts, areas] = await Promise.all([
+        listChats(env, { state: st, ai: ai === "claude" || ai === "gpt" ? ai : null, limit: 300, initiative: sp.get("initiative"), area: areaName(sp.get("area")) }),
         stateCounts(env),
+        areaCounts(env),
       ]);
-      return reply({ ok: true, chats: rows.map(chatOut), counts });
+      return reply({ ok: true, chats: rows.map(chatOut), counts, areas });
     }
     if (request.method === "GET" && op === "chat") {
       const no = Number(sp.get("no"));
       if (!Number.isInteger(no) || no <= 0) return reply({ ok: false, message: "チャット番号が分かりません" }, 400);
       const c = await chatByNo(env, no);
       if (!c) return reply({ ok: false, message: `チャット ${no} はありません` }, 404);
-      const pins = await pinIndex(env, no);
-      return reply({ ok: true, chat: chatOut(c), pins: pins.map((p) => ({ 番号: Number(p.n), 題: p.title, 作った: jstShort(p.created_at) })) });
+      const [pins, done, asks] = await Promise.all([pinIndex(env, no), doneOf(env, no), lastAsks(env, [no])]);
+      return reply({ ok: true, chat: chatOut(c), pins: pins.map((p) => ({ 番号: Number(p.n), 題: p.title, 作った: jstShort(p.created_at) })),
+        done: done.map((d) => ({ やったこと: d.text, 時刻: jstShort(d.at) })), 最後の頼みごと: asks[no] ?? null });
+    }
+    if (request.method === "GET" && op === "activity") {
+      const range = sp.get("range") === "week" ? "week" : "today";
+      const since = jstSince(range);
+      const [done, read] = await Promise.all([doneSince(env, since), chatsReadSince(env, since)]);
+      const withDone = new Set(done.map((d) => Number(d.chat_no)));
+      const quiet = read.filter((c) => !withDone.has(Number(c.no)));
+      const [chats, asks] = await Promise.all([chatsByNos(env, done.map((d) => Number(d.chat_no))), lastAsks(env, quiet.map((c) => Number(c.no)))]);
+      const byNo = new Map([...chats, ...quiet].map((c) => [Number(c.no), c]));
+      const items = [
+        ...done.map((d) => ({ 種類: "やったこと", 時刻: jstShort(d.at), at: String(d.at), 中身: d.text, no: Number(d.chat_no) })),
+        ...quiet.filter((c) => asks[Number(c.no)]).map((c) => ({ 種類: "最後の頼みごと", 時刻: jstShort(c.transcript_at), at: String(c.transcript_at), 中身: asks[Number(c.no)], no: Number(c.no) })),
+      ].sort((a, b) => b.at.localeCompare(a.at)).map(({ at, no, ...x }) => {
+        const c = byNo.get(no);
+        return { ...x, チャット番号: no, チャットの名前: c?.name ?? "", 分野: c?.area ?? null, 状態: c?.state ?? "", AI: c?.ai ?? "" };
+      });
+      return reply({ ok: true, range, items });
     }
     if (request.method === "GET" && op === "pin") {
       const no = Number(sp.get("chat")), n = Number(sp.get("n"));
@@ -111,7 +133,8 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (!c.ok) return reply({ ok: false, message: c.message }, 400);
       const ini = await initiativePatch(env, body.initiative);
       if (!ini.ok) return reply({ ok: false, message: ini.message }, 400);
-      let after = await updateChat(env, no, { ...c.patch, ...ini.patch });
+      const ar = body.area === undefined ? {} : areaName(body.area) ? { area: areaName(body.area), area_src: "手" } : { area: null, area_src: null };
+      let after = await updateChat(env, no, { ...c.patch, ...ini.patch, ...ar });
       const t = await syncDecisionTask(env, after); // v1.127.0：判断待ち ⇄ TaskMaster
       if (t.action !== "none") after = { ...after, tm_task_id: t.action === "added" ? t.task_id : null };
       return reply({ ok: true, chat: chatOut(after), ...(t.error ? { warning: `TaskMaster：${t.error}` } : {}) });

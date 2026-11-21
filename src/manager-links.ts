@@ -157,7 +157,7 @@ export function notebookText(chats: Row[], pins: Row[], at: string): string {
   lines.push("");
   lines.push("■ チャットの台帳（最後に触った順）");
   for (const c of chats) {
-    lines.push(`チャット ${c.no}｜${c.name}｜${c.state}${c.initiative_name ? `｜取り組み ${c.initiative_no} ${c.initiative_name}` : ""}｜最後に触った ${jstShort(c.touched_at)}${c.doing ? `｜${c.doing}` : ""}${c.url ? `｜${c.url}` : ""}`);
+    lines.push(`チャット ${c.no}｜${c.name}｜${c.state}${c.area ? `｜分野 ${c.area}` : ""}${c.initiative_name ? `｜取り組み ${c.initiative_no} ${c.initiative_name}` : ""}｜最後に触った ${jstShort(c.touched_at)}${c.doing ? `｜${c.doing}` : ""}${c.url ? `｜${c.url}` : ""}`);
   }
   lines.push("");
   lines.push("■ ピン（新しい順・回答の全文）");
@@ -179,8 +179,8 @@ export async function exportNotebook(env: Env, force = false): Promise<{ ok: boo
   const docId = await getSetting(env, NOTEBOOK_DOC_KEY);
   if (!docId) return { ok: true, wrote: false, message: "書き出すドキュメントがまだ決まっていません" };
   try {
-    const chats: Row[] = (await sb(env, `mk_chats?select=no,name,state,doing,url,touched_at,initiative_no,initiative_name&state=neq.${encodeURIComponent("閉じた")}&order=touched_at.desc&limit=500`)) || [];
-    const closed: Row[] = (await sb(env, `mk_chats?select=no,name,state,doing,url,touched_at,initiative_no,initiative_name&state=eq.${encodeURIComponent("閉じた")}&pin_count=gt.0&order=touched_at.desc&limit=500`)) || [];
+    const chats: Row[] = (await sb(env, `mk_chats?select=no,name,state,doing,url,touched_at,initiative_no,initiative_name,area&state=neq.${encodeURIComponent("閉じた")}&order=touched_at.desc&limit=500`)) || [];
+    const closed: Row[] = (await sb(env, `mk_chats?select=no,name,state,doing,url,touched_at,initiative_no,initiative_name,area&state=eq.${encodeURIComponent("閉じた")}&pin_count=gt.0&order=touched_at.desc&limit=500`)) || [];
     const pins: Row[] = (await sb(env, `mk_pins?select=chat_no,n,title,body,created_at&order=created_at.desc&limit=2000`)) || [];
     const all = [...chats, ...closed];
     const body = notebookText(all, pins, "");

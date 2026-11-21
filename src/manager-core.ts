@@ -172,6 +172,7 @@ export function chatOut(r: Row) {
     往復: r.turns == null ? null : Number(r.turns),
     取り組み: r.initiative_no ? { 番号: String(r.initiative_no), 名前: String(r.initiative_name ?? "") } : null,
     判断のタスク: r.tm_task_id ? `https://taskmaster.shia2n.jp/?task=${encodeURIComponent(String(r.tm_task_id))}` : null,
+    分野: r.area ? String(r.area) : null,
   };
 }
 
@@ -240,7 +241,7 @@ export function mergeTurns(old: Turn[] | null | undefined, cur: Turn[]): Turn[] 
 }
 
 export type CaptureCheck =
-  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number; list: Turn[] }
+  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number; list: Turn[]; project: string | null }
   | { ok: false; message: string };
 /** 拡張から来た 1 件を確かめる。題は 120 字まで（無ければ最初の発言から）、全文は 2,000,000 字まで */
 export function checkCapture(body: Record<string, unknown>): CaptureCheck {
@@ -255,7 +256,7 @@ export function checkCapture(body: Record<string, unknown>): CaptureCheck {
   if (transcript.length > 2000000) return { ok: false, message: "全文が 2,000,000 字を超えています" };
   const fallback = turns[0].user.trim().replace(/\s+/g, " ").slice(0, 60) || "名前のないチャット";
   const title = chatName(String(body.title ?? "").replace(/\s*[-|｜]\s*(ChatGPT|Claude)\s*$/, "")) || fallback;
-  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length, list: turns };
+  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length, list: turns, project: areaName(body.project) };
 }
 
 /** 鍵の文字列 → sha256（16 進）。鍵そのものは台帳に置かない */
@@ -268,4 +269,49 @@ export async function keyHash(key: string): Promise<string> {
 export function newKey(): string {
   const b = crypto.getRandomValues(new Uint8Array(32));
   return "mk_" + btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/* ─── v1.128.0（2026-11-22 4便目）：分野の棚・やったこと・題名でピン ─── */
+
+/** 分野（棚の名前）。Claude・ChatGPT のプロジェクト名か役割。空白をつめて 60 字まで。空は null */
+export function areaName(v: unknown): string | null {
+  const s = String(v ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+  return s || null;
+}
+
+/** 分野を拡張が書いてよいか。手（画面）とチャット（道具）で決めたものは上書きしない */
+export function extMayWriteArea(row: Record<string, any> | null | undefined, project: string | null): boolean {
+  if (!project || !row) return false;
+  if (row.area_src === "手" || row.area_src === "チャット") return false;
+  return row.area !== project;
+}
+
+export type DoneCheck = { ok: true; text: string } | { ok: false; message: string };
+/** やったことの 1 行。空白をつめて 1〜200 字 */
+export function checkDone(v: unknown): DoneCheck {
+  const t = String(v ?? "").trim().replace(/\s+/g, " ");
+  if (!t) return { ok: false, message: "text（やったことの 1 行）が空です。「○○をした」の形で" };
+  if (t.length > 200) return { ok: false, message: "text は 200 字までです" };
+  return { ok: true, text: t };
+}
+
+/** ピンを題で探すときの言葉（空白で区切る・PostgREST の区切り字は外す） */
+export function titleWords(q: unknown): string[] {
+  return String(q ?? "").normalize("NFKC").replace(/[*,()"\\]/g, " ").replace(/の?ピン$/, "").split(/[\s　]+/).map((w) => w.trim()).filter(Boolean).slice(0, 6);
+}
+
+/** 題で当たったピンを並べる：題がそのまま一致 → 題が言葉で始まる → 新しい順 */
+export function rankPins<T extends { title?: unknown; created_at?: unknown }>(rows: T[], q: string): T[] {
+  const k = String(q ?? "").normalize("NFKC").trim().replace(/の?ピン$/, "").toLowerCase();
+  const score = (r: T) => { const t = String(r.title ?? "").normalize("NFKC").toLowerCase(); return t === k ? 2 : t.startsWith(k) ? 1 : 0; };
+  return [...rows].sort((a, b) => score(b) - score(a) || String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+/** 日本時間の今日の 0 時、今週の月曜 0 時（ISO） */
+export function jstSince(range: "today" | "week", now = Date.now()): string {
+  const j = new Date(now + JST_MS);
+  const day0 = Date.UTC(j.getUTCFullYear(), j.getUTCMonth(), j.getUTCDate()) - JST_MS;
+  if (range === "today") return new Date(day0).toISOString();
+  const dow = (j.getUTCDay() + 6) % 7; // 月曜 0
+  return new Date(day0 - dow * 86400000).toISOString();
 }
