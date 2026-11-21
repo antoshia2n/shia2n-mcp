@@ -133,3 +133,4 @@ alter table public.mk_chats add column if not exists initiative_name text;
 create table if not exists public.mk_settings (key text primary key, value text, updated_at timestamptz not null default now());
 alter table public.mk_settings enable row level security;
 revoke all on public.mk_settings from anon, authenticated;
+-- mk_settings のキー：notebook_doc_id（書き出すドキュメント）・notebook_doc_sig（最後に書いた中身の印）・notebook_doc_at・notebook_doc_error
