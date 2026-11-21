@@ -4,7 +4,7 @@ import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { KNOWN_ROLES, WHERE_VALUES, checkAdd, jstRange, summarize, toJst } from "./ai-log-core.js";
 import { aiOf, areaName, chatName, chatOut, chatUrl, firstState } from "./manager-core.js";
-import { createChat } from "./manager-store.js";
+import { createChat, worksWithChats } from "./manager-store.js";
 
 /**
  * AI の利用ログの道具（2026-10-26 v1.45.0 開発部）。
@@ -62,6 +62,7 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
         // v1.125.0：マネージャーくんの台帳にこのチャットの行を作る（失敗してもログは残っているので ok のまま知らせる）
         const warnings = [...c.warnings];
         let chat: ReturnType<typeof chatOut> | null = null;
+        let openWorks: string[] = [];
         if (!u.ok) warnings.push(`${u.message}（住所は入れずに台帳の行を作りました。manager__update の url で直せます）`);
         try {
           const row = await createChat(env, {
@@ -70,9 +71,16 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
             area: areaName(c.row.role), // v1.128.0：棚はまず役割。拡張がプロジェクト名を読んだらそちらで置き換わる
           });
           chat = chatOut(row);
+          // v1.129.0：同じ分野の開いている作業（このチャットの作業を決めるため）
+          try {
+            const ws = await worksWithChats(env, { area: row.area ?? null });
+            openWorks = ws.slice(0, 15).map((x) => x.work.name);
+          } catch { /* 作業が読めなくても台帳は立っている */ }
         } catch (e) { warnings.push(`マネージャーくんの台帳に行を作れませんでした：${String((e as Error)?.message || e).slice(0, 200)}`); }
         return asMcpTextResult({ ok: true, 時刻: toJst(String(r.at)), role: r.role, where: r.surface, title: r.title,
-          ...(chat ? { チャット: chat, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update、やったことは manager__done に chat=${chat.番号} を渡す。ひとまとまりの作業が終わった区切りごとに manager__done で「○○をした」を 1 行残す` +
+          ...(chat ? { チャット: chat, 開いている作業: openWorks, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update、やったことは manager__done に chat=${chat.番号} を渡す。` +
+            (c.row.surface === "予約タスク" ? "" : `最初の返事を書く前に、このチャットの作業を manager__work の name で決める（開いている作業に同じ作業があればその名前をそのまま、無ければ何の作業か分かる短い名前で）。作業全体が終わったら manager__work の state に「済み」。`) +
+            `ひとまとまりの作業が終わった区切りごとに manager__done で「○○をした」を 1 行残す（PR を出したら manager__work の pr に住所）` +
             (c.row.surface === "予約タスク" ? "" : `。最初の返事の末尾に「（台帳 #${chat.番号}）」と 1 回だけ書く（シアニンパネルがこの字でチャットの住所を結ぶ）`) } : {}),
           ...(warnings.length ? { warnings } : {}) });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }

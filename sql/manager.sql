@@ -159,3 +159,19 @@ language sql stable security invoker set search_path = public as $$
 $$;
 revoke all on function public.mk_last_asks(bigint[]) from public, anon, authenticated;
 grant execute on function public.mk_last_asks(bigint[]) to service_role;
+
+-- v1.129.0（2026-11-22 5便目）：作業（Supabase に入れ済み：manager_kun_works）
+create table if not exists public.mk_works (
+  id bigint generated always as identity primary key,
+  name text not null check (char_length(name) between 1 and 80),
+  area text check (area is null or char_length(area) between 1 and 60),
+  state text not null default '進行中' check (state in ('進行中','済み')),
+  created_at timestamptz not null default now(),
+  touched_at timestamptz not null default now()
+);
+create index if not exists mk_works_state_idx on public.mk_works (state, touched_at desc);
+alter table public.mk_works enable row level security;
+revoke all on public.mk_works from anon, authenticated;
+alter table public.mk_chats add column if not exists work_id bigint references public.mk_works(id) on delete set null;
+create index if not exists mk_chats_work_idx on public.mk_chats (work_id);
+alter table public.mk_done add column if not exists link text check (link is null or (char_length(link) <= 500 and link ~ '^https://'));

@@ -18,14 +18,15 @@
  *   v1.128.0（4便目）：chats に area（分野で絞る）と areas（棚ごとの数）、chat にやったことと最後の頼みごと、
  *   GET /manager/api/activity?range=today|week … 今日・今週やったこと（拡張だけのチャットは最後の頼みごとで代わりに出す）
  *   POST /manager/api/update に area（画面で決めた分野は拡張が上書きしない）
+ *   v1.129.0（5便目）：GET works（作業の木）・GET work?id=（作業の中身）・POST work-update・POST work-merge、update に work（名前）・work_id
  *
  * 守り方は案件くんの受け口（anken-sheet-http.ts）と同じ：Firebase のログインの札を確かめ、Naoki 本人（NAOKI_UID）のときだけ読む・書く。
  * 画面と読み口は同じ住所なので、ほかの住所からの呼び出し（Origin が違うもの）は断る。
  */
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
-import { STATES, areaName, checkCapture, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
-import { ManagerError, applyCapture, areaCounts, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { STATES, areaName, normWorkState, prLinks, workName, workOut, checkCapture, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
+import { ManagerError, applyCapture, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
 import { managerPage } from "./manager-page.js";
@@ -74,7 +75,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (raw && !st) return reply({ ok: false, message: `state は ${STATES.join("・")}・すべて のどれかです` }, 400);
       const ai = (sp.get("ai") || "").trim();
       const [rows, counts, areas] = await Promise.all([
-        listChats(env, { state: st, ai: ai === "claude" || ai === "gpt" ? ai : null, limit: 300, initiative: sp.get("initiative"), area: areaName(sp.get("area")) }),
+        listChats(env, { state: st, ai: ai === "claude" || ai === "gpt" ? ai : null, limit: 300, initiative: sp.get("initiative"), area: areaName(sp.get("area")), work: Number(sp.get("work")) || null }),
         stateCounts(env),
         areaCounts(env),
       ]);
@@ -88,6 +89,34 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const [pins, done, asks] = await Promise.all([pinIndex(env, no), doneOf(env, no), lastAsks(env, [no])]);
       return reply({ ok: true, chat: chatOut(c), pins: pins.map((p) => ({ 番号: Number(p.n), 題: p.title, 作った: jstShort(p.created_at) })),
         done: done.map((d) => ({ やったこと: d.text, 時刻: jstShort(d.at) })), 最後の頼みごと: asks[no] ?? null });
+    }
+    if (request.method === "GET" && op === "works") {
+      const ws = await worksWithChats(env, { all: sp.get("all") === "1" });
+      return reply({ ok: true, works: ws.map((x) => workOut(x.work, x.chats)) });
+    }
+    if (request.method === "GET" && op === "work") {
+      const id = Number(sp.get("id"));
+      const d = await workDetail(env, id);
+      if (!d) return reply({ ok: false, message: `作業 ${id} はありません` }, 404);
+      const name = new Map(d.chats.map((c) => [Number(c.no), String(c.name)]));
+      return reply({ ok: true, work: workOut(d.work, d.chats), chats: d.chats.map(chatOut),
+        done: d.done.map((x) => ({ やったこと: x.text, 住所: x.link ?? null, 時刻: jstShort(x.at), チャット番号: Number(x.chat_no), チャットの名前: name.get(Number(x.chat_no)) ?? "" })),
+        prs: prLinks(d.done).map((p) => ({ ...p, チャットの名前: name.get(p.チャット番号) ?? "" })),
+        pins: d.pins.map((p) => ({ チャット番号: Number(p.chat_no), 番号: Number(p.n), 題: p.title, 作った: jstShort(p.created_at), チャットの名前: name.get(Number(p.chat_no)) ?? "" })) });
+    }
+    if (request.method === "POST" && (op === "work-update" || op === "work-merge")) {
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      if (op === "work-merge") {
+        const w = await mergeWork(env, Number(body.from), Number(body.to));
+        return reply({ ok: true, work: workOut(w) });
+      }
+      const patch: Record<string, unknown> = {};
+      if (body.name !== undefined) { const n = workName(body.name); if (!n) return reply({ ok: false, message: "作業の名前が空です" }, 400); patch.name = n; }
+      if (body.state !== undefined) { const st = normWorkState(body.state); if (!st) return reply({ ok: false, message: "状態は 進行中 か 済み です" }, 400); patch.state = st; }
+      if (body.area !== undefined) patch.area = areaName(body.area);
+      const w = await updateWork(env, Number(body.id), patch);
+      return reply({ ok: true, work: workOut(w) });
     }
     if (request.method === "GET" && op === "activity") {
       const range = sp.get("range") === "week" ? "week" : "today";
@@ -135,6 +164,8 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (!ini.ok) return reply({ ok: false, message: ini.message }, 400);
       const ar = body.area === undefined ? {} : areaName(body.area) ? { area: areaName(body.area), area_src: "手" } : { area: null, area_src: null };
       let after = await updateChat(env, no, { ...c.patch, ...ini.patch, ...ar });
+      if (body.work_id !== undefined) after = await attachWorkId(env, no, body.work_id === null || body.work_id === "" ? null : Number(body.work_id)); // v1.129.0
+      else if (body.work !== undefined) after = (await attachWork(env, after, workName(body.work))).chat;
       const t = await syncDecisionTask(env, after); // v1.127.0：判断待ち ⇄ TaskMaster
       if (t.action !== "none") after = { ...after, tm_task_id: t.action === "added" ? t.task_id : null };
       return reply({ ok: true, chat: chatOut(after), ...(t.error ? { warning: `TaskMaster：${t.error}` } : {}) });

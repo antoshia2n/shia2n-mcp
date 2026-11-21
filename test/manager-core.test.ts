@@ -197,3 +197,42 @@ test("jstSince：日本時間の今日 0 時・今週の月曜 0 時", () => {
   const mon = Date.parse("2026-11-15T16:00:00Z"); // 日本時間 11/16（月）1:00
   assert.equal(jstSince("week", mon), "2026-11-15T15:00:00.000Z");
 });
+
+/* v1.129.0（5便目） */
+import { linkUrl, normWorkState, prLinks, workKey, workName, workOut, workShownState } from "../src/manager-core.ts";
+
+test("workName・workKey：同じ作業の形", () => {
+  assert.equal(workName("  マネージャーくん  5便目 "), "マネージャーくん 5便目");
+  assert.equal(workName(""), null);
+  assert.equal(workKey("マネージャーくん 5便目"), workKey("ﾏﾈｰｼﾞｬｰくん５便目"));
+  assert.equal(workKey("るーみん「LP」直し"), workKey("るーみんLP直し"));
+  assert.notEqual(workKey("るーみん LP"), workKey("るーみん YouTube"));
+});
+
+test("normWorkState・linkUrl", () => {
+  assert.equal(normWorkState("完了"), "済み");
+  assert.equal(normWorkState("再開"), "進行中");
+  assert.equal(normWorkState("あとで"), null);
+  assert.deepEqual(linkUrl(""), { ok: true, url: null });
+  assert.equal(linkUrl("http://x").ok, false);
+  assert.deepEqual(linkUrl("https://github.com/a/b/pull/1"), { ok: true, url: "https://github.com/a/b/pull/1" });
+});
+
+test("workShownState・workOut：中に判断待ちがあれば判断待ち", () => {
+  const w = { id: 3, name: "作業", area: "開発部", state: "進行中", touched_at: "2026-11-22T00:00:00Z" };
+  assert.equal(workShownState(w, [{ state: "進行中" }]), "進行中");
+  assert.equal(workShownState(w, [{ state: "進行中" }, { state: "判断待ち" }]), "判断待ち");
+  assert.equal(workShownState({ ...w, state: "済み" }, [{ state: "判断待ち" }]), "済み");
+  const o = workOut(w, [{ state: "判断待ち", touched_at: "2026-11-22T01:00:00Z" }]);
+  assert.equal(o.チャットの数, 1); assert.equal(o.判断待ち, 1); assert.equal(o.最後に触った, "2026-11-22 10:00");
+});
+
+test("prLinks：PR の住所だけを 1 つずつ", () => {
+  const d = [
+    { link: "https://github.com/a/b/pull/2", at: "2026-11-22T01:00:00Z", chat_no: 5 },
+    { link: "https://github.com/a/b/pull/2", at: "2026-11-22T00:00:00Z", chat_no: 5 },
+    { link: "https://example.com", at: "2026-11-22T00:00:00Z", chat_no: 5 },
+    { link: null, at: "2026-11-22T00:00:00Z", chat_no: 5 },
+  ];
+  assert.equal(prLinks(d).length, 1);
+});
