@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.130.0"; // 2026-11-22 ブレインくん 便B（brain__read・brain__search・brain__tidy）
+export const APP_VERSION = "1.130.1"; // 2026-11-22 マネージャーくん 細い画面の直し（作業を最初に出す・詰まりをほどく）
