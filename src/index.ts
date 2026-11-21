@@ -549,6 +549,7 @@
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
+ * v1.130.0（2026-11-22 開発部・ブレインくん 便B・Naoki OK 08:25）：ブレインくん（brain.shia2n.jp）の道具 3 本を足した。brain__read（ノート 1 件・種類・用途・本文・リンク・つながっているもの・意味のつながり）・brain__search（メモ・キーワード・パターン・アイデア・ネタの横断検索・種類で絞る）・brain__tidy（キーワード・パターンの重複と表記ゆれの候補）。どれも読むだけで、読むのは MCP_DEFAULT_USER_ID の行だけ。抜き出し・組み合わせの提案・評価はしない（Naoki の決め 11/21）。中身は src/brain-core.ts・src/tools-brain.ts、試験は test/brain-core.test.ts。新しい鍵は 0 個。
  * v1.129.0（2026-11-22 開発部・マネージャーくん 5便目・Naoki OK 08:10）：作業（分野 ＞ 作業 ＞ チャット）。表 mk_works（名前・分野・状態 進行中／済み）と mk_chats.work_id、mk_done.link。新しい道具 manager__work（チャットを作業に入れる＝同じ分野の開いている作業から同じ名前を探し無ければ作る・済みにする・PR を残す）。ai_log__add は同じ分野の開いている作業を返し、最初の返事の前に作業を決めるよう 次に で伝える。manager__update に work・work_state、manager__done に link。画面は左の棚を 分野 ＞ 作業 の木にし、作業の画面（チャット・PR・やったこと・ピン・済み・名前・まとめる）。シアニンパネルの中では、作業のチャットをタブのまとまりで開く・たたむ・閉じる。前からある道具に足した欄がつないだままのチャットに見えないことがあったので、作業は新しい道具 1 本でも扱える。新しい鍵は 0 個。
  * v1.128.1（2026-11-22 開発部・マネージャーくん 4便目の直し）：manager__get_pin の q が見えていないチャット（古い形の道具を持つもの）が chat に題の言葉を入れたとき、その名前のチャットが無ければピンの題から探す。src/tools-manager.ts のみ。
  * v1.128.0（2026-11-22 開発部・マネージャーくん 4便目・Naoki OK 07:15）：分野の棚・やったこと・題名でピン。mk_chats に area（分野）と area_src（拡張・チャット・手）、表 mk_done（やったことの 1 行）と関数 mk_last_asks。シアニンパネルが Claude・ChatGPT のプロジェクト名を送り、それを棚にする（画面と道具で決めた分野は上書きしない・ai_log__add はまず役割を入れる）。道具 manager__done（区切りごとに「○○をした」）、manager__get_pin に q（ピンの題の言葉で呼ぶ・候補つき）、manager__update と manager__list に area。画面は左に分野の棚、チャットにやったことの時系列、「今日・今週やったこと」（拡張だけのチャットは最後の頼みごとで代わりに）、ピンは題で見せる（番号は出さない）。新しい鍵は 0 個。
@@ -730,6 +731,7 @@ import { registerAnkenTools } from "./tools-anken.js";
 import { registerXbunsekiTools } from "./tools-xbunseki.js";
 import { registerAiLogTools } from "./tools-ai-log.js";
 import { registerManagerTools } from "./tools-manager.js";
+import { registerBrainTools } from "./tools-brain.js";
 import { handleManager, MANAGER_PATH } from "./manager-http.js";
 import { exportNotebook, syncAllDecisionTasks } from "./manager-links.js";
 import { registerSkillsTools } from "./tools-skills.js";
@@ -916,6 +918,7 @@ function createMcpServer(env: Env): McpServer {
   registerXbunsekiTools(server, env);
   registerAiLogTools(server, env);
   registerManagerTools(server, env); // v1.125.0：マネージャーくん（チャットの台帳とピン）
+  registerBrainTools(server, env); // v1.130.0：ブレインくん（読む・探す・整える候補。読むだけ）
   registerSkillsTools(server, env); // v1.101.0：スキルの正本を確かめる口
   registerMcpAuthTools(server, env);
   return server;
