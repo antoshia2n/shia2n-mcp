@@ -9,14 +9,20 @@
  *   GET  /manager/api/pin?chat=&n=    … ピンの全文
  *   GET  /manager/api/search?q=       … 題・何をしているか・ピンの全文から探す
  *   POST /manager/api/update          … { no, state?, doing?, name?, url? }
+ *   GET  /manager/api/transcript?no=  … 自動で読んだ全文（v1.126.0）
+ *   POST /manager/api/ext-key         … 拡張の鍵を 1 本出す（前の鍵は止める・鍵はこの 1 回しか返さない）（v1.126.0）
+ *   POST /manager/api/ext-revoke      … 拡張の鍵を全部止める（v1.126.0）
+ *   GET  /manager/api/ext-status      … 鍵がつながっているか・最後に使った時刻（v1.126.0）
+ *   POST /manager/ext/capture         … シアニンパネルが読んだチャットの全文を受ける。拡張の鍵（書くだけ）で通す（v1.126.0）
+ *   manager.shia2n.jp の / は /manager と同じ画面（v1.126.0）
  *
  * 守り方は案件くんの受け口（anken-sheet-http.ts）と同じ：Firebase のログインの札を確かめ、Naoki 本人（NAOKI_UID）のときだけ読む・書く。
  * 画面と読み口は同じ住所なので、ほかの住所からの呼び出し（Origin が違うもの）は断る。
  */
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
-import { STATES, checkUpdate, chatOut, jstShort, normState, pinOut } from "./manager-core.js";
-import { ManagerError, chatByNo, listChats, pinFull, pinIndex, search, stateCounts, updateChat } from "./manager-store.js";
+import { STATES, checkCapture, checkUpdate, chatOut, jstShort, keyHash, newKey, normState, pinOut } from "./manager-core.js";
+import { ManagerError, applyCapture, chatByNo, issueKey, keyStatus, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
 import { managerPage } from "./manager-page.js";
 
@@ -105,6 +111,26 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const after = await updateChat(env, no, c.patch);
       return reply({ ok: true, chat: chatOut(after) });
     }
+    if (request.method === "GET" && op === "transcript") {
+      const no = Number(sp.get("no"));
+      if (!Number.isInteger(no) || no <= 0) return reply({ ok: false, message: "チャット番号が分かりません" }, 400);
+      const t = await transcriptOf(env, no);
+      if (!t) return reply({ ok: false, message: `チャット ${no} はありません` }, 404);
+      return reply({ ok: true, 全文: t.transcript, 読んだ: t.transcript_at ? jstShort(t.transcript_at) : null, 往復: t.turns });
+    }
+    if (request.method === "POST" && op === "ext-key") {
+      const key = newKey();
+      await issueKey(env, await keyHash(key));
+      return reply({ ok: true, key });
+    }
+    if (request.method === "POST" && op === "ext-revoke") {
+      await revokeKeys(env);
+      return reply({ ok: true });
+    }
+    if (request.method === "GET" && op === "ext-status") {
+      const st = await keyStatus(env);
+      return reply({ ok: true, つないでいる: st.connected, つないだ: st.created_at ? jstShort(st.created_at) : null, 最後に受けた: st.last_used_at ? jstShort(st.last_used_at) : null });
+    }
     return reply({ ok: false, error: "not_found" }, 404);
   } catch (e) {
     if (e instanceof ManagerError) return reply({ ok: false, error: e.code, message: e.message }, e.code === "chat_not_found" ? 404 : 502);
@@ -112,15 +138,40 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
   }
 }
 
+/** シアニンパネルから全文を受ける（拡張の鍵で通す・書くだけ） */
+async function capture(request: Request, env: Env): Promise<Response> {
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Max-Age": "86400" } });
+  const cors = { ...API_HEADERS, "Access-Control-Allow-Origin": "*" };
+  const out = (body: unknown, status = 200) => Response.json(body, { status, headers: cors });
+  if (request.method !== "POST") return out({ ok: false, error: "method_not_allowed" }, 405);
+  const auth = request.headers.get("Authorization") || "";
+  if (!/^Bearer mk_[A-Za-z0-9_-]{30,}$/.test(auth)) return out({ ok: false, error: "missing_key", message: "拡張の鍵がありません。マネージャーくんの画面で「この拡張をつなぐ」を押してください" }, 401);
+  try {
+    if (!(await useKey(env, await keyHash(auth.slice(7))))) return out({ ok: false, error: "key_revoked", message: "この鍵は止まっています。マネージャーくんの画面でつなぎ直してください" }, 401);
+    const len = Number(request.headers.get("Content-Length") || 0);
+    if (len > 8_000_000) return out({ ok: false, error: "too_large", message: "全文が大きすぎます" }, 413);
+    let body: Record<string, unknown>;
+    try { body = await request.json() as Record<string, unknown>; } catch { return out({ ok: false, error: "bad_json" }, 400); }
+    const c = checkCapture(body);
+    if (!c.ok) return out({ ok: false, error: "invalid", message: c.message }, 400);
+    const r = await applyCapture(env, c);
+    return out({ ok: true, 番号: r.no, 結び方: r.how, 名前: r.name, 往復: c.turns });
+  } catch (e) {
+    return out({ ok: false, error: "failed", message: String((e as Error)?.message || e).slice(0, 300) }, 502);
+  }
+}
+
 export async function handleManager(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
+  if (path === `${MANAGER_PATH}/ext/capture`) return capture(request, env);
   if (path.startsWith(`${MANAGER_PATH}/api/`)) return api(request, env, url);
   if (request.method !== "GET" && request.method !== "HEAD") return new Response("method not allowed", { status: 405 });
   if (path === MANAGER_PATH || path === `${MANAGER_PATH}/`) {
     return new Response(managerPage(), { headers: {
       "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store",
-      "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'", "Referrer-Policy": "same-origin",
+      // v1.126.0：シアニンパネル（拡張機能のサイドパネル）の中にだけ入れられる。ほかのサイトの枠には入らない
+      "Content-Security-Policy": "frame-ancestors 'self' chrome-extension:", "Referrer-Policy": "same-origin",
     } });
   }
   return asset(path) ?? new Response("not found", { status: 404 });

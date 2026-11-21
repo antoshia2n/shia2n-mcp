@@ -91,3 +91,49 @@ test("返す形：日本時間・ピンの参照は 12#3", () => {
   assert.equal(p.ピン, "12#3"); assert.equal(p.全文, "本文"); assert.equal(p.字数, 2); assert.equal(p.チャットの住所, "https://x");
   assert.equal("全文" in pinOut({ chat_no: 1, n: 1, title: "t", body: "b" }), false);
 });
+
+// v1.126.0：シアニンパネルから受ける
+import { chatPageOf, checkCapture, keyHash, markerNo, newKey, transcriptOf } from "../src/manager-core.js";
+
+test("チャットの住所：Claude と ChatGPT（GPTs・プロジェクトも）だけ。Claude Code・トップ・ほかは受けない", () => {
+  assert.deepEqual(chatPageOf("https://claude.ai/chat/0b1c2d3e-aaaa-bbbb-cccc-1234567890ab?x=1#y"), { url: "https://claude.ai/chat/0b1c2d3e-aaaa-bbbb-cccc-1234567890ab", service: "claude" });
+  assert.deepEqual(chatPageOf("https://chatgpt.com/c/6740aa11-2222-3333-4444-555566667777"), { url: "https://chatgpt.com/c/6740aa11-2222-3333-4444-555566667777", service: "chatgpt" });
+  assert.deepEqual(chatPageOf("https://chatgpt.com/g/g-p-abc123/c/6740aa11-2222"), { url: "https://chatgpt.com/g/g-p-abc123/c/6740aa11-2222", service: "chatgpt" });
+  assert.deepEqual(chatPageOf("https://chat.openai.com/c/6740aa11-2222")?.url, "https://chatgpt.com/c/6740aa11-2222");
+  assert.equal(chatPageOf("https://claude.ai/code/session_01Hnm"), null);
+  assert.equal(chatPageOf("https://claude.ai/new"), null);
+  assert.equal(chatPageOf("https://chatgpt.com/"), null);
+  assert.equal(chatPageOf("http://claude.ai/chat/0b1c2d3e-aaaa"), null);
+  assert.equal(chatPageOf("https://evil.example/chat/0b1c2d3e-aaaa"), null);
+  assert.equal(chatPageOf("not a url"), null);
+});
+
+test("台帳の印：最初の「台帳 #N」を取る（全角も）", () => {
+  assert.equal(markerNo("はい。（台帳 #12）\nほかに 台帳 #3"), 12);
+  assert.equal(markerNo("（台帳＃１５）"), 15);
+  assert.equal(markerNo("台帳#0"), null);
+  assert.equal(markerNo("帳簿 #12"), null);
+});
+
+test("受ける 1 件：往復を 1 枚にし、題が無ければ最初の発言から", () => {
+  const ok = checkCapture({ url: "https://claude.ai/chat/0b1c2d3e-aaaa-bbbb", title: "設計の相談 - Claude", turns: [{ user: "こんにちは", reply: "はい（台帳 #4）" }, { user: "", reply: "" }] });
+  assert.ok(ok.ok);
+  if (ok.ok) {
+    assert.equal(ok.title, "設計の相談"); assert.equal(ok.turns, 1); assert.equal(ok.service, "claude");
+    assert.equal(ok.transcript, "## Naoki\nこんにちは\n\n## Claude\nはい（台帳 #4）");
+  }
+  const nt = checkCapture({ url: "https://chatgpt.com/c/6740aa11-2222", title: "  ", turns: [{ user: "note の題を  考えて", reply: "案です" }] });
+  assert.ok(nt.ok && nt.title === "note の題を 考えて");
+  assert.equal(checkCapture({ url: "https://chatgpt.com/c/6740aa11-2222", turns: [] }).ok, false);
+  assert.equal(checkCapture({ url: "https://example.com", turns: [{ user: "a", reply: "b" }] }).ok, false);
+  assert.equal(transcriptOf([{ user: "q", reply: "a" }], "chatgpt"), "## Naoki\nq\n\n## ChatGPT\na");
+});
+
+test("鍵：mk_ で始まる乱数・sha256 は 64 字で毎回同じ", async () => {
+  const k = newKey();
+  assert.match(k, /^mk_[A-Za-z0-9_-]{40,}$/);
+  assert.notEqual(k, newKey());
+  const h = await keyHash(k);
+  assert.equal(h.length, 64);
+  assert.equal(h, await keyHash(k));
+});
