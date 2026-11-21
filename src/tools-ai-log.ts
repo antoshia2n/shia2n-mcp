@@ -72,7 +72,7 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
         } catch (e) { warnings.push(`マネージャーくんの台帳に行を作れませんでした：${String((e as Error)?.message || e).slice(0, 200)}`); }
         return asMcpTextResult({ ok: true, 時刻: toJst(String(r.at)), role: r.role, where: r.surface, title: r.title,
           ...(chat ? { チャット: chat, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update に chat=${chat.番号} を渡す` +
-            (chat.住所 || c.row.surface === "予約タスク" ? "" : `。最初の返事の末尾に「（台帳 #${chat.番号}）」と 1 回だけ書く（シアニンパネルがこの字でチャットの住所を結ぶ）`) } : {}),
+            (c.row.surface === "予約タスク" ? "" : `。最初の返事の末尾に「（台帳 #${chat.番号}）」と 1 回だけ書く（シアニンパネルがこの字でチャットの住所を結ぶ）`) } : {}),
           ...(warnings.length ? { warnings } : {}) });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
