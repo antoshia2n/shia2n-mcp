@@ -52,7 +52,7 @@ export interface AuthEnv {
 }
 
 /** 画面で使う Firebase の公開の設定（ポータル・学ぶくん・haAku と同じログイン） */
-const FIREBASE_WEB = {
+export const FIREBASE_WEB = {
   apiKey: "AIzaSyDKj5rhN6wg0k0OhCmY8J1r_8_2WfeBfYA",
   authDomain: "gen-lang-client-0371348401.firebaseapp.com",
   projectId: "gen-lang-client-0371348401",
