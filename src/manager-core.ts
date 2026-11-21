@@ -207,15 +207,38 @@ export function markerNo(text: unknown): number | null {
   return n > 0 ? n : null;
 }
 
-export type Turn = { user: string; reply: string };
+export type Turn = { user: string; reply: string; k?: string };
 /** 往復を 1 枚の文にする（## Naoki ／ ## Claude か ChatGPT） */
 export function transcriptOf(turns: Turn[], service: "claude" | "chatgpt"): string {
   const ai = service === "chatgpt" ? "ChatGPT" : "Claude";
   return turns.map((t) => `## Naoki\n${String(t.user ?? "").trim()}\n\n## ${ai}\n${String(t.reply ?? "").trim()}`).join("\n\n").trim();
 }
 
+/**
+ * 往復を番号（k）で足し合わせる（v1.126.2）。ChatGPT は画面に出ている往復しか描かないので、
+ * 前に受けた分（old）に、今回読めた分（cur）を重ねる。同じ番号は今回の中身で置き換え（返事が伸びた分を取る）、
+ * 新しい番号は今回の並びで直前にある番号のすぐ後ろへ（無ければ直後にある番号の前・どちらも無ければ末尾）。
+ * 今回の分に番号が 1 つも無ければ（Claude はいつも全部を描く）、今回の分で丸ごと置き換える。
+ */
+export function mergeTurns(old: Turn[] | null | undefined, cur: Turn[]): Turn[] {
+  if (!cur.some((t) => t.k) || !old || !old.length) return cur;
+  const out: Turn[] = old.filter((t) => t.k).map((t) => ({ ...t }));
+  const at = (k: string) => out.findIndex((t) => t.k === k);
+  cur.forEach((t, i) => {
+    if (!t.k) return;
+    const j = at(t.k);
+    if (j >= 0) { out[j] = { ...t }; return; }
+    let pos = -1;
+    for (let p = i - 1; p >= 0 && pos < 0; p--) { const q = cur[p].k ? at(cur[p].k as string) : -1; if (q >= 0) pos = q + 1; }
+    if (pos < 0) for (let n = i + 1; n < cur.length && pos < 0; n++) { const q = cur[n].k ? at(cur[n].k as string) : -1; if (q >= 0) pos = q; }
+    if (pos < 0) pos = out.length;
+    out.splice(pos, 0, { ...t });
+  });
+  return out;
+}
+
 export type CaptureCheck =
-  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number }
+  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number; list: Turn[] }
   | { ok: false; message: string };
 /** 拡張から来た 1 件を確かめる。題は 120 字まで（無ければ最初の発言から）、全文は 2,000,000 字まで */
 export function checkCapture(body: Record<string, unknown>): CaptureCheck {
@@ -223,14 +246,14 @@ export function checkCapture(body: Record<string, unknown>): CaptureCheck {
   if (!page) return { ok: false, message: "Claude か ChatGPT のチャットの住所ではありません" };
   const raw = Array.isArray(body.turns) ? body.turns : [];
   const turns: Turn[] = raw
-    .map((t: any) => ({ user: String(t?.user ?? ""), reply: String(t?.reply ?? "") }))
+    .map((t: any) => ({ user: String(t?.user ?? ""), reply: String(t?.reply ?? ""), ...(t?.k ? { k: String(t.k).slice(0, 100) } : {}) }))
     .filter((t) => t.user.trim() || t.reply.trim());
   if (!turns.length) return { ok: false, message: "往復が 1 つもありません" };
   const transcript = transcriptOf(turns, page.service);
   if (transcript.length > 2000000) return { ok: false, message: "全文が 2,000,000 字を超えています" };
   const fallback = turns[0].user.trim().replace(/\s+/g, " ").slice(0, 60) || "名前のないチャット";
   const title = chatName(String(body.title ?? "").replace(/\s*[-|｜]\s*(ChatGPT|Claude)\s*$/, "")) || fallback;
-  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length };
+  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length, list: turns };
 }
 
 /** 鍵の文字列 → sha256（16 進）。鍵そのものは台帳に置かない */

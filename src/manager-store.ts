@@ -6,7 +6,7 @@
  * 表と関数を作る SQL は sql/manager.sql（ブラウザからは読めない・管理者キーだけ）。
  */
 import type { Env } from "./index.js";
-import { chatPageOf, markerNo, parseChatRef, pickChats, type CaptureCheck } from "./manager-core.js";
+import { chatPageOf, markerNo, mergeTurns, parseChatRef, pickChats, transcriptOf as joinTurns, type CaptureCheck, type Turn } from "./manager-core.js";
 
 type Row = Record<string, any>;
 type SbEnv = Pick<Env, "SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY">;
@@ -161,10 +161,16 @@ export const PANEL_SURFACE = "シアニンパネル"; // 拡張が作った行�
  */
 export async function applyCapture(env: SbEnv, cap: Extract<CaptureCheck, { ok: true }>): Promise<{ no: number; how: "url" | "marker" | "new"; name: string }> {
   const now = new Date().toISOString();
-  const body = { transcript: cap.transcript, transcript_at: now, turns: cap.turns, service: cap.service, touched_at: now };
+  const body = { transcript: cap.transcript, transcript_at: now, turns: cap.turns, service: cap.service, touched_at: now, turns_json: cap.list };
   const hit = await chatByUrl(env, cap.url);
   if (hit) {
     const patch: Record<string, unknown> = { ...body };
+    // v1.126.2：往復の番号があれば、前に受けた分と足し合わせる（画面に出ていない往復を消さない）
+    if (cap.list.some((t) => t.k)) {
+      const prev = await sb(env, `mk_chats?select=turns_json&no=eq.${hit.no}`);
+      const merged = mergeTurns((prev?.[0]?.turns_json as Turn[] | null) ?? null, cap.list);
+      Object.assign(patch, { turns_json: merged, turns: merged.length, transcript: joinTurns(merged, cap.service) });
+    }
     if (hit.surface === PANEL_SURFACE && hit.name !== cap.title) patch.name = cap.title; // 拡張が作った行だけ、題の変化に合わせる
     const r = await updateChat(env, Number(hit.no), patch);
     return { no: Number(r.no), how: "url", name: String(r.name) };

@@ -137,3 +137,18 @@ test("鍵：mk_ で始まる乱数・sha256 は 64 字で毎回同じ", async ()
   assert.equal(h.length, 64);
   assert.equal(h, await keyHash(k));
 });
+
+// v1.126.2：往復を番号で足し合わせる
+import { mergeTurns } from "../src/manager-core.js";
+test("足し合わせ：同じ番号は置き換え・新しい番号は並びの位置へ・番号が無ければ丸ごと置き換え", () => {
+  const t = (k: string, r = k) => ({ k, user: "u" + k, reply: r });
+  // 長いチャットを開き直して後ろの 2 往復しか描かれていない → 前の分は残る、伸びた返事は取る、新しい往復は末尾へ
+  assert.deepEqual(mergeTurns([t("a"), t("b"), t("c")], [t("c", "c2"), t("d")]).map((x) => x.k + x.reply), ["aa", "bb", "cc2", "dd"]);
+  // 上へ戻って前の往復が見えた（間に新しい番号）→ 直前の番号の後ろへ
+  assert.deepEqual(mergeTurns([t("a"), t("c")], [t("a"), t("b")]).map((x) => x.k), ["a", "b", "c"]);
+  // 直前に知っている番号が無い → 直後にある番号の前へ
+  assert.deepEqual(mergeTurns([t("c"), t("d")], [t("b"), t("c")]).map((x) => x.k), ["b", "c", "d"]);
+  // 前が無い・今回に番号が無い（Claude）→ 今回の分のまま
+  assert.deepEqual(mergeTurns(null, [t("a")]).map((x) => x.k), ["a"]);
+  assert.deepEqual(mergeTurns([t("a"), t("b")], [{ user: "x", reply: "y" }]), [{ user: "x", reply: "y" }]);
+});

@@ -123,3 +123,5 @@ alter table public.mk_ext_keys enable row level security;
 revoke all on public.mk_ext_keys from anon, authenticated;
 -- mk_search は上の定義に、チャットの全文（transcript）も探す形を重ねた（定義の全文は Supabase の migration を正とする）
 -- v1.126.1：表は変えていない（結び方の直しは src/manager-store.ts の applyCapture）
+-- v1.126.2（Supabase に入れ済み・migration manager_kun_turns_json）：往復を番号で足し合わせるための列
+alter table public.mk_chats add column if not exists turns_json jsonb;
