@@ -122,3 +122,4 @@ create table if not exists public.mk_ext_keys (
 alter table public.mk_ext_keys enable row level security;
 revoke all on public.mk_ext_keys from anon, authenticated;
 -- mk_search は上の定義に、チャットの全文（transcript）も探す形を重ねた（定義の全文は Supabase の migration を正とする）
+-- v1.126.1：表は変えていない（結び方の直しは src/manager-store.ts の applyCapture）
