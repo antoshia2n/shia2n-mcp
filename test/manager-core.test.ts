@@ -152,3 +152,48 @@ test("足し合わせ：同じ番号は置き換え・新しい番号は並び�
   assert.deepEqual(mergeTurns(null, [t("a")]).map((x) => x.k), ["a"]);
   assert.deepEqual(mergeTurns([t("a"), t("b")], [{ user: "x", reply: "y" }]), [{ user: "x", reply: "y" }]);
 });
+
+/* v1.128.0（4便目） */
+import { areaName, checkDone, extMayWriteArea, jstSince, rankPins, titleWords } from "../src/manager-core.ts";
+
+test("areaName：空白をつめて 60 字まで・空は null", () => {
+  assert.equal(areaName("  開発部 "), "開発部");
+  assert.equal(areaName(""), null);
+  assert.equal(areaName(null), null);
+  assert.equal(areaName("あ".repeat(80))!.length, 60);
+});
+
+test("extMayWriteArea：手とチャットで決めた分野は上書きしない", () => {
+  assert.equal(extMayWriteArea({ area: null, area_src: null }, "開発部"), true);
+  assert.equal(extMayWriteArea({ area: "開発部", area_src: null }, "経営"), true); // 役割から入れた分は置き換える
+  assert.equal(extMayWriteArea({ area: "開発部", area_src: "拡張" }, "開発部"), false); // 同じなら書かない
+  assert.equal(extMayWriteArea({ area: "統括", area_src: "手" }, "開発部"), false);
+  assert.equal(extMayWriteArea({ area: "統括", area_src: "チャット" }, "開発部"), false);
+  assert.equal(extMayWriteArea({ area: null, area_src: null }, null), false);
+});
+
+test("checkDone：1〜200 字", () => {
+  assert.deepEqual(checkDone("  本番に  出した "), { ok: true, text: "本番に 出した" });
+  assert.equal(checkDone("").ok, false);
+  assert.equal(checkDone("あ".repeat(201)).ok, false);
+});
+
+test("titleWords・rankPins：「○○のピン」を題の言葉に", () => {
+  assert.deepEqual(titleWords("配信まとめのピン"), ["配信まとめ"]);
+  assert.deepEqual(titleWords("配信 まとめ"), ["配信", "まとめ"]);
+  assert.deepEqual(titleWords("a*(b),c"), ["a", "b", "c"]);
+  const rows = [
+    { title: "配信まとめ（下書き）", created_at: "2026-11-22T01:00:00Z" },
+    { title: "配信まとめ", created_at: "2026-11-20T01:00:00Z" },
+    { title: "古い配信まとめ", created_at: "2026-11-23T01:00:00Z" },
+  ];
+  assert.deepEqual(rankPins(rows, "配信まとめ").map((r) => r.title), ["配信まとめ", "配信まとめ（下書き）", "古い配信まとめ"]);
+});
+
+test("jstSince：日本時間の今日 0 時・今週の月曜 0 時", () => {
+  const now = Date.parse("2026-11-22T00:30:00Z"); // 日本時間 11/22（日）9:30
+  assert.equal(jstSince("today", now), "2026-11-21T15:00:00.000Z");
+  assert.equal(jstSince("week", now), "2026-11-15T15:00:00.000Z"); // 11/16（月）0 時
+  const mon = Date.parse("2026-11-15T16:00:00Z"); // 日本時間 11/16（月）1:00
+  assert.equal(jstSince("week", mon), "2026-11-15T15:00:00.000Z");
+});

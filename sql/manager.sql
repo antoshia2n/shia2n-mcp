@@ -134,3 +134,28 @@ create table if not exists public.mk_settings (key text primary key, value text,
 alter table public.mk_settings enable row level security;
 revoke all on public.mk_settings from anon, authenticated;
 -- mk_settings のキー：notebook_doc_id（書き出すドキュメント）・notebook_doc_sig（最後に書いた中身の印）・notebook_doc_at・notebook_doc_error
+
+-- v1.128.0（2026-11-22 4便目）：分野の棚・やったこと（Supabase に入れ済み：manager_kun_areas_done・manager_kun_last_asks）
+alter table public.mk_chats
+  add column if not exists area text check (area is null or char_length(area) between 1 and 60),
+  add column if not exists area_src text check (area_src is null or area_src in ('拡張','チャット','手'));
+create index if not exists mk_chats_area_idx on public.mk_chats (area);
+create table if not exists public.mk_done (
+  id bigint generated always as identity primary key,
+  chat_no bigint not null references public.mk_chats(no) on delete cascade,
+  text text not null check (char_length(text) between 1 and 200),
+  at timestamptz not null default now()
+);
+create index if not exists mk_done_at_idx on public.mk_done (at desc);
+create index if not exists mk_done_chat_idx on public.mk_done (chat_no, at desc);
+alter table public.mk_done enable row level security;
+revoke all on public.mk_done from anon, authenticated;
+create or replace function public.mk_last_asks(p_nos bigint[])
+returns table(no bigint, ask text)
+language sql stable security invoker set search_path = public as $$
+  select c.no, left(nullif(btrim(c.turns_json -> -1 ->> 'user'), ''), 200)
+    from public.mk_chats c
+   where c.no = any(p_nos) and jsonb_typeof(c.turns_json) = 'array' and jsonb_array_length(c.turns_json) > 0
+$$;
+revoke all on function public.mk_last_asks(bigint[]) from public, anon, authenticated;
+grant execute on function public.mk_last_asks(bigint[]) to service_role;

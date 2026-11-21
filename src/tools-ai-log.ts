@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { KNOWN_ROLES, WHERE_VALUES, checkAdd, jstRange, summarize, toJst } from "./ai-log-core.js";
-import { aiOf, chatName, chatOut, chatUrl, firstState } from "./manager-core.js";
+import { aiOf, areaName, chatName, chatOut, chatUrl, firstState } from "./manager-core.js";
 import { createChat } from "./manager-store.js";
 
 /**
@@ -67,11 +67,12 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
           const row = await createChat(env, {
             name: chatName(c.row.title), ai: aiOf(c.row.surface), state: firstState(c.row.surface),
             url: u.ok ? u.url : null, role: c.row.role, surface: c.row.surface, ai_log_id: r.id ?? null,
+            area: areaName(c.row.role), // v1.128.0：棚はまず役割。拡張がプロジェクト名を読んだらそちらで置き換わる
           });
           chat = chatOut(row);
         } catch (e) { warnings.push(`マネージャーくんの台帳に行を作れませんでした：${String((e as Error)?.message || e).slice(0, 200)}`); }
         return asMcpTextResult({ ok: true, 時刻: toJst(String(r.at)), role: r.role, where: r.surface, title: r.title,
-          ...(chat ? { チャット: chat, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update に chat=${chat.番号} を渡す` +
+          ...(chat ? { チャット: chat, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update、やったことは manager__done に chat=${chat.番号} を渡す。ひとまとまりの作業が終わった区切りごとに manager__done で「○○をした」を 1 行残す` +
             (c.row.surface === "予約タスク" ? "" : `。最初の返事の末尾に「（台帳 #${chat.番号}）」と 1 回だけ書く（シアニンパネルがこの字でチャットの住所を結ぶ）`) } : {}),
           ...(warnings.length ? { warnings } : {}) });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
