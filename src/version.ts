@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.123.0"; // 2026-11-21 put_images にドライブの番号と本文の印の位置
+export const APP_VERSION = "1.124.0"; // 2026-11-21 put_images が画像でないものを置かない・ドライブの住所も番号で読む
