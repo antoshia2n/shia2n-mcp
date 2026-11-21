@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import { callContentOsInternalApi } from "./tools-content-os.js";
+import { getGoogleTokenForScope } from "./google-token.js";
 import type { Env } from "./index.js";
 
 /**
@@ -132,12 +133,17 @@ async function copyToDrive(env: Env, id: string): Promise<unknown> {
 // 起きたこと：put_result の images（base64）では、GPT が 1600px の図解 4 枚を運べず、画像だけ書き戻せなかった（依頼 0e9b6b54・12:28）。
 // ChatGPT は道具の入力に _meta["openai/fileParams"] を付けると、会話の中のファイルを { download_url, file_id } で渡してくる。
 // こちらで download_url から読み、put-result へ base64 で渡す（サーバー同士なので大きさで詰まらない）。そのあとドライブへも写す。
+// v1.123.0（2026-11-21 開発部）：1 枚ごとに drive_file_id（Google ドライブのファイルの番号）と at（本文の印の文字）を足した。
+// download_url と drive_file_id のどちらか 1 つを渡す。at は投稿（post_id）のときだけ使える。
 const OpenAIFile = z.object({
-  download_url: z.string().describe("ファイルの一時的な住所（ChatGPT が入れる）"),
-  file_id: z.string().describe("ファイルの番号（ChatGPT が入れる）"),
+  download_url: z.string().optional().describe("ファイルの一時的な住所（ChatGPT が入れる）。drive_file_id を渡すときは省く"),
+  file_id: z.string().optional().describe("ファイルの番号（ChatGPT が入れる）"),
+  drive_file_id: z.string().optional().describe("Google ドライブのファイルの番号（https://drive.google.com/file/d/<この部分>/view）。download_url の代わりに渡すと、Naoki のドライブから直接読む"),
+  at: z.string().max(200).optional().describe("投稿の本文の印の文字（例：「21.27.41」「うし部長さんの記事の引用」）。この文字を含む段落がちょうど 1 つあれば、末尾ではなくその段落のすぐ後ろへ入れる。同じ印に何枚か渡すと、渡した順に並ぶ"),
   mime_type: z.string().optional(),
   file_name: z.string().optional(),
 });
+type InFile = { download_url?: string; file_id?: string; drive_file_id?: string; at?: string; mime_type?: string; file_name?: string };
 function toB64(buf: ArrayBuffer): string {
   const u8 = new Uint8Array(buf);
   let bin = "";
@@ -149,15 +155,51 @@ function toB64(buf: ArrayBuffer): string {
 // GPT で作って X で直接予約した画像ポストを、コンテンツくんの投稿 1 行（正本）に残すため。ドライブは写し。
 // 投稿へは content-os の put-post-images が本文の末尾へ画像として足す。読んで送るのは 4 枚ずつ（Worker の記憶の上限に当たらないように）。
 const BATCH = 4;
-async function readFile(f: { download_url: string; mime_type?: string; file_name?: string }, label: string) {
-  if (!/^https:\/\//.test(f.download_url || "")) throw new Error("https の住所ではありません");
-  const res = await fetch(f.download_url);
+const IMG_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+const DRIVE_ID = /^[0-9A-Za-z_-]{10,100}$/;
+// v1.123.0：ドライブの画像を番号から読む。先に zoom-to-youtube（Naoki のふだんの Google の許可・drive.readonly）、
+// だめなら共通のサービスアカウント（共有されたファイルだけ見える）。どちらもだめなら両方の理由を返す
+async function readDrive(env: Env, id: string): Promise<{ data: ArrayBuffer; mime: string; name: string }> {
+  if (!DRIVE_ID.test(id)) throw new Error("ドライブのファイルの番号の形ではありません");
+  const why: string[] = [];
+  if (env.ZOOM_ARCHIVE?.readDriveImage) {
+    const r = (await env.ZOOM_ARCHIVE.readDriveImage(id)) as { ok?: boolean; data?: ArrayBuffer; mime?: string; name?: string; error?: string; message?: string };
+    if (r?.ok && r.data) return { data: r.data, mime: String(r.mime || ""), name: String(r.name || "") };
+    if (r?.error === "not_image" || r?.error === "too_big" || r?.error === "trashed") throw new Error(String(r.message || r.error));
+    why.push(`ふだんの許可：${r?.message || r?.error || "読めません"}`);
+  } else {
+    why.push("ふだんの許可：zoom-to-youtube の readDriveImage がまだありません");
+  }
+  try {
+    const tk = await getGoogleTokenForScope(env, "https://www.googleapis.com/auth/drive.readonly");
+    const auth = { authorization: `Bearer ${tk}` };
+    const meta = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=${encodeURIComponent("name,mimeType,size")}&supportsAllDrives=true`, { headers: auth });
+    if (!meta.ok) throw new Error(`Google ${meta.status}`);
+    const m = (await meta.json()) as { name?: string; mimeType?: string };
+    if (!IMG_TYPES.includes(String(m.mimeType))) throw new Error(`画像ではありません（${m.mimeType}）`);
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`, { headers: auth });
+    if (!res.ok) throw new Error(`Google ${res.status}`);
+    return { data: await res.arrayBuffer(), mime: String(m.mimeType), name: String(m.name || "") };
+  } catch (e) {
+    why.push(`機械用の身分：${e instanceof Error ? e.message : String(e)}`);
+  }
+  throw new Error(`ドライブから読めません（${why.join("／")}）`);
+}
+async function readFile(env: Env, f: InFile, label: string) {
+  if (f.drive_file_id) {
+    const d = await readDrive(env, f.drive_file_id.trim());
+    if (d.data.byteLength > 8 * 1024 * 1024) throw new Error("8MB を超えています");
+    const mime = IMG_TYPES.includes(d.mime) ? d.mime : /\.jpe?g$/i.test(d.name) ? "image/jpeg" : "image/png";
+    return { base64: toB64(d.data), mime, label: label || d.name };
+  }
+  if (!/^https:\/\//.test(f.download_url || "")) throw new Error("download_url（https の住所）か drive_file_id を渡してください");
+  const res = await fetch(f.download_url as string);
   if (!res.ok) throw new Error(`読めません（${res.status}）`);
   const buf = await res.arrayBuffer();
   if (buf.byteLength > 8 * 1024 * 1024) throw new Error("8MB を超えています");
   const t = (f.mime_type || res.headers.get("content-type") || "").split(";")[0].trim();
   const mime = ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(t) ? t : /\.jpe?g$/i.test(f.file_name || "") ? "image/jpeg" : "image/png";
-  return { base64: toB64(buf), mime, label };
+  return { base64: toB64(buf), mime, label: label || f.file_name || "" };
 }
 async function copyPostToDrive(env: Env, postId: string, images: string[]): Promise<unknown> {
   try {
@@ -182,19 +224,37 @@ export function registerContentFileTool(server: McpServer, env: Env): void {
     "content_os__put_images",
     {
       description:
-        "作った画像をファイルのまま、コンテンツくんの依頼か投稿へ置く（図解・サムネ・画像ポストなど。base64 にしなくてよい）。依頼なら id（依頼の番号 uuid）、投稿なら post_id（content_os__add_post で入れた投稿の番号）のどちらか 1 つを渡す。files に画像ファイルを 01・02… の順で 1〜20 枚。labels は各画像の題（同じ順）。replace_images=true で、前にこの道具で置いた画像を外して入れ直す。投稿へ置くと本文の末尾に画像として入り、Naoki のドライブ「コンテンツくん/月/日付_題/画像ポスト/」にも写る（依頼なら「…/引用図解・サムネ・記事内図解/」）。文の成果やステータスは別の道具で書く（この道具は画像だけ。ステータスは変えない）。戻り値: { ok, request? , post?, images?, drive, errors? }。",
+        "作った画像をファイルのまま、コンテンツくんの依頼か投稿へ置く（図解・サムネ・画像ポストなど。base64 にしなくてよい）。依頼なら id（依頼の番号 uuid）、投稿なら post_id（content_os__add_post で入れた投稿の番号）のどちらか 1 つを渡す。files に画像ファイルを 01・02… の順で 1〜20 枚（ChatGPT は download_url、Google ドライブにある画像は drive_file_id＝ファイルの番号を渡せば、そのまま読んで置く）。labels は各画像の題（同じ順）。replace_images=true で、前にこの道具で置いた画像を外して入れ直す。投稿へ置くと本文の末尾に画像として入り（files の各 1 枚に at＝本文の印の文字を付けると、その印の段落のすぐ後ろへ入る。印は「※画像：〜」の段落など、その文字を含む段落がちょうど 1 つのもの。1 つでも見つからなければ 1 枚も置かずに止まる。drop_markers=true で、入れ終わったあと印の段落を本文から外す）、Naoki のドライブ「コンテンツくん/月/日付_題/画像ポスト/」にも写る（依頼なら「…/引用図解・サムネ・記事内図解/」）。文の成果やステータスは別の道具で書く（この道具は画像だけ。ステータスは変えない）。戻り値: { ok, request? , post?, images?, drive, errors? }。",
       inputSchema: {
         id: z.string().optional().describe("依頼の番号（uuid）。投稿に置くときは省く"),
         post_id: z.union([z.string(), z.number()]).optional().describe("投稿の番号（content_os__add_post の post.id）。依頼に置くときは省く"),
         files: z.array(OpenAIFile).min(1).max(20).describe("画像ファイル（01 から順に・20 枚まで）"),
         labels: z.array(z.string().max(100)).max(20).optional(),
         replace_images: z.boolean().optional(),
+        drop_markers: z.boolean().optional().describe("true なら、at で使った印の段落を、画像を入れ終わったあと本文から外す（読めない画像が 1 枚でもあれば外さない）。投稿のときだけ"),
       },
       _meta: { "openai/fileParams": ["files"] },
     },
-    async (args: { id?: string; post_id?: string | number; files: { download_url: string; mime_type?: string; file_name?: string }[]; labels?: string[]; replace_images?: boolean }) => {
+    async (args: { id?: string; post_id?: string | number; files: InFile[]; labels?: string[]; replace_images?: boolean; drop_markers?: boolean }) => {
       const postId = args.post_id === undefined || args.post_id === "" ? "" : String(args.post_id);
       if (!!postId === !!args.id) return asMcpTextResult({ ok: false, error: "id（依頼）か post_id（投稿）のどちらか 1 つを渡してください" });
+      const noSrc = args.files.map((f, i) => (!f.download_url && !f.drive_file_id ? i + 1 : 0)).filter(Boolean);
+      if (noSrc.length) return asMcpTextResult({ ok: false, error: `${noSrc.join("・")} 枚目に download_url か drive_file_id がありません` });
+      const ats = [...new Set(args.files.map((f) => String(f.at || "").trim()).filter(Boolean))];
+      if (ats.length && !postId) return asMcpTextResult({ ok: false, error: "at（本文の印）は投稿（post_id）のときだけ使えます" });
+      // v1.123.0：印は最初に全部まとめて下見する（4 枚ずつ送る途中で止まり、半分だけ入るのを防ぐ）
+      if (ats.length) {
+        const chk = await callContentOsInternalApi<{ ok?: boolean; markers?: { at: string; count: number }[]; error?: string }>(env, "put-post-images", { post_id: postId, check_markers: ats });
+        if (!chk || chk.ok === false) return asMcpTextResult({ ok: false, error: "本文の印を確かめられませんでした", detail: chk });
+        const bad = (chk.markers || []).filter((m) => m.count !== 1);
+        if (bad.length) {
+          return asMcpTextResult({
+            ok: false,
+            error: "本文の印がちょうど 1 つ見つからないものがあります（1 枚も置いていません）。0 件は文字の違い、2 件以上はもっと長い文字にしてください",
+            markers: bad,
+          });
+        }
+      }
       const errors: string[] = [];
       let keep: string | undefined;
       if (!postId) {
@@ -205,11 +265,12 @@ export function registerContentFileTool(server: McpServer, env: Env): void {
       let out: Record<string, unknown> | null = null;
       let placed = 0;
       for (let s = 0; s < args.files.length; s += BATCH) {
-        const images: { base64: string; mime?: string; label?: string }[] = [];
+        const images: { base64: string; mime?: string; label?: string; at?: string }[] = [];
         for (let i = s; i < Math.min(s + BATCH, args.files.length); i++) {
           const f = args.files[i];
           try {
-            images.push(await readFile(f, args.labels?.[i] || f.file_name || String(i + 1).padStart(2, "0")));
+            const im = await readFile(env, f, args.labels?.[i] || f.file_name || (f.drive_file_id ? "" : String(i + 1).padStart(2, "0")));
+            images.push(f.at ? { ...im, at: String(f.at).trim() } : im);
           } catch (e) {
             errors.push(`${i + 1} 枚目：${e instanceof Error ? e.message : String(e)}`);
           }
@@ -217,7 +278,13 @@ export function registerContentFileTool(server: McpServer, env: Env): void {
         if (!images.length) continue;
         const replace = placed === 0 ? args.replace_images : false;
         const r = postId
-          ? await callContentOsInternalApi<Record<string, unknown>>(env, "put-post-images", { post_id: postId, images, replace_images: replace })
+          ? await callContentOsInternalApi<Record<string, unknown>>(env, "put-post-images", {
+              post_id: postId,
+              images,
+              replace_images: replace,
+              // 印を外すのは最後の回だけ・読めない画像が無いときだけ（印が残っていれば、どこが欠けたか本文で分かる）
+              drop_markers: args.drop_markers && ats.length && s + BATCH >= args.files.length && !errors.length ? ats : undefined,
+            })
           : await callContentOsInternalApi<Record<string, unknown>>(env, "put-result", { id: args.id, status: keep, images, replace_images: replace });
         if (!r || (r as { ok?: boolean }).ok === false) {
           errors.push(`${s + 1}〜${s + images.length} 枚目：${String((r as { message?: string; error?: string })?.message || (r as { error?: string })?.error || "書けませんでした")}`);

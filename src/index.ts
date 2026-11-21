@@ -549,6 +549,7 @@
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
+ * v1.123.0（2026-11-21 開発部・募集記事の実績スクショを位置どおりに）：content_os__put_images の files の 1 枚ごとに drive_file_id（Google ドライブのファイルの番号）と at（本文の印の文字）を足した。drive_file_id は zoom-to-youtube 第56版の ArchiveApi.readDriveImage（Naoki のふだんの許可・drive.readonly）で読み、だめなら機械用の身分で読む。at は content-os の put-post-images が、その文字を含む段落 1 つのすぐ後ろへ画像を入れる（先に全部の印を下見し、1 つでも当たらなければ 1 枚も置かない）。drop_markers=true で入れ終わったあと印の段落を外す。download_url は省けるようにした（drive_file_id と どちらか 1 つ）。content-os と zoom-to-youtube を先に本番へ出すこと。設定の追加 0 個。
  * v1.122.0（2026-11-17 開発部・X攻略くんの 8 本を外向けの窓口に・統括の依頼）：OfficialGate に tools（説明文と引数の形）と run（権利を取り直し、member.auth_uid＝本人の番号で道具を動かす）を足した。registerXbunsekiTools に本人の番号の取り方（uidOf）を渡せるようにし、省略時は今までどおり Naoki の行。外へ出せる道具の名簿は src/official-gate.ts の OFFICIAL_GATE_TOOLS（xbunseki の 8 本だけ）。Naoki 用の /mcp の道具の動きは変えていない。試験は test/official-gate.test.ts。設定の追加 0 個。
  * v1.121.0（2026-11-17 開発部・外向けの窓口・統括の依頼・Naoki OK 15:25）：OfficialGate を足した（src/official-gate.ts）。外向けの MCP の窓口 shia2n-mcp-official（official/ のフォルダ・別の Worker・別の札の置き場）がサービスの結びで呼ぶ。login＝つなぐ画面の Google ログインの札を門番（/gate/resolve と同じ中身・auth_attempt に X-App mcp-official で残る）で確かめて member の番号と権利を返す／rights＝いまの権利（期限切れは外す）と member_access の開くものを返す。名前・メールは返さない。外向けの窓口に Supabase の鍵は渡さない。このファイルの道具・入口・札には触っていない。設定の追加 0 個。
  * v1.120.0（2026-11-17 開発部・タスク「作った画像の保管」・Naoki OK 11:01）：content_os__put_images が投稿（post_id）にも画像を置けるようにし、20 枚まで受ける（4 枚ずつ読んで送る）。投稿へは content-os の /api/internal/put-post-images が本文の末尾に画像として足し、ドライブの「コンテンツくん/月/日付_題/画像ポスト/」へも写す（zoom-to-youtube 第45版で 20 枚まで）。content_os__update_post に x_url を足した。GPT の入口 /content/mcp に content_os__add_post・content_os__update_post を出した（GPT で作って X で直接予約した画像ポストを残すため）。content-os と zoom-to-youtube を先に本番へ出すこと。設定の追加 0 個。
@@ -740,6 +741,8 @@ export interface Env {
     saveContentImages?(input: { post_id: string; title: string; date?: string | null; sub: string; images: { url: string; mime?: string }[] }): Promise<unknown>;
     // v1.98.0：スライドの台帳の配置表から Google スライドを作る（zoom-to-youtube 第38版）
     createSlidesDeck?(input: { title: string; slides: { items: unknown[] }[]; templates?: { items: unknown[] }[] }): Promise<unknown>;
+    // v1.123.0：ドライブの画像 1 枚をファイルの番号から読む（zoom-to-youtube 第56版）
+    readDriveImage?(fileId: string): Promise<unknown>;
   };
   // Zeus
   ZEUS_API_BASE: string;
