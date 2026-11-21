@@ -15,7 +15,7 @@ export class ManagerError extends Error {
   constructor(public code: string, message: string, public extra: Record<string, unknown> = {}) { super(message); }
 }
 
-const CHAT_COLS = "no,name,ai,url,state,doing,role,surface,pin_count,created_at,touched_at,transcript_at,turns,service";
+const CHAT_COLS = "no,name,ai,url,state,doing,role,surface,pin_count,created_at,touched_at,transcript_at,turns,service,tm_task_id,initiative_no,initiative_name";
 const PIN_INDEX_COLS = "id,chat_no,n,title,created_at";
 const PICK_POOL = 500; // 名前で選ぶときに見る、最後に触った順のチャットの数
 
@@ -84,12 +84,13 @@ export async function resolveChat(env: SbEnv, ref: unknown, needPin?: number | n
 }
 
 /** 一覧。state を省くと閉じた以外。ai で絞れる */
-export async function listChats(env: SbEnv, opt: { state?: string | null; ai?: string | null; limit?: number } = {}): Promise<Row[]> {
+export async function listChats(env: SbEnv, opt: { state?: string | null; ai?: string | null; limit?: number; initiative?: string | null } = {}): Promise<Row[]> {
   const q = [`select=${CHAT_COLS}`, `order=touched_at.desc`, `limit=${Math.min(Math.max(opt.limit ?? 50, 1), 300)}`];
   if (opt.state === "すべて") { /* 絞らない */ }
   else if (opt.state) q.push(`state=eq.${enc(opt.state)}`);
   else q.push(`state=neq.${enc("閉じた")}`);
   if (opt.ai) q.push(`ai=eq.${enc(opt.ai)}`);
+  if (opt.initiative && /^\d{2}$/.test(opt.initiative)) q.push(`initiative_no=eq.${opt.initiative}`);
   return (await sb(env, `mk_chats?${q.join("&")}`)) || [];
 }
 

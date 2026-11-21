@@ -23,6 +23,7 @@ import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
 import { STATES, checkCapture, checkUpdate, chatOut, jstShort, keyHash, newKey, normState, pinOut } from "./manager-core.js";
 import { ManagerError, applyCapture, chatByNo, issueKey, keyStatus, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
 import { managerPage } from "./manager-page.js";
 
@@ -70,7 +71,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (raw && !st) return reply({ ok: false, message: `state は ${STATES.join("・")}・すべて のどれかです` }, 400);
       const ai = (sp.get("ai") || "").trim();
       const [rows, counts] = await Promise.all([
-        listChats(env, { state: st, ai: ai === "claude" || ai === "gpt" ? ai : null, limit: 300 }),
+        listChats(env, { state: st, ai: ai === "claude" || ai === "gpt" ? ai : null, limit: 300, initiative: sp.get("initiative") }),
         stateCounts(env),
       ]);
       return reply({ ok: true, chats: rows.map(chatOut), counts });
@@ -108,8 +109,12 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (!Number.isInteger(no) || no <= 0) return reply({ ok: false, message: "チャット番号が分かりません" }, 400);
       const c = checkUpdate({ state: body.state, doing: body.doing, name: body.name, url: body.url });
       if (!c.ok) return reply({ ok: false, message: c.message }, 400);
-      const after = await updateChat(env, no, c.patch);
-      return reply({ ok: true, chat: chatOut(after) });
+      const ini = await initiativePatch(env, body.initiative);
+      if (!ini.ok) return reply({ ok: false, message: ini.message }, 400);
+      let after = await updateChat(env, no, { ...c.patch, ...ini.patch });
+      const t = await syncDecisionTask(env, after); // v1.127.0：判断待ち ⇄ TaskMaster
+      if (t.action !== "none") after = { ...after, tm_task_id: t.action === "added" ? t.task_id : null };
+      return reply({ ok: true, chat: chatOut(after), ...(t.error ? { warning: `TaskMaster：${t.error}` } : {}) });
     }
     if (request.method === "GET" && op === "transcript") {
       const no = Number(sp.get("no"));
@@ -117,6 +122,29 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const t = await transcriptOf(env, no);
       if (!t) return reply({ ok: false, message: `チャット ${no} はありません` }, 404);
       return reply({ ok: true, 全文: t.transcript, 読んだ: t.transcript_at ? jstShort(t.transcript_at) : null, 往復: t.turns });
+    }
+    // v1.127.0：ほかのアプリとのつなぎ
+    if (request.method === "GET" && op === "sessions") {
+      const no = Number(sp.get("no"));
+      const c = Number.isInteger(no) && no > 0 ? await chatByNo(env, no) : null;
+      return reply({ ok: true, sessions: c ? await sessionsFor(env, c.url) : [] });
+    }
+    if (request.method === "GET" && op === "initiatives") {
+      return reply({ ok: true, initiatives: await initiatives(env) });
+    }
+    if (request.method === "GET" && op === "notebook") {
+      return reply({ ok: true, ...(await notebookStatus(env)) });
+    }
+    if (request.method === "POST" && op === "notebook") {
+      let body: Record<string, unknown> = {};
+      try { body = await request.json() as Record<string, unknown>; } catch { /* 空でよい */ }
+      if (body.doc !== undefined) {
+        const id = String(body.doc || "").trim() ? docIdOf(body.doc) : null;
+        if (String(body.doc || "").trim() && !id) return reply({ ok: false, message: "Google ドキュメントの住所（https://docs.google.com/document/d/…）を貼ってください" }, 400);
+        await setSetting(env, NOTEBOOK_DOC_KEY, id);
+      }
+      const r = await exportNotebook(env, true);
+      return reply({ ok: r.ok, message: r.message, ...(await notebookStatus(env)) }, r.ok ? 200 : 502);
     }
     if (request.method === "POST" && op === "ext-key") {
       const key = newKey();
