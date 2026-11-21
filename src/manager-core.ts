@@ -1,0 +1,185 @@
+/**
+ * shia2n-mcp / src/manager-core.ts / 新設（2026-11-21 v1.125.0 開発部・マネージャーくん 1便目）
+ *
+ * マネージャーくん（Claude と GPT のチャットの台帳とピン）の計算だけの部品（外に触らない・試験で回す）。
+ *   ・チャット 1 本＝mk_chats の 1 行。番号 no（1 から増える）で指す。ai_log__add が会話の最初に作る
+ *   ・ピン＝回答 1 つの全文。チャットの中の番号 n（#1 から）。「12 のピン 3」は 12#3 と書く
+ *   ・状態は 4 つだけ（進行中・判断待ち・寝かせ中・閉じた）。よくある書き方は言い換えて受ける
+ *   ・予約タスクの行は最初から「閉じた」（毎朝の 3 本で一覧が埋まらないため）
+ */
+
+type Row = Record<string, any>;
+
+export const STATES = ["進行中", "判断待ち", "寝かせ中", "閉じた"] as const;
+export type State = (typeof STATES)[number];
+
+const STATE_ALIASES: ReadonlyArray<[State, string[]]> = [
+  ["進行中", ["進行中", "進行", "作業中", "いま", "active", "doing", "open", "inprogress"]],
+  ["判断待ち", ["判断待ち", "判断", "待ち", "確認待ち", "承認待ち", "waiting", "decision", "blocked"]],
+  ["寝かせ中", ["寝かせ中", "寝かせ", "保留", "休止", "あとで", "parked", "later", "snooze"]],
+  ["閉じた", ["閉じた", "閉じる", "完了", "済み", "終わり", "done", "closed", "close"]],
+];
+
+/** 状態の書き方を 4 つの値のどれかにする。当てはまらなければ null */
+export function normState(s: unknown): State | null {
+  const k = String(s ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!k) return null;
+  for (const [v, alts] of STATE_ALIASES) if (alts.includes(k)) return v;
+  return null;
+}
+
+/** 使った場所（ai_log の surface）→ どちらの AI か */
+export function aiOf(surface: string): "claude" | "gpt" {
+  return surface === "GPT" ? "gpt" : "claude";
+}
+
+/** 使った場所 → 最初の状態。予約タスクは人が戻ってこないので閉じた */
+export function firstState(surface: string): State {
+  return surface === "予約タスク" ? "閉じた" : "進行中";
+}
+
+/** チャットの名前（120 字まで・空白をつめる） */
+export function chatName(s: unknown): string {
+  return String(s ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
+}
+
+/** チャットの住所。http(s) のものだけ受ける。空は null */
+export function chatUrl(s: unknown): { ok: true; url: string | null } | { ok: false; message: string } {
+  const v = String(s ?? "").trim();
+  if (!v) return { ok: true, url: null };
+  if (v.length > 500) return { ok: false, message: "チャットの住所は 500 字までです" };
+  if (!/^https?:\/\/[^\s]+$/i.test(v)) return { ok: false, message: "チャットの住所は https:// で始まる形で渡してください" };
+  return { ok: true, url: v };
+}
+
+/**
+ * チャットの指し方を読む。
+ *   "12"・"#12"・"c12"・"チャット12"・12 → { no: 12 }
+ *   "https://…" → { url }
+ *   それ以外の言葉 → { words }（名前・役割の一部。例「統括」）
+ */
+export type ChatRef = { no: number } | { url: string } | { words: string[] } | null;
+export function parseChatRef(v: unknown): ChatRef {
+  if (typeof v === "number") return Number.isInteger(v) && v > 0 ? { no: v } : null;
+  const s = String(v ?? "").trim().normalize("NFKC");
+  if (!s) return null;
+  const m = s.match(/^(?:チャット|chat|c)?\s*#?\s*(\d{1,12})$/i);
+  if (m) { const no = Number(m[1]); return no > 0 ? { no } : null; }
+  if (/^https?:\/\//i.test(s)) return { url: s };
+  const words = s.split(/[\s　]+/).map((w) => w.toLowerCase()).filter(Boolean);
+  return words.length ? { words } : null;
+}
+
+/**
+ * ピンの指し方を読む。"12#3"・"12-3"・"12のピン3"・"チャット12 ピン3" → { chat: "12", n: 3 }
+ * ピンの番号だけ（"3"・"#3"・"ピン3"）は { chat: null, n: 3 }
+ */
+export function parsePinRef(v: unknown): { chat: string | null; n: number } | null {
+  const s = String(v ?? "").trim().normalize("NFKC");
+  if (!s) return null;
+  let m = s.match(/^(?:チャット|chat|c)?\s*#?\s*(\d{1,12})\s*(?:#|-|の?ピン|\s+ピン|\s+pin|\/)\s*#?\s*(\d{1,6})$/i);
+  if (m) return { chat: m[1], n: Number(m[2]) };
+  m = s.match(/^(?:ピン|pin)?\s*#?\s*(\d{1,6})$/i);
+  if (m) return { chat: null, n: Number(m[1]) };
+  return null;
+}
+
+/** ピンの番号（1 以上の整数）。文字の "#3"・"ピン3" も受ける */
+export function pinNo(v: unknown): number | null {
+  if (typeof v === "number") return Number.isInteger(v) && v > 0 ? v : null;
+  const r = parsePinRef(v);
+  return r && r.chat === null && r.n > 0 ? r.n : null;
+}
+
+export type PinCheck = { ok: true; title: string; body: string } | { ok: false; message: string };
+/** ピンの題と全文を確かめる。題は 120 字まで（空白はつめる）、全文は 1〜200,000 字（そのまま残す） */
+export function checkPin(title: unknown, body: unknown): PinCheck {
+  const t = String(title ?? "").trim().replace(/\s+/g, " ");
+  const b = String(body ?? "");
+  if (!t) return { ok: false, message: "title（ピンの題）が空です。あとで探すときの言葉で短く" };
+  if (t.length > 120) return { ok: false, message: "title は 120 字までです" };
+  if (!b.trim()) return { ok: false, message: "body（回答の全文）が空です。要約ではなく、ピンする回答をそのまま全部" };
+  if (b.length > 200000) return { ok: false, message: "body は 200,000 字までです。長い回答は分けてピンしてください" };
+  return { ok: true, title: t, body: b };
+}
+
+export type UpdateCheck =
+  | { ok: true; patch: Record<string, string | null> }
+  | { ok: false; message: string };
+/** 状態・何をしているか・名前・住所の書き直しを確かめる。何も無ければ断る */
+export function checkUpdate(input: { state?: unknown; doing?: unknown; name?: unknown; url?: unknown }): UpdateCheck {
+  const patch: Record<string, string | null> = {};
+  if (input.state !== undefined && input.state !== null && String(input.state).trim() !== "") {
+    const st = normState(input.state);
+    if (!st) return { ok: false, message: `state は ${STATES.join("・")} のどれかです（受け取った値：${String(input.state)}）` };
+    patch.state = st;
+  }
+  if (input.doing !== undefined && input.doing !== null) {
+    const d = String(input.doing).trim().replace(/\s+/g, " ");
+    if (d.length > 200) return { ok: false, message: "doing（何をしているかの 1 行）は 200 字までです" };
+    patch.doing = d;
+  }
+  if (input.name !== undefined && input.name !== null && String(input.name).trim() !== "") {
+    patch.name = chatName(input.name);
+  }
+  if (input.url !== undefined && input.url !== null) {
+    const u = chatUrl(input.url);
+    if (!u.ok) return { ok: false, message: u.message };
+    patch.url = u.url;
+  }
+  if (!Object.keys(patch).length) return { ok: false, message: "書き直すもの（state・doing・name・url のどれか）がありません" };
+  return { ok: true, patch };
+}
+
+/**
+ * 名前の言葉からチャットを選ぶ（ピンの番号があれば、そのピンを持つものだけ）。
+ * 全部の言葉を名前・役割・何をしているかのどれかに含むものを、最後に触った順に並べる。
+ * 先頭が選ばれたもの、ほかは候補として返す。
+ */
+export function pickChats(rows: Row[], words: string[], n?: number | null): Row[] {
+  const ws = words.map((w) => w.toLowerCase()).filter(Boolean);
+  return rows
+    .filter((r) => {
+      const hay = `${r.name ?? ""} ${r.role ?? ""} ${r.doing ?? ""}`.toLowerCase();
+      return ws.every((w) => hay.includes(w));
+    })
+    .filter((r) => !n || Number(r.pin_count || 0) >= n)
+    .sort((a, b) => String(b.touched_at).localeCompare(String(a.touched_at)));
+}
+
+const JST_MS = 9 * 60 * 60 * 1000;
+/** ISO の時刻 → 日本時間の "YYYY-MM-DD HH:mm" */
+export function jstShort(iso: unknown): string {
+  const t = new Date(String(iso ?? "")).getTime();
+  if (isNaN(t)) return "";
+  return new Date(t + JST_MS).toISOString().slice(0, 16).replace("T", " ");
+}
+
+/** 台帳の 1 行 → 返す形 */
+export function chatOut(r: Row) {
+  return {
+    番号: Number(r.no),
+    名前: String(r.name ?? ""),
+    AI: String(r.ai ?? ""),
+    状態: String(r.state ?? ""),
+    何をしているか: String(r.doing ?? ""),
+    住所: r.url ? String(r.url) : null,
+    役割: r.role ? String(r.role) : null,
+    ピンの数: Number(r.pin_count || 0),
+    最後に触った: jstShort(r.touched_at),
+    作った: jstShort(r.created_at),
+  };
+}
+
+/** ピンの 1 行 → 返す形（全文つきは full=true） */
+export function pinOut(p: Row, chat?: Row | null, full = false) {
+  return {
+    ピン: `${Number(p.chat_no)}#${Number(p.n)}`,
+    チャット番号: Number(p.chat_no),
+    番号: Number(p.n),
+    題: String(p.title ?? ""),
+    作った: jstShort(p.created_at),
+    ...(chat ? { チャットの名前: String(chat.name ?? ""), チャットの住所: chat.url ? String(chat.url) : null } : {}),
+    ...(full ? { 全文: String(p.body ?? ""), 字数: String(p.body ?? "").length } : {}),
+  };
+}

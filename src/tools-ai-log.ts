@@ -3,6 +3,8 @@ import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { KNOWN_ROLES, WHERE_VALUES, checkAdd, jstRange, summarize, toJst } from "./ai-log-core.js";
+import { aiOf, chatName, chatOut, chatUrl, firstState } from "./manager-core.js";
+import { createChat } from "./manager-store.js";
 
 /**
  * AI の利用ログの道具（2026-10-26 v1.45.0 開発部）。
@@ -13,6 +15,9 @@ import { KNOWN_ROLES, WHERE_VALUES, checkAdd, jstRange, summarize, toJst } from 
  *   ・ai_log__list：期間の一覧と回数。読むだけ。0 件は ok: true の 件数 0、失敗は ok: false
  *   ・テーブルはブラウザから読めない（RLS あり・決まりなし）。読み書きは shia2n-mcp の管理者キーだけ
  *   ・テーブルを作る SQL は sql/ai_log.sql
+ *   ・v1.125.0（2026-11-21 マネージャーくん 1便目）：ai_log__add は同じ呼び出しで、マネージャーくんの台帳（mk_chats）に
+ *     このチャットの行を 1 つ作り、チャット番号を返す（チャットを立てる道具を別に作らず一本化）。予約タスクの行は最初から閉じた。
+ *     台帳の行が作れなくても利用ログは残し、warnings で知らせる（ログを止めないため）
  */
 
 const TABLE = "ai_log";
@@ -33,17 +38,19 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
   // ─── 1. ai_log__add ──────────────────────────────────────────────
   server.tool(
     "ai_log__add",
-    `AI の利用ログに 1 件残す。各役割（統括・秘書・開発部・るーみん・おかぜり・予約タスク など）の会話の最初に 1 回だけ呼ぶ。時刻（日本時間）はサーバーが付ける。where は ${WHERE_VALUES.join("・")} のどれか。title はその会話の要件を短く（200 字まで）。戻り値: 成功 { ok: true, 時刻, role, where, title, warnings? }／失敗 { ok: false, message }。`,
+    `AI の利用ログに 1 件残し、同時にマネージャーくんの台帳にこのチャットの行を作る。各役割（統括・秘書・開発部・るーみん・おかぜり・予約タスク など）の会話の最初に 1 回だけ呼ぶ。時刻（日本時間）はサーバーが付ける。where は ${WHERE_VALUES.join("・")} のどれか。title はその会話の要件を短く（200 字まで・台帳のチャットの名前になる）。このチャットの住所が分かれば chat_url に渡す（Claude Code はセッションの住所、分からなければ省く）。戻り値の チャット.番号 を覚えておき、ピン（manager__pin）と状態の書き直し（manager__update）に渡す。戻り値: 成功 { ok: true, 時刻, role, where, title, チャット: { 番号, 名前, 状態, … }, warnings? }／失敗 { ok: false, message }。`,
     {
       role: z.string().max(30).describe(`役割。決まった名前：${KNOWN_ROLES.join("・")}`),
       where: z.string().max(30).describe(`使った場所：${WHERE_VALUES.join("・")}`),
       title: z.string().max(200).describe("その会話の要件を短く"),
+      chat_url: z.string().max(500).optional().describe("このチャットの住所（https://…）。分からなければ省く"),
     },
-    async ({ role, where, title }) => {
+    async ({ role, where, title, chat_url }) => {
       try {
         const c = checkAdd({ role, where, title });
         if (!c.ok) return asMcpTextResult({ ok: false, message: c.message });
-        const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${TABLE}?select=at,role,surface,title`, {
+        const u = chatUrl(chat_url);
+        const res = await fetch(`${env.SUPABASE_URL}/rest/v1/${TABLE}?select=id,at,role,surface,title`, {
           method: "POST",
           headers: sbHeaders(env, { Prefer: "return=representation" }),
           body: JSON.stringify(c.row),
@@ -52,7 +59,20 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
         const rows = (await res.json()) as Array<Record<string, any>>;
         const r = rows[0];
         if (!r) return asMcpTextResult({ ok: false, message: "書いた行が返ってきませんでした（入ったかは ai_log__list で確かめる）" });
-        return asMcpTextResult({ ok: true, 時刻: toJst(String(r.at)), role: r.role, where: r.surface, title: r.title, ...(c.warnings.length ? { warnings: c.warnings } : {}) });
+        // v1.125.0：マネージャーくんの台帳にこのチャットの行を作る（失敗してもログは残っているので ok のまま知らせる）
+        const warnings = [...c.warnings];
+        let chat: ReturnType<typeof chatOut> | null = null;
+        if (!u.ok) warnings.push(`${u.message}（住所は入れずに台帳の行を作りました。manager__update の url で直せます）`);
+        try {
+          const row = await createChat(env, {
+            name: chatName(c.row.title), ai: aiOf(c.row.surface), state: firstState(c.row.surface),
+            url: u.ok ? u.url : null, role: c.row.role, surface: c.row.surface, ai_log_id: r.id ?? null,
+          });
+          chat = chatOut(row);
+        } catch (e) { warnings.push(`マネージャーくんの台帳に行を作れませんでした：${String((e as Error)?.message || e).slice(0, 200)}`); }
+        return asMcpTextResult({ ok: true, 時刻: toJst(String(r.at)), role: r.role, where: r.surface, title: r.title,
+          ...(chat ? { チャット: chat, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update に chat=${chat.番号} を渡す` } : {}),
+          ...(warnings.length ? { warnings } : {}) });
       } catch (e) { return asMcpTextResult({ ok: false, message: String(e) }); }
     }
   );

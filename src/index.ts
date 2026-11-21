@@ -549,6 +549,7 @@
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
+ * v1.125.0（2026-11-21 開発部・マネージャーくん 1便目・統括の依頼）：Claude と GPT のチャットの台帳とピン。ai_log__add が会話の最初に台帳（Supabase の mk_chats）へこのチャットの行を作り、チャット番号を返す（立てる道具を別に作らず一本化・chat_url を受ける・予約タスクの行は最初から閉じた）。道具 manager__pin（「これピン」で回答の全文を題つきで残す・チャットの中で #1 から）・manager__update（状態 進行中・判断待ち・寝かせ中・閉じた と何をしているかの 1 行）・manager__search（題・1 行・ピンの全文）・manager__get_pin（別のチャットから「○○のピン 3」で全文）・manager__waiting（判断待ちの一覧・統括が起動したときに読む）・manager__list。Claude の入口と GPT の入口（/content/mcp・/anken/mcp）の両方に出す。画面は /manager（一覧・状態で絞る・検索・ピンの目次・全文・編集。Firebase のログインで Naoki 本人だけ。右上は共通の外枠を束ねて同梱）。表は sql/manager.sql（Supabase に入れ済み）、中身は src/manager-core.ts（計算だけ・試験は test/manager-core.test.ts）・manager-store.ts・tools-manager.ts・manager-http.ts・manager-page.ts・manager-assets.ts。設定の追加 0 個。
  * v1.124.0（2026-11-21 開発部・Naoki 12:44）：content_os__put_images が、受け取ったものを先頭のバイトと Content-Type で確かめ、画像（png・jpeg・webp・gif）でなければ置かずに failed に数える（ドライブの非公開ファイルを download_url で渡すと、ログイン画面の HTML が .png の名前で保存されていた）。種類も中身で決める。download_url がドライブの住所なら番号を取り出してドライブから直接読む。1 枚でも置けなければ ok:false・partial:true・failed を返す。中身は src/image-sniff.ts、試験は test/image-sniff.test.ts。設定の追加 0 個。
  * v1.123.0（2026-11-21 開発部・募集記事の実績スクショを位置どおりに）：content_os__put_images の files の 1 枚ごとに drive_file_id（Google ドライブのファイルの番号）と at（本文の印の文字）を足した。drive_file_id は zoom-to-youtube 第56版の ArchiveApi.readDriveImage（Naoki のふだんの許可・drive.readonly）で読み、だめなら機械用の身分で読む。at は content-os の put-post-images が、その文字を含む段落 1 つのすぐ後ろへ画像を入れる（先に全部の印を下見し、1 つでも当たらなければ 1 枚も置かない）。drop_markers=true で入れ終わったあと印の段落を外す。download_url は省けるようにした（drive_file_id と どちらか 1 つ）。content-os と zoom-to-youtube を先に本番へ出すこと。設定の追加 0 個。
  * v1.122.0（2026-11-17 開発部・X攻略くんの 8 本を外向けの窓口に・統括の依頼）：OfficialGate に tools（説明文と引数の形）と run（権利を取り直し、member.auth_uid＝本人の番号で道具を動かす）を足した。registerXbunsekiTools に本人の番号の取り方（uidOf）を渡せるようにし、省略時は今までどおり Naoki の行。外へ出せる道具の名簿は src/official-gate.ts の OFFICIAL_GATE_TOOLS（xbunseki の 8 本だけ）。Naoki 用の /mcp の道具の動きは変えていない。試験は test/official-gate.test.ts。設定の追加 0 個。
@@ -721,6 +722,8 @@ import { registerSozaiTools } from "./tools-sozai.js";
 import { registerAnkenTools } from "./tools-anken.js";
 import { registerXbunsekiTools } from "./tools-xbunseki.js";
 import { registerAiLogTools } from "./tools-ai-log.js";
+import { registerManagerTools } from "./tools-manager.js";
+import { handleManager, MANAGER_PATH } from "./manager-http.js";
 import { registerSkillsTools } from "./tools-skills.js";
 import { registerMcpAuthTools } from "./tools-mcp-auth.js";
 import { handleLineWebhook, cleanupLineInbox } from "./line-inbox.js";
@@ -904,6 +907,7 @@ function createMcpServer(env: Env): McpServer {
   registerAnkenTools(server, env);
   registerXbunsekiTools(server, env);
   registerAiLogTools(server, env);
+  registerManagerTools(server, env); // v1.125.0：マネージャーくん（チャットの台帳とピン）
   registerSkillsTools(server, env); // v1.101.0：スキルの正本を確かめる口
   registerMcpAuthTools(server, env);
   return server;
@@ -944,6 +948,7 @@ function createAnkenMcpServer(env: Env): McpServer {
   // v1.45.0：GPT からも AI の利用ログを書けるように、書く道具 1 本だけを出す（読む道具は出さない）
   const logGate = { tool: (name: string, ...rest: unknown[]) => (name === "ai_log__add" ? (server.tool as any)(name, ...rest) : undefined) };
   registerAiLogTools(logGate as unknown as McpServer, env);
+  registerManagerTools(server, env); // v1.125.0：GPT のチャットも台帳に立て、ピンし、ほかのチャットのピンを取ってくる
   return server;
 }
 
@@ -968,6 +973,7 @@ function createContentMcpServer(env: Env): McpServer {
   registerSlideTools(server, env); // v1.94.0：スライドの台帳（全部）
   registerSkillsTools(server, env); // v1.101.0：GPT もスキルの最新版を正本から読む（読むだけ）
   registerUtageArchiveTools(gate as unknown as McpServer, env); // v1.115.0：UTAGE の写しを見本として読む（読むだけ・run は通さない）
+  registerManagerTools(server, env); // v1.125.0：GPT のチャットも台帳に立て、ピンし、ほかのチャットのピンを取ってくる
   return server;
 }
 
@@ -1014,6 +1020,10 @@ export default {
     }
     if (url.pathname.startsWith("/haaku/approvals/")) {
       return handleHaakuHumanApproval(request, env);
+    }
+    // v1.125.0：マネージャーくんの画面と読み口（Firebase のログインで Naoki 本人だけ・同じ住所からだけ）
+    if (url.pathname === MANAGER_PATH || url.pathname.startsWith(MANAGER_PATH + "/")) {
+      return handleManager(request, env);
     }
     // v1.17.0：TaskMaster の画面からマイルストーンに結ぶ受け口（Firebase のログインで守る・TaskMaster の住所だけ）
     if (url.pathname === TASK_LINKS_PATH) {
