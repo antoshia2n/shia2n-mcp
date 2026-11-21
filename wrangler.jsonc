@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-04-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // 2026-11-21（v1.126.0）：マネージャーくんの独自の住所。MCP の入口は今までどおり workers.dev なので、workers_dev は明示して残す
+  "workers_dev": true,
+  "routes": [{ "pattern": "manager.shia2n.jp", "custom_domain": true }],
   "vars": {
     // 2026-08-08 変更：売上管理を Vercel から Cloudflare Pages へ移した。
     // 旧: https://sales-manager-black.vercel.app（置き場ごと削除する予定）
