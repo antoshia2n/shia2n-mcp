@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { STATES, areaName, checkDone, checkPin, checkUpdate, chatOut, jstShort, normState, parsePinRef, pinNo, pinOut } from "./manager-core.js";
+import { STATES, areaName, checkDone, checkPin, checkUpdate, chatOut, jstShort, normState, parseChatRef, parsePinRef, pickChats, pinNo, pinOut } from "./manager-core.js";
 import { ManagerError, addDone, addPin, chatsByNos, lastPinTitles, listChats, pinFull, pinIndex, pinsByTitle, resolveChat, search, stateCounts, updateChat } from "./manager-store.js";
 import { initiativePatch, sessionsFor, syncDecisionTask } from "./manager-links.js";
 
@@ -109,7 +109,7 @@ export function registerManagerTools(server: McpServer, env: Env): void {
   // ─── 4. manager__get_pin ─────────────────────────────────────────
   server.tool(
     "manager__get_pin",
-    "ピンの全文を取ってくる（読むだけ）。Naoki が「○○のピンを持ってきて」と言ったら、その言葉を q に渡す（ピンの題から探す。空白で区切ると全部を含むもの）。題がそのまま一致するものが先、あとは新しいピンを選び、ほかに当たったものを 候補（題・チャットの名前・作った）で返す。違えば候補の 題 で呼び直す。番号で呼ぶとき（manager__search が返した ピン の値など）は ref に「12#3」、または chat と pin を渡す。chat だけで pin を省くと、そのチャットのピンの目次を返す。返った全文はそのまま使い、勝手に縮めない。Naoki には題で見せ、番号は見せない。戻り値: 成功 { ok: true, ピン, チャット番号, 番号, 題, 作った, チャットの名前, チャットの住所, 全文, 字数, 候補? } か { ok: true, チャット, 目次: [{ ピン, 題, 作った }] }／失敗 { ok: false, code, message }。",
+    "ピンの全文を取ってくる（読むだけ）。Naoki が「○○のピンを持ってきて」と言ったら、その言葉を q に渡す（ピンの題から探す。空白で区切ると全部を含むもの）。題がそのまま一致するものが先、あとは新しいピンを選び、ほかに当たったものを 候補（題・チャットの名前・作った）で返す。違えば候補の 題 で呼び直す。番号で呼ぶとき（manager__search が返した ピン の値など）は ref に「12#3」、または chat と pin を渡す。chat だけで pin を省くと、そのチャットのピンの目次を返す（chat の言葉を名前に含むチャットが無ければ、ピンの題から探す）。返った全文はそのまま使い、勝手に縮めない。Naoki には題で見せ、番号は見せない。戻り値: 成功 { ok: true, ピン, チャット番号, 番号, 題, 作った, チャットの名前, チャットの住所, 全文, 字数, 候補? } か { ok: true, チャット, 目次: [{ ピン, 題, 作った }] }／失敗 { ok: false, code, message }。",
     {
       q: z.string().max(200).optional().describe("ピンの題の言葉（例「配信まとめ」）。いちばんよく使う呼び方"),
       ref: z.string().max(100).optional().describe("「12#3」の形（チャット番号#ピン番号）"),
@@ -127,6 +127,15 @@ export function registerManagerTools(server: McpServer, env: Env): void {
           if (r && r.chat) { chatRef = r.chat; n = r.n; }
           else if (!words) words = ref; // 番号の形でなければ題の言葉として探す
           else return asMcpTextResult({ ok: false, code: "invalid_ref", message: `ref は「12#3」の形です（受け取った値：${ref}）` });
+        }
+        // v1.128.1：q が見えていない呼び手（古い形の道具を持つチャット）が chat に題の言葉を入れても取れるように、
+        // pin が無く、番号でも住所でもなく、その言葉の名前のチャットが無いときは、ピンの題から探す
+        if (!words && chatRef && n === null) {
+          const r = parseChatRef(chatRef);
+          if (r && "words" in r) {
+            const named = pickChats(await listChats(env, { state: "すべて", limit: 300 }), r.words);
+            if (!named.length) { words = chatRef; chatRef = undefined; }
+          }
         }
         if (words && !chatRef) {
           const hits = await pinsByTitle(env, words, 8);
