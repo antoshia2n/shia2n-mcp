@@ -102,3 +102,23 @@ select to_regclass('public.mk_chats') is not null as chats,
        (select relrowsecurity from pg_class where oid = 'public.mk_chats'::regclass) as rls_chats,
        (select relrowsecurity from pg_class where oid = 'public.mk_pins'::regclass) as rls_pins,
        (select count(*) from pg_proc where proname in ('mk_add_pin', 'mk_search')) as funcs;
+
+-- ─── v1.126.0（2026-11-21 マネージャーくん 2便目）：シアニンパネルが自動で読んだ全文と、拡張用の鍵 ───
+-- Supabase に入れ済み（migration manager_kun_transcripts_ext_keys）。列と表を足し、mk_search に全文を含めただけ。
+alter table public.mk_chats add column if not exists transcript text check (transcript is null or char_length(transcript) <= 2000000);
+alter table public.mk_chats add column if not exists transcript_at timestamptz;
+alter table public.mk_chats add column if not exists turns integer;
+alter table public.mk_chats add column if not exists service text check (service is null or service in ('claude', 'chatgpt'));
+create index if not exists mk_chats_url_idx on public.mk_chats (url);
+
+create table if not exists public.mk_ext_keys (
+  id           uuid primary key default gen_random_uuid(),
+  key_hash     text not null unique,
+  label        text not null default 'シアニンパネル',
+  created_at   timestamptz not null default now(),
+  last_used_at timestamptz,
+  revoked_at   timestamptz
+);
+alter table public.mk_ext_keys enable row level security;
+revoke all on public.mk_ext_keys from anon, authenticated;
+-- mk_search は上の定義に、チャットの全文（transcript）も探す形を重ねた（定義の全文は Supabase の migration を正とする）
