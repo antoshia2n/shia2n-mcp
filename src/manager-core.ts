@@ -170,6 +170,8 @@ export function chatOut(r: Row) {
     作った: jstShort(r.created_at),
     全文を読んだ: r.transcript_at ? jstShort(r.transcript_at) : null,
     往復: r.turns == null ? null : Number(r.turns),
+    取り組み: r.initiative_no ? { 番号: String(r.initiative_no), 名前: String(r.initiative_name ?? "") } : null,
+    判断のタスク: r.tm_task_id ? `https://taskmaster.shia2n.jp/?task=${encodeURIComponent(String(r.tm_task_id))}` : null,
   };
 }
 

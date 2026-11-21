@@ -73,6 +73,8 @@ export const KNOWN_JOBS = [
   "seminar_mail",
   // 2026-11-13 追加（v1.92.0）：TaskMaster のリマインド（v1.93.0 から 30 分ごと：着手は選んだ時刻・期限切れは 7:00）
   "task_remind",
+  // 2026-11-22 追加（v1.127.0）：マネージャーくんの判断待ち → TaskMaster と、NotebookLM へのドキュメントの書き直し（30 分ごと・15 分と 45 分）
+  "manager_links",
 ] as const;
 
 export type JobName = (typeof KNOWN_JOBS)[number];

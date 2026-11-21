@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.126.2"; // 2026-11-21 マネージャーくん 2便目の直し 2（ChatGPT の往復を番号で足し合わせる）
+export const APP_VERSION = "1.127.0"; // 2026-11-22 マネージャーくん 3便目（TaskMaster・Notion・haAku・NotebookLM とつなぐ）

@@ -4,6 +4,7 @@ import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { STATES, checkPin, checkUpdate, chatOut, jstShort, normState, parsePinRef, pinNo, pinOut } from "./manager-core.js";
 import { ManagerError, addPin, lastPinTitles, listChats, pinFull, pinIndex, resolveChat, search, stateCounts, updateChat } from "./manager-store.js";
+import { initiativePatch, sessionsFor, syncDecisionTask } from "./manager-links.js";
 
 /**
  * マネージャーくんの道具（2026-11-21 v1.125.0 開発部・統括の依頼 1便目）。命名規約：manager__<action>
@@ -50,21 +51,29 @@ export function registerManagerTools(server: McpServer, env: Env): void {
   // ─── 2. manager__update ──────────────────────────────────────────
   server.tool(
     "manager__update",
-    `このチャットの状態と「何をしているか」の 1 行を書き直す。状態は ${STATES.join("・")}。呼ぶ場面：返事の最後で Naoki に判断を求めて止まるとき（state=判断待ち・doing に何を決めてほしいかを 1 行）／判断が返って作業に戻るとき（進行中）／しばらく置くとき（寝かせ中）／やり終えたとき（閉じた）。作業の中身が変わったら doing だけ直してよい。name（チャットの名前）と url（このチャットの住所）も直せる。戻り値: 成功 { ok: true, チャット: { 番号, 名前, AI, 状態, 何をしているか, 住所, ピンの数, 最後に触った } }／失敗 { ok: false, code, message }。`,
+    `このチャットの状態と「何をしているか」の 1 行を書き直す。状態は ${STATES.join("・")}。判断待ちにすると TaskMaster に「判断：チャットの名前」のタスクが立ち、判断待ちでなくなると済みになる。initiative で haAku の取り組みに結べる。呼ぶ場面：返事の最後で Naoki に判断を求めて止まるとき（state=判断待ち・doing に何を決めてほしいかを 1 行）／判断が返って作業に戻るとき（進行中）／しばらく置くとき（寝かせ中）／やり終えたとき（閉じた）。作業の中身が変わったら doing だけ直してよい。name（チャットの名前）と url（このチャットの住所）も直せる。戻り値: 成功 { ok: true, チャット: { 番号, 名前, AI, 状態, 何をしているか, 住所, ピンの数, 最後に触った } }／失敗 { ok: false, code, message }。`,
     {
       chat: z.string().max(500).describe(CHAT_DESC),
       state: z.string().max(20).optional().describe(`状態：${STATES.join("・")}`),
       doing: z.string().max(200).optional().describe("何をしているか・何を決めてほしいかの 1 行（200 字まで）"),
       name: z.string().max(120).optional().describe("チャットの名前（120 字まで）"),
       url: z.string().max(500).optional().describe("このチャットの住所（https://…）。空文字で消す"),
+      initiative: z.string().max(90).optional().describe("haAku の取り組み（2 桁の番号か名前）。空文字で外す"),
     },
-    async ({ chat, state, doing, name, url }) => {
+    async ({ chat, state, doing, name, url, initiative }) => {
       try {
-        const c = checkUpdate({ state, doing, name, url });
+        const c = state === undefined && doing === undefined && name === undefined && url === undefined && initiative !== undefined
+          ? { ok: true as const, patch: {} as Record<string, string | null> }
+          : checkUpdate({ state, doing, name, url });
         if (!c.ok) return asMcpTextResult({ ok: false, code: "invalid_update", message: c.message });
+        const ini = await initiativePatch(env, initiative);
+        if (!ini.ok) return asMcpTextResult({ ok: false, code: "invalid_initiative", message: ini.message });
         const { chat: row } = await resolveChat(env, chat);
-        const after = await updateChat(env, Number(row.no), c.patch);
-        return asMcpTextResult({ ok: true, チャット: chatOut(after) });
+        let after = await updateChat(env, Number(row.no), { ...c.patch, ...ini.patch });
+        // v1.127.0：判断待ちになったら TaskMaster に「判断：…」、外れたら済みに
+        const t = await syncDecisionTask(env, after);
+        if (t.action !== "none") after = { ...after, tm_task_id: t.action === "added" ? t.task_id : null };
+        return asMcpTextResult({ ok: true, チャット: chatOut(after), ...(t.error ? { warnings: [`TaskMaster：${t.error}`] } : {}) });
       } catch (e) { return fail(e); }
     }
   );
@@ -121,7 +130,8 @@ export function registerManagerTools(server: McpServer, env: Env): void {
         }
         const p = await pinFull(env, Number(row.no), n);
         if (!p) return asMcpTextResult({ ok: false, code: "pin_not_found", message: `チャット ${row.no}（${row.name}）にピン ${n} はありません（ピンは ${row.pin_count} 個）`, ...(候補.length ? { 候補 } : {}) });
-        return asMcpTextResult({ ok: true, ...pinOut(p, row, true), ...(候補.length ? { 候補 } : {}) });
+        const ses = await sessionsFor(env, row.url);
+        return asMcpTextResult({ ok: true, ...pinOut(p, row, true), ...(ses.length ? { Notion_Sessions: ses } : {}), ...(候補.length ? { 候補 } : {}) });
       } catch (e) { return fail(e); }
     }
   );

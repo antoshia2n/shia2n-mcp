@@ -549,6 +549,7 @@
  * v1.49.0（2026-10-26 開発部・X攻略くん 3便目）：xbunseki__get_strategy が月の方針と月の KPI（xa_months・作業 36）を、xbunseki__get_week が今週の計画（打ち手の計画のうちその週のもの）と今週の KPI（xa_weeks.kpi）を返すようにした。打ち手に振り返り（続ける・直す・やめる）を添える。表や列がまだ無いときは出さない。設定の追加 0 個。
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
+ * v1.127.0（2026-11-22 開発部・マネージャーくん 3便目・Naoki OK 00:05）：台帳をほかのアプリとつなぐ（src/manager-links.ts）。判断待ちになったら TaskMaster に「判断：チャットの名前」（マネージャーくんへのリンクつき）、外れたら済み（mk_chats.tm_task_id・道具・画面・30 分ごとの見回りで合わせる）。Notion の Sessions は「チャットURL」が同じ行を読むだけで、画面と manager__get_pin にリンクを出す。haAku の取り組みを読んでチャットに結べる（initiative_no・画面で絞れる）。NotebookLM 向けに、Naoki が共有した Google ドキュメント 1 枚へピンの全文と台帳の 1 行を 30 分ごとに書き直す（中身が変わったときだけ・FIREBASE_SA_EMAIL の身分）。設定は mk_settings。新しい鍵は 0 個。
  * v1.126.2（2026-11-21 開発部・マネージャーくん 2便目の直し 2）：ChatGPT の画面の作りが変わり（往復ごとの箱 data-turn-key・発言 data-user-message-bubble・返事 data-response-body）、シアニンパネルが ChatGPT を 1 本も読めていなかった（Claude 側は読めていた）。パネル側の読み方を直すのと合わせ、往復の番号を受けて前の分と足し合わせる（mk_chats.turns_json・ChatGPT は画面に出ている往復しか描かないため、読めなかった往復を消さない）。
  * v1.126.1（2026-11-21 開発部・マネージャーくん 2便目の直し）：本番の確かめで、claude.ai のチャットの AI が Claude Code の住所を ai_log__add に渡し、印「（台帳 #N）」を書かずに 1 本が台帳に 2 行になった。直し 2 つ：ai_log__add は住所があっても（予約タスク以外は）印を書かせる／印の行の住所が拡張で読めないページ（Claude Code のセッションなど）なら、読めたチャットの住所で結び直す。
  * v1.126.0（2026-11-21 開発部・マネージャーくん 2便目・Naoki OK 22:36）：シアニンパネルが Claude と ChatGPT のチャットの全文を自動で読んで送る口 POST /manager/ext/capture（拡張用の書くだけの鍵・sha256 だけを mk_ext_keys に持つ）。台帳との結び方は ①住所 ②全文の中の「台帳 #N」 ③新しい行。全文は mk_chats.transcript に上書き、検索でも探せる（mk_search を直した）。ai_log__add は住所の無いチャットに「最初の返事の末尾に（台帳 #N）と書く」を返す。画面に全文の表示と、パネルの中での「この拡張をつなぐ」。独自の住所 manager.shia2n.jp（wrangler の routes・workers.dev は明示して残す）。Firebase の承認済みドメインに manager.shia2n.jp を足すのは Naoki の手。
@@ -727,6 +728,7 @@ import { registerXbunsekiTools } from "./tools-xbunseki.js";
 import { registerAiLogTools } from "./tools-ai-log.js";
 import { registerManagerTools } from "./tools-manager.js";
 import { handleManager, MANAGER_PATH } from "./manager-http.js";
+import { exportNotebook, syncAllDecisionTasks } from "./manager-links.js";
 import { registerSkillsTools } from "./tools-skills.js";
 import { registerMcpAuthTools } from "./tools-mcp-auth.js";
 import { handleLineWebhook, cleanupLineInbox } from "./line-inbox.js";
@@ -1393,6 +1395,14 @@ export default {
         );
       }
     } else if (controller.cron === "15,45 * * * *") {
+      // v1.127.0：マネージャーくんのつなぎ（判断待ち ⇄ TaskMaster・NotebookLM へのドキュメント）
+      tasks.push(
+        runAndRecord(env, "manager_links", async () => {
+          const t = await syncAllDecisionTasks(env);
+          const n = await exportNotebook(env);
+          return { count: t.added + t.done + (n.wrote ? 1 : 0), detail: `判断のタスク 立てた ${t.added}・済み ${t.done}・失敗 ${t.errors}／NotebookLM：${n.message}` };
+        })
+      );
       // 2026-10-07（v1.1.0）：会員管理くんの自動写像（handleAutoMappingCron）を止めた。
       // プラン表から権利を付ける仕組みは 2026-09-07 に手放す側と決まり、支払いからの権利は
       // shr-webhook が新しい表 member_entitlement へ付けている。この枠は控えの続きだけになる。
