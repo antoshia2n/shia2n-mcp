@@ -6,7 +6,7 @@
  * 表と関数を作る SQL は sql/manager.sql（ブラウザからは読めない・管理者キーだけ）。
  */
 import type { Env } from "./index.js";
-import { chatPageOf, extMayWriteArea, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, type CaptureCheck, type Turn } from "./manager-core.js";
+import { chatPageOf, extMayWriteArea, workKey, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, type CaptureCheck, type Turn } from "./manager-core.js";
 
 type Row = Record<string, any>;
 type SbEnv = Pick<Env, "SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY">;
@@ -15,7 +15,7 @@ export class ManagerError extends Error {
   constructor(public code: string, message: string, public extra: Record<string, unknown> = {}) { super(message); }
 }
 
-const CHAT_COLS = "no,name,ai,url,state,doing,role,surface,pin_count,created_at,touched_at,transcript_at,turns,service,tm_task_id,initiative_no,initiative_name,area,area_src";
+const CHAT_COLS = "no,name,ai,url,state,doing,role,surface,pin_count,created_at,touched_at,transcript_at,turns,service,tm_task_id,initiative_no,initiative_name,area,area_src,work_id,work:mk_works(id,name,state)";
 const PIN_INDEX_COLS = "id,chat_no,n,title,created_at";
 const PICK_POOL = 500; // 名前で選ぶときに見る、最後に触った順のチャットの数
 
@@ -86,13 +86,14 @@ export async function resolveChat(env: SbEnv, ref: unknown, needPin?: number | n
 /** 一覧。state を省くと閉じた以外。ai で絞れる */
 export const UNSORTED = "未分類"; // 分野が空のチャットの棚
 
-export async function listChats(env: SbEnv, opt: { state?: string | null; ai?: string | null; limit?: number; initiative?: string | null; area?: string | null } = {}): Promise<Row[]> {
+export async function listChats(env: SbEnv, opt: { state?: string | null; ai?: string | null; limit?: number; initiative?: string | null; area?: string | null; work?: number | null } = {}): Promise<Row[]> {
   const q = [`select=${CHAT_COLS}`, `order=touched_at.desc`, `limit=${Math.min(Math.max(opt.limit ?? 50, 1), 300)}`];
   if (opt.state === "すべて") { /* 絞らない */ }
   else if (opt.state) q.push(`state=eq.${enc(opt.state)}`);
   else q.push(`state=neq.${enc("閉じた")}`);
   if (opt.ai) q.push(`ai=eq.${enc(opt.ai)}`);
   if (opt.initiative && /^\d{2}$/.test(opt.initiative)) q.push(`initiative_no=eq.${opt.initiative}`);
+  if (opt.work) q.push(`work_id=eq.${Number(opt.work)}`);
   if (opt.area === UNSORTED) q.push("area=is.null");
   else if (opt.area) q.push(`area=eq.${enc(opt.area)}`);
   return (await sb(env, `mk_chats?${q.join("&")}`)) || [];
@@ -236,21 +237,22 @@ export async function areaCounts(env: SbEnv): Promise<Array<{ 分野: string; �
 }
 
 /** やったことを 1 行足す（チャットの最後に触った時刻も進める） */
-export async function addDone(env: SbEnv, chatNo: number, text: string): Promise<{ row: Row; chat: Row }> {
-  const rows = await sb(env, `mk_done?select=id,chat_no,text,at`, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ chat_no: chatNo, text }) });
+export async function addDone(env: SbEnv, chatNo: number, text: string, link: string | null = null): Promise<{ row: Row; chat: Row }> {
+  const rows = await sb(env, `mk_done?select=id,chat_no,text,link,at`, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ chat_no: chatNo, text, ...(link ? { link } : {}) }) });
   if (!rows?.[0]) throw new ManagerError("not_written", "やったことの行が返ってきませんでした");
   const chat = await updateChat(env, chatNo, {});
+  if (chat.work_id) await touchWork(env, Number(chat.work_id));
   return { row: rows[0], chat };
 }
 
 /** そのチャットのやったこと（新しい順） */
 export async function doneOf(env: SbEnv, chatNo: number, limit = 200): Promise<Row[]> {
-  return (await sb(env, `mk_done?select=id,chat_no,text,at&chat_no=eq.${chatNo}&order=at.desc&limit=${limit}`)) || [];
+  return (await sb(env, `mk_done?select=id,chat_no,text,link,at&chat_no=eq.${chatNo}&order=at.desc&limit=${limit}`)) || [];
 }
 
 /** ある時刻からのやったこと（新しい順） */
 export async function doneSince(env: SbEnv, sinceIso: string, limit = 500): Promise<Row[]> {
-  return (await sb(env, `mk_done?select=id,chat_no,text,at&at=gte.${enc(sinceIso)}&order=at.desc&limit=${limit}`)) || [];
+  return (await sb(env, `mk_done?select=id,chat_no,text,link,at&at=gte.${enc(sinceIso)}&order=at.desc&limit=${limit}`)) || [];
 }
 
 /** ある時刻から触ったチャット（拡張が全文を読んだもの・新しい順） */
@@ -279,4 +281,87 @@ export async function pinsByTitle(env: SbEnv, q: string, limit = 20): Promise<Ro
   const cond = ws.map((w) => `title.ilike.*${w}*`).join(",");
   const rows: Row[] = (await sb(env, `mk_pins?select=${PIN_INDEX_COLS}&and=(${enc(cond)})&order=created_at.desc&limit=200`)) || [];
   return rankPins(rows, ws.join(" ")).slice(0, limit);
+}
+
+/* ─── v1.129.0（2026-11-22 5便目）：作業（分野 ＞ 作業 ＞ チャット） ─── */
+
+const WORK_COLS = "id,name,area,state,created_at,touched_at";
+
+export async function workById(env: SbEnv, id: number): Promise<Row | null> {
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const rows = await sb(env, `mk_works?select=${WORK_COLS}&id=eq.${id}`);
+  return rows?.[0] ?? null;
+}
+
+export async function touchWork(env: SbEnv, id: number): Promise<void> {
+  await sb(env, `mk_works?id=eq.${id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ touched_at: new Date().toISOString() }) });
+}
+
+/** 作業の一覧と、それぞれの中のチャット（状態だけ）。all でなければ済みは外す */
+export async function worksWithChats(env: SbEnv, opt: { all?: boolean; area?: string | null } = {}): Promise<Array<{ work: Row; chats: Row[] }>> {
+  const q = [`select=${WORK_COLS}`, "order=touched_at.desc", "limit=500"];
+  if (!opt.all) q.push(`state=eq.${enc("進行中")}`);
+  if (opt.area === UNSORTED) q.push("area=is.null"); else if (opt.area) q.push(`area=eq.${enc(opt.area)}`);
+  const works: Row[] = (await sb(env, `mk_works?${q.join("&")}`)) || [];
+  if (!works.length) return [];
+  const chats: Row[] = (await sb(env, `mk_chats?select=no,state,touched_at,work_id&work_id=in.(${works.map((w) => w.id).join(",")})&limit=5000`)) || [];
+  return works.map((w) => ({ work: w, chats: chats.filter((c) => Number(c.work_id) === Number(w.id)) }));
+}
+
+/** 同じ分野の開いている作業から、名前の形が同じものを探す。無ければ作る */
+export async function findOrCreateWork(env: SbEnv, name: string, area: string | null): Promise<{ work: Row; created: boolean }> {
+  const q = [`select=${WORK_COLS}`, `state=eq.${enc("進行中")}`, "order=touched_at.desc", "limit=500", area ? `area=eq.${enc(area)}` : "area=is.null"];
+  const open: Row[] = (await sb(env, `mk_works?${q.join("&")}`)) || [];
+  const k = workKey(name);
+  const hit = open.find((w) => workKey(w.name) === k);
+  if (hit) return { work: hit, created: false };
+  const rows = await sb(env, `mk_works?select=${WORK_COLS}`, { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ name, area }) });
+  if (!rows?.[0]) throw new ManagerError("not_written", "作業の行が返ってきませんでした");
+  return { work: rows[0], created: true };
+}
+
+/** チャットを作業に入れる（name が null なら作業から外す）。チャットの分野の中で探す */
+export async function attachWork(env: SbEnv, chat: Row, name: string | null): Promise<{ chat: Row; work: Row | null; created: boolean }> {
+  if (!name) return { chat: await updateChat(env, Number(chat.no), { work_id: null }), work: null, created: false };
+  const { work, created } = await findOrCreateWork(env, name, chat.area ?? null);
+  const after = await updateChat(env, Number(chat.no), { work_id: work.id });
+  if (!created) await touchWork(env, Number(work.id));
+  return { chat: after, work, created };
+}
+
+export async function attachWorkId(env: SbEnv, chatNo: number, workId: number | null): Promise<Row> {
+  if (workId !== null && !(await workById(env, workId))) throw new ManagerError("work_not_found", `作業 ${workId} はありません`);
+  const after = await updateChat(env, chatNo, { work_id: workId });
+  if (workId) await touchWork(env, workId);
+  return after;
+}
+
+export async function updateWork(env: SbEnv, id: number, patch: Record<string, unknown>): Promise<Row> {
+  const rows = await sb(env, `mk_works?id=eq.${id}&select=${WORK_COLS}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ ...patch, touched_at: new Date().toISOString() }) });
+  if (!rows?.[0]) throw new ManagerError("work_not_found", `作業 ${id} はありません`);
+  return rows[0];
+}
+
+/** from の作業のチャットを to へ移し、from を消す */
+export async function mergeWork(env: SbEnv, from: number, to: number): Promise<Row> {
+  if (from === to) throw new ManagerError("invalid_merge", "同じ作業にはまとめられません");
+  const [a, b] = await Promise.all([workById(env, from), workById(env, to)]);
+  if (!a || !b) throw new ManagerError("work_not_found", "作業が見つかりません");
+  await sb(env, `mk_chats?work_id=eq.${from}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ work_id: to }) });
+  await sb(env, `mk_works?id=eq.${from}`, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+  return updateWork(env, to, {});
+}
+
+/** 作業の中身：チャット・やったこと（住所つき）・ピンの題 */
+export async function workDetail(env: SbEnv, id: number): Promise<{ work: Row; chats: Row[]; done: Row[]; pins: Row[] } | null> {
+  const work = await workById(env, id);
+  if (!work) return null;
+  const chats: Row[] = (await sb(env, `mk_chats?select=${CHAT_COLS}&work_id=eq.${id}&order=touched_at.desc&limit=200`)) || [];
+  const nos = chats.map((c) => Number(c.no));
+  if (!nos.length) return { work, chats, done: [], pins: [] };
+  const [done, pins] = await Promise.all([
+    sb(env, `mk_done?select=id,chat_no,text,link,at&chat_no=in.(${nos.join(",")})&order=at.desc&limit=500`),
+    sb(env, `mk_pins?select=${PIN_INDEX_COLS}&chat_no=in.(${nos.join(",")})&order=created_at.desc&limit=500`),
+  ]);
+  return { work, chats, done: done || [], pins: pins || [] };
 }

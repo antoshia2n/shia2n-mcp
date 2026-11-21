@@ -2,8 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { STATES, areaName, checkDone, checkPin, checkUpdate, chatOut, jstShort, normState, parseChatRef, parsePinRef, pickChats, pinNo, pinOut } from "./manager-core.js";
-import { ManagerError, addDone, addPin, chatsByNos, lastPinTitles, listChats, pinFull, pinIndex, pinsByTitle, resolveChat, search, stateCounts, updateChat } from "./manager-store.js";
+import { STATES, areaName, linkUrl, normWorkState, workName, checkDone, checkPin, checkUpdate, chatOut, jstShort, normState, parseChatRef, parsePinRef, pickChats, pinNo, pinOut } from "./manager-core.js";
+import { ManagerError, addDone, addPin, attachWork, updateWork, workById, chatsByNos, lastPinTitles, listChats, pinFull, pinIndex, pinsByTitle, resolveChat, search, stateCounts, updateChat } from "./manager-store.js";
 import { initiativePatch, sessionsFor, syncDecisionTask } from "./manager-links.js";
 
 /**
@@ -17,6 +17,8 @@ import { initiativePatch, sessionsFor, syncDecisionTask } from "./manager-links.
  *   ・manager__waiting：判断待ちの一覧（統括が起動したときに読む）
  *   ・manager__list：台帳の一覧（状態・AI で絞る）
  *   ・manager__done（v1.128.0 4便目）：区切りごとに「○○をした」を 1 行残す。画面のチャットの時系列と「今日・今週やったこと」に出る
+ * v1.129.0（5便目）：作業（分野 ＞ 作業 ＞ チャット）。manager__update の work でチャットを作業に入れ（同じ分野の開いている作業から同じ名前を探し、無ければ作る）、
+ *   work_state で作業を済みにする。manager__done の link に PR の住所を添える
  * v1.128.0：ピンは題で呼ぶ（Naoki に番号を見せない）。分野（棚）は Claude・ChatGPT のプロジェクト名を拡張が入れる。manager__update の area で決めてもよい
  * 中身は src/manager-store.ts（読み書き）と src/manager-core.ts（計算だけ）。表は sql/manager.sql。
  */
@@ -53,7 +55,7 @@ export function registerManagerTools(server: McpServer, env: Env): void {
   // ─── 2. manager__update ──────────────────────────────────────────
   server.tool(
     "manager__update",
-    `このチャットの状態と「何をしているか」の 1 行を書き直す。状態は ${STATES.join("・")}。判断待ちにすると TaskMaster に「判断：チャットの名前」のタスクが立ち、判断待ちでなくなると済みになる。initiative で haAku の取り組みに結べる。呼ぶ場面：返事の最後で Naoki に判断を求めて止まるとき（state=判断待ち・doing に何を決めてほしいかを 1 行）／判断が返って作業に戻るとき（進行中）／しばらく置くとき（寝かせ中）／やり終えたとき（閉じた）。作業の中身が変わったら doing だけ直してよい。name（チャットの名前）と url（このチャットの住所）も直せる。area はこのチャットの分野（画面の棚の名前。ふつうは Claude・ChatGPT のプロジェクト名が自動で入るので、違うときだけ渡す）。戻り値: 成功 { ok: true, チャット: { 番号, 名前, AI, 状態, 何をしているか, 住所, ピンの数, 最後に触った } }／失敗 { ok: false, code, message }。`,
+    `このチャットの状態と「何をしているか」の 1 行を書き直す。状態は ${STATES.join("・")}。判断待ちにすると TaskMaster に「判断：チャットの名前」のタスクが立ち、判断待ちでなくなると済みになる。initiative で haAku の取り組みに結べる。呼ぶ場面：返事の最後で Naoki に判断を求めて止まるとき（state=判断待ち・doing に何を決めてほしいかを 1 行）／判断が返って作業に戻るとき（進行中）／しばらく置くとき（寝かせ中）／やり終えたとき（閉じた）。作業の中身が変わったら doing だけ直してよい。name（チャットの名前）と url（このチャットの住所）も直せる。area はこのチャットの分野（画面の棚の名前。ふつうは Claude・ChatGPT のプロジェクト名が自動で入るので、違うときだけ渡す）。work はこのチャットが入る作業の名前（同じ分野の開いている作業に同じ名前があればそこへ入り、無ければ新しく作る。ai_log__add が返した 開いている作業 に同じものがあれば、その名前をそのまま渡す。空文字で作業から外す）。work_state に「済み」を渡すと、このチャットの作業を済みにする（作業全体が終わったときだけ。ほかのチャットがまだ動いているなら渡さない）。戻り値: 成功 { ok: true, チャット: { 番号, 名前, AI, 状態, 何をしているか, 住所, ピンの数, 最後に触った } }／失敗 { ok: false, code, message }。`,
     {
       chat: z.string().max(500).describe(CHAT_DESC),
       state: z.string().max(20).optional().describe(`状態：${STATES.join("・")}`),
@@ -62,10 +64,14 @@ export function registerManagerTools(server: McpServer, env: Env): void {
       url: z.string().max(500).optional().describe("このチャットの住所（https://…）。空文字で消す"),
       initiative: z.string().max(90).optional().describe("haAku の取り組み（2 桁の番号か名前）。空文字で外す"),
       area: z.string().max(60).optional().describe("分野（棚の名前・60 字まで）。空文字で外す"),
+      work: z.string().max(80).optional().describe("このチャットが入る作業の名前（80 字まで）。空文字で作業から外す"),
+      work_state: z.string().max(10).optional().describe("このチャットの作業の状態：済み か 進行中"),
     },
-    async ({ chat, state, doing, name, url, initiative, area }) => {
+    async ({ chat, state, doing, name, url, initiative, area, work, work_state }) => {
       try {
-        const c = state === undefined && doing === undefined && name === undefined && url === undefined && (initiative !== undefined || area !== undefined)
+        const ws = work_state === undefined || work_state === "" ? null : normWorkState(work_state);
+        if (work_state && !ws) return asMcpTextResult({ ok: false, code: "invalid_work_state", message: "work_state は 済み か 進行中 です" });
+        const c = state === undefined && doing === undefined && name === undefined && url === undefined && (initiative !== undefined || area !== undefined || work !== undefined || ws !== null)
           ? { ok: true as const, patch: {} as Record<string, string | null> }
           : checkUpdate({ state, doing, name, url });
         if (!c.ok) return asMcpTextResult({ ok: false, code: "invalid_update", message: c.message });
@@ -74,10 +80,21 @@ export function registerManagerTools(server: McpServer, env: Env): void {
         const { chat: row } = await resolveChat(env, chat);
         const ar = area === undefined ? {} : areaName(area) ? { area: areaName(area), area_src: "チャット" } : { area: null, area_src: null };
         let after = await updateChat(env, Number(row.no), { ...c.patch, ...ini.patch, ...ar });
+        // v1.129.0：作業に入れる・作業を済みにする
+        let workNote: Record<string, unknown> = {};
+        if (work !== undefined) {
+          const r = await attachWork(env, after, workName(work));
+          after = r.chat;
+          if (r.work) workNote = { 作業: { 番号: Number(r.work.id), 名前: r.work.name, 新しく作った: r.created } };
+        }
+        if (ws && after.work_id) {
+          const w = await updateWork(env, Number(after.work_id), { state: ws });
+          after = { ...after, work: { id: w.id, name: w.name, state: w.state } };
+        }
         // v1.127.0：判断待ちになったら TaskMaster に「判断：…」、外れたら済みに
         const t = await syncDecisionTask(env, after);
         if (t.action !== "none") after = { ...after, tm_task_id: t.action === "added" ? t.task_id : null };
-        return asMcpTextResult({ ok: true, チャット: chatOut(after), ...(t.error ? { warnings: [`TaskMaster：${t.error}`] } : {}) });
+        return asMcpTextResult({ ok: true, チャット: chatOut(after), ...workNote, ...(t.error ? { warnings: [`TaskMaster：${t.error}`] } : {}) });
       } catch (e) { return fail(e); }
     }
   );
@@ -212,18 +229,57 @@ export function registerManagerTools(server: McpServer, env: Env): void {
   // ─── 7. manager__done（v1.128.0 4便目） ──────────────────────────
   server.tool(
     "manager__done",
-    "このチャットでやったことを 1 行残す。ひとまとまりの作業が終わった区切りごとに 1 回呼ぶ（例：本番に出した・案を出して決めてもらった・調べて結論を出した）。text は「○○をした」の形で、あとで Naoki が一覧で読んで何をやったか分かる言葉で（200 字まで）。マネージャーくんの画面で、チャットの時系列と「今日・今週やったこと」に並ぶ。返事の中で残したことを言う必要はない。戻り値: 成功 { ok: true, チャット番号, やったこと, 時刻 }／失敗 { ok: false, code, message }。",
+    "このチャットでやったことを 1 行残す。ひとまとまりの作業が終わった区切りごとに 1 回呼ぶ（例：本番に出した・案を出して決めてもらった・調べて結論を出した）。text は「○○をした」の形で、あとで Naoki が一覧で読んで何をやったか分かる言葉で（200 字まで）。PR を作った・出したときは link にその住所を添える（作業の画面に PR として並ぶ）。マネージャーくんの画面で、チャットの時系列と「今日・今週やったこと」に並ぶ。返事の中で残したことを言う必要はない。戻り値: 成功 { ok: true, チャット番号, やったこと, 時刻 }／失敗 { ok: false, code, message }。",
     {
       chat: z.string().max(500).describe(CHAT_DESC),
       text: z.string().max(400).describe("やったことの 1 行（「○○をした」・200 字まで）"),
+      link: z.string().max(500).optional().describe("添える住所（PR など・https://…）"),
     },
-    async ({ chat, text }) => {
+    async ({ chat, text, link }) => {
       try {
         const d = checkDone(text);
         if (!d.ok) return asMcpTextResult({ ok: false, code: "invalid_done", message: d.message });
+        const l = linkUrl(link);
+        if (!l.ok) return asMcpTextResult({ ok: false, code: "invalid_link", message: l.message });
         const { chat: row } = await resolveChat(env, chat);
-        const r = await addDone(env, Number(row.no), d.text);
-        return asMcpTextResult({ ok: true, チャット番号: Number(row.no), やったこと: r.row.text, 時刻: jstShort(r.row.at) });
+        const r = await addDone(env, Number(row.no), d.text, l.url);
+        return asMcpTextResult({ ok: true, チャット番号: Number(row.no), やったこと: r.row.text, ...(r.row.link ? { 住所: r.row.link } : {}), 時刻: jstShort(r.row.at) });
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  // ─── 8. manager__work（v1.129.0 5便目） ──────────────────────────
+  // 前からある道具に足した欄が、つないだままのチャットに見えないことがあった（2026-11-22 の確かめ）ので、作業は新しい道具 1 本でも扱えるようにする
+  server.tool(
+    "manager__work",
+    "このチャットを作業に入れる・作業を済みにする・PR を作業に残す。作業は「マネージャーくん」「るーみんの LP 直し」のような仕事のまとまりで、画面の棚では 分野 ＞ 作業 ＞ チャット と並ぶ。name：このチャットが入る作業の名前（同じ分野の開いている作業に同じ名前があればそこへ入り、無ければ新しく作る。ai_log__add が返した 開いている作業 に同じものがあれば、その名前をそのまま渡す。空文字で作業から外す）。state：「済み」で作業を済みにする（作業全体が終わったときだけ。ほかのチャットがまだ動いているなら渡さない）、「進行中」で戻す。pr：PR を作ったら住所を渡す（作業の画面に PR として並び、やったことにも 1 行残る）。戻り値: 成功 { ok: true, チャット番号, 作業: { 番号, 名前, 状態, 新しく作った? } | null }／失敗 { ok: false, code, message }。",
+    {
+      chat: z.string().max(500).describe(CHAT_DESC),
+      name: z.string().max(80).optional().describe("作業の名前（80 字まで）。空文字で作業から外す"),
+      state: z.string().max(10).optional().describe("済み か 進行中"),
+      pr: z.string().max(500).optional().describe("PR の住所（https://github.com/…/pull/…）"),
+      pr_title: z.string().max(200).optional().describe("PR で何をしたかの 1 行（省くと「PR を出した」）"),
+    },
+    async ({ chat, name, state, pr, pr_title }) => {
+      try {
+        const ws = state === undefined || state === "" ? null : normWorkState(state);
+        if (state && !ws) return asMcpTextResult({ ok: false, code: "invalid_work_state", message: "state は 済み か 進行中 です" });
+        const l = linkUrl(pr);
+        if (!l.ok) return asMcpTextResult({ ok: false, code: "invalid_link", message: l.message });
+        if (name === undefined && !ws && !l.url) return asMcpTextResult({ ok: false, code: "nothing", message: "name・state・pr のどれかを渡してください" });
+        let { chat: row } = await resolveChat(env, chat);
+        let created: boolean | undefined;
+        if (name !== undefined) { const r = await attachWork(env, row, workName(name)); row = r.chat; created = r.work ? r.created : undefined; }
+        if (l.url) {
+          const d = checkDone(pr_title || "PR を出した");
+          await addDone(env, Number(row.no), d.ok ? d.text : "PR を出した", l.url);
+        }
+        let w = row.work_id ? await workById(env, Number(row.work_id)) : null;
+        if (ws) {
+          if (!w) return asMcpTextResult({ ok: false, code: "no_work", message: "このチャットはまだ作業に入っていません。name で作業を決めてください" });
+          w = await updateWork(env, Number(w.id), { state: ws });
+        }
+        return asMcpTextResult({ ok: true, チャット番号: Number(row.no), 作業: w ? { 番号: Number(w.id), 名前: w.name, 状態: w.state, ...(created !== undefined ? { 新しく作った: created } : {}) } : null });
       } catch (e) { return fail(e); }
     }
   );

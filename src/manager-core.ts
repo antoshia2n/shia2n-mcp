@@ -173,6 +173,7 @@ export function chatOut(r: Row) {
     取り組み: r.initiative_no ? { 番号: String(r.initiative_no), 名前: String(r.initiative_name ?? "") } : null,
     判断のタスク: r.tm_task_id ? `https://taskmaster.shia2n.jp/?task=${encodeURIComponent(String(r.tm_task_id))}` : null,
     分野: r.area ? String(r.area) : null,
+    作業: r.work && r.work.id ? { 番号: Number(r.work.id), 名前: String(r.work.name ?? ""), 状態: String(r.work.state ?? "") } : null,
   };
 }
 
@@ -314,4 +315,69 @@ export function jstSince(range: "today" | "week", now = Date.now()): string {
   if (range === "today") return new Date(day0).toISOString();
   const dow = (j.getUTCDay() + 6) % 7; // 月曜 0
   return new Date(day0 - dow * 86400000).toISOString();
+}
+
+/* ─── v1.129.0（2026-11-22 5便目）：作業（分野 ＞ 作業 ＞ チャット） ─── */
+
+export const WORK_STATES = ["進行中", "済み"] as const;
+
+/** 作業の名前。空白をつめて 80 字まで。空は null */
+export function workName(v: unknown): string | null {
+  const s = String(v ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
+  return s || null;
+}
+
+/** 同じ作業かを比べるための形（全角半角・大文字小文字・空白と記号を無視） */
+export function workKey(v: unknown): string {
+  return String(v ?? "").normalize("NFKC").toLowerCase().replace(/[\s　・、。,.:：;；!！?？()（）「」『』【】\[\]〈〉<>"'`~〜\-ー_/／|｜]/g, "");
+}
+
+/** 作業の状態を言い換えて受ける。当てはまらなければ null */
+export function normWorkState(v: unknown): "進行中" | "済み" | null {
+  const k = String(v ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (!k) return null;
+  if (["済み", "済", "完了", "終わり", "閉じた", "閉じる", "done", "closed"].includes(k)) return "済み";
+  if (["進行中", "進行", "再開", "戻す", "open", "active"].includes(k)) return "進行中";
+  return null;
+}
+
+/** やったことに添える住所（PR など）。https のものだけ・500 字まで。空は null */
+export function linkUrl(v: unknown): { ok: true; url: string | null } | { ok: false; message: string } {
+  const s = String(v ?? "").trim();
+  if (!s) return { ok: true, url: null };
+  if (s.length > 500) return { ok: false, message: "link は 500 字までです" };
+  if (!/^https:\/\/[^\s]+$/i.test(s)) return { ok: false, message: "link は https:// で始まる住所です" };
+  return { ok: true, url: s };
+}
+
+/** 作業の見える状態：済み ＞ 中のチャットに判断待ちがあれば判断待ち ＞ 進行中 */
+export function workShownState(w: Row, chats: Row[]): "済み" | "判断待ち" | "進行中" {
+  if (w.state === "済み") return "済み";
+  return chats.some((c) => c.state === "判断待ち") ? "判断待ち" : "進行中";
+}
+
+/** 作業の 1 行 → 返す形 */
+export function workOut(w: Row, chats: Row[] = []) {
+  const last = [w.touched_at, ...chats.map((c) => c.touched_at)].filter(Boolean).sort().pop();
+  return {
+    番号: Number(w.id),
+    名前: String(w.name ?? ""),
+    分野: w.area ? String(w.area) : null,
+    状態: workShownState(w, chats),
+    チャットの数: chats.length,
+    判断待ち: chats.filter((c) => c.state === "判断待ち").length,
+    最後に触った: jstShort(last),
+  };
+}
+
+/** やったことの中の住所から PR を拾う（同じものは 1 つ・新しい順のまま） */
+export function prLinks(done: Array<{ link?: unknown; at?: unknown; chat_no?: unknown }>): Array<{ 住所: string; 時刻: string; チャット番号: number }> {
+  const seen = new Set<string>();
+  const out: Array<{ 住所: string; 時刻: string; チャット番号: number }> = [];
+  for (const d of done) {
+    const u = String(d.link ?? "");
+    if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(u) || seen.has(u)) continue;
+    seen.add(u); out.push({ 住所: u, 時刻: jstShort(d.at), チャット番号: Number(d.chat_no) });
+  }
+  return out;
 }
