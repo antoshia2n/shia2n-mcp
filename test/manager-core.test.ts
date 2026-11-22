@@ -98,7 +98,8 @@ import { chatPageOf, checkCapture, keyHash, markerNo, newKey, transcriptOf } fro
 test("チャットの住所：Claude と ChatGPT（GPTs・プロジェクトも）だけ。Claude Code・トップ・ほかは受けない", () => {
   assert.deepEqual(chatPageOf("https://claude.ai/chat/0b1c2d3e-aaaa-bbbb-cccc-1234567890ab?x=1#y"), { url: "https://claude.ai/chat/0b1c2d3e-aaaa-bbbb-cccc-1234567890ab", service: "claude" });
   assert.deepEqual(chatPageOf("https://chatgpt.com/c/6740aa11-2222-3333-4444-555566667777"), { url: "https://chatgpt.com/c/6740aa11-2222-3333-4444-555566667777", service: "chatgpt" });
-  assert.deepEqual(chatPageOf("https://chatgpt.com/g/g-p-abc123/c/6740aa11-2222"), { url: "https://chatgpt.com/g/g-p-abc123/c/6740aa11-2222", service: "chatgpt" });
+  assert.deepEqual(chatPageOf("https://chatgpt.com/g/g-p-abc123/c/6740aa11-2222"), { url: "https://chatgpt.com/c/6740aa11-2222", service: "chatgpt" }); // v1.132.1：プロジェクトの部分は外す
+  assert.deepEqual(chatPageOf("https://chatgpt.com/g/g-p-abc123-xji-shi/c/6740aa11-2222"), { url: "https://chatgpt.com/c/6740aa11-2222", service: "chatgpt" });
   assert.deepEqual(chatPageOf("https://chat.openai.com/c/6740aa11-2222")?.url, "https://chatgpt.com/c/6740aa11-2222");
   assert.equal(chatPageOf("https://claude.ai/code/session_01Hnm"), null);
   assert.equal(chatPageOf("https://claude.ai/new"), null);

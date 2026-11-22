@@ -199,7 +199,10 @@ export function chatPageOf(u: unknown): { url: string; service: "claude" | "chat
   if (x.protocol !== "https:") return null;
   const path = x.pathname.replace(/\/+$/, "");
   if (x.hostname === "claude.ai" && /^\/chat\/[0-9a-f-]{8,}$/i.test(path)) return { url: `https://claude.ai${path}`, service: "claude" };
-  if ((x.hostname === "chatgpt.com" || x.hostname === "chat.openai.com") && /^(?:\/g\/[A-Za-z0-9_-]+)?\/c\/[A-Za-z0-9-]{8,}$/.test(path)) return { url: `https://chatgpt.com${path}`, service: "chatgpt" };
+  // v1.132.1：ChatGPT のプロジェクトのチャットは /g/<プロジェクト>/c/<番号> で、プロジェクトの部分が途中で変わる（-xji-… が付く）。
+  // 会話の番号だけで決まるので /c/<番号> の形にそろえる
+  const cg = path.match(/^(?:\/g\/[A-Za-z0-9_-]+)?\/c\/([A-Za-z0-9-]{8,})$/);
+  if ((x.hostname === "chatgpt.com" || x.hostname === "chat.openai.com") && cg) return { url: `https://chatgpt.com/c/${cg[1]}`, service: "chatgpt" };
   return null;
 }
 
