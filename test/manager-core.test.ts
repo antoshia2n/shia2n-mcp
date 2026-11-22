@@ -246,3 +246,33 @@ test("groupName・checkCapture の group", () => {
   const c = cc2({ url: "https://claude.ai/chat/0123abcd-0000-0000-0000-000000000000", title: "t", turns: [{ user: "a", reply: "b" }], group: "試しの作業" });
   assert.ok(c.ok && c.group === "試しの作業");
 });
+
+/* v1.133.0：誰の番・進み具合・タブ */
+import { turnLabel, nextTurn, workProgress, checkTabs } from "../src/manager-core.ts";
+test("turnLabel：寝かせ中・閉じたは出さない、判断待ちは Naoki の番", () => {
+  assert.equal(turnLabel({ state: "進行中", turn: "AI" }), "AI が作業中");
+  assert.equal(turnLabel({ state: "進行中", turn: "新着" }), "返事が来た");
+  assert.equal(turnLabel({ state: "判断待ち", turn: null }), "Naoki の番");
+  assert.equal(turnLabel({ state: "閉じた", turn: "新着" }), null);
+  assert.equal(turnLabel({ state: "進行中", turn: null }), null);
+});
+test("nextTurn：変わっていなければ前のまま、裏で開いただけでは点かない", () => {
+  assert.equal(nextTurn("Naoki", false, false), null);
+  assert.equal(nextTurn("新着", false, true), "Naoki");
+  assert.equal(nextTurn(null, true, false), "新着");
+  assert.equal(nextTurn("新着", true, true), "Naoki");
+  assert.equal(nextTurn("AI", false, false), "新着");
+});
+test("workProgress：Naoki の番が先に赤、AI だけなら青、済みは灰", () => {
+  const w = { state: "進行中" };
+  assert.equal(workProgress(w, [{ state: "進行中", turn: "AI" }], []).色, "blue");
+  const p = workProgress(w, [{ state: "進行中", turn: "AI" }], [{ state: "OK待ち" }, { state: "済み" }, { state: "やめた" }]);
+  assert.deepEqual([p.色, p.Naokiの番, p.AIが作業中, p.依頼の済み, p.依頼の全部], ["red", 1, 1, 1, 2]);
+  assert.equal(workProgress({ state: "済み" }, [], []).色, "grey");
+  assert.equal(workProgress(w, [{ state: "進行中", turn: null }], []).色, "green");
+});
+test("checkTabs：http(s) だけ・同じ住所は 1 つ・40 本まで", () => {
+  const t = checkTabs([{ url: "https://github.com/a/b/pull/1", title: "PR" }, { url: "https://github.com/a/b/pull/1" }, { url: "chrome://extensions" }, { url: "javascript:alert(1)" }]);
+  assert.deepEqual(t, [{ url: "https://github.com/a/b/pull/1", title: "PR" }]);
+  assert.equal(checkTabs(Array.from({ length: 50 }, (_, i) => ({ url: `https://x.jp/${i}` }))).length, 40);
+});

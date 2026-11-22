@@ -276,7 +276,7 @@ async function fire(env: Env, req: Row, url: string, token: string): Promise<Fir
   if (!work) { await patchIf(env, id, ["実行中"], { state: "止まった", result: "作業が見つかりませんでした", done_at: new Date().toISOString() }); return { ok: false, request_id: id, message: "作業が見つかりません" }; }
   const chat = await createChat(env, { name: `実行係：${String(req.title).slice(0, 100)}`, ai: "claude", state: "進行中", role: RUN_ROLE, surface: RUN_SURFACE, area: work.area ?? null });
   const runNo = Number(chat.no);
-  await updateChat(env, runNo, { work_id: work.id });
+  await updateChat(env, runNo, { work_id: work.id, turn: "AI", turn_at: new Date().toISOString() });
   const [parent, done, chats] = await Promise.all([
     req.parent_id ? requestById(env, Number(req.parent_id)) : Promise.resolve(null),
     sb(env, `mk_done?select=text,link,at,chat_no&chat_no=in.(${await workChatNos(env, Number(work.id))})&order=at.desc&limit=8`).catch(() => []),
@@ -294,7 +294,7 @@ async function fire(env: Env, req: Row, url: string, token: string): Promise<Fir
     // 届いたか分からない：二重に動かさないため止めて、Naoki に確かめてもらう
     const msg = `実行係を呼んだが返事が来なかった（${String((e as Error)?.message || e).slice(0, 120)}）。claude.ai/code にこの依頼のセッションができていないか確かめてから、直しで出し直す`;
     await patchIf(env, id, ["実行中"], { state: "止まった", result: msg, run_chat_no: runNo, done_at: new Date().toISOString() });
-    await updateChat(env, runNo, { state: "判断待ち", doing: msg.slice(0, 200) });
+    await updateChat(env, runNo, { state: "判断待ち", doing: msg.slice(0, 200), turn: "新着", turn_at: new Date().toISOString() });
     return { ok: false, request_id: id, message: msg };
   }
   const body = (await res.json().catch(() => ({}))) as { claude_code_session_url?: string; error?: { message?: string; type?: string } };
@@ -330,7 +330,7 @@ export async function reportRequest(env: Env, id: number, input: { state: "済�
   if (runNo) {
     if (input.pr) await addDone(env, runNo, (input.pr_title || "PR を出した").slice(0, 200), input.pr);
     await addDone(env, runNo, `${input.state === "済み" ? "依頼を終えた" : "依頼を止めた"}：${input.result.replace(/\s+/g, " ").slice(0, 160)}`);
-    const chat = await updateChat(env, runNo, input.state === "済み" ? { state: "閉じた", doing: "" } : { state: "判断待ち", doing: `依頼 #${id} で止まった：${input.result.replace(/\s+/g, " ").slice(0, 150)}` });
+    const chat = await updateChat(env, runNo, input.state === "済み" ? { state: "閉じた", doing: "", turn: null } : { state: "判断待ち", doing: `依頼 #${id} で止まった：${input.result.replace(/\s+/g, " ").slice(0, 150)}`, turn: "新着", turn_at: new Date().toISOString() });
     await syncDecisionTask(env, chat);
   }
   const next = await runNext(env, Number(after.work_id));

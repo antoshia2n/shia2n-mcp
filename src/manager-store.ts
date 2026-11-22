@@ -6,7 +6,7 @@
  * 表と関数を作る SQL は sql/manager.sql（ブラウザからは読めない・管理者キーだけ）。
  */
 import type { Env } from "./index.js";
-import { chatPageOf, extMayWriteArea, workKey, groupName, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, type CaptureCheck, type Turn } from "./manager-core.js";
+import { chatPageOf, extMayWriteArea, workKey, groupName, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, nextTurn, workProgress, type CaptureCheck, type Turn, type TabRow } from "./manager-core.js";
 
 type Row = Record<string, any>;
 type SbEnv = Pick<Env, "SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY">;
@@ -15,7 +15,7 @@ export class ManagerError extends Error {
   constructor(public code: string, message: string, public extra: Record<string, unknown> = {}) { super(message); }
 }
 
-const CHAT_COLS = "no,name,ai,url,state,doing,role,surface,pin_count,created_at,touched_at,transcript_at,turns,service,tm_task_id,initiative_no,initiative_name,area,area_src,work_id,work:mk_works(id,name,state)";
+const CHAT_COLS = "no,name,ai,url,state,doing,role,surface,pin_count,created_at,touched_at,transcript_at,turns,service,tm_task_id,initiative_no,initiative_name,area,area_src,work_id,turn,turn_at,work:mk_works(id,name,state)";
 const PIN_INDEX_COLS = "id,chat_no,n,title,created_at";
 const PICK_POOL = 500; // 名前で選ぶときに見る、最後に触った順のチャットの数
 
@@ -177,6 +177,8 @@ export async function attachGroup(env: SbEnv, chatNo: number, group: string): Pr
   const chat = await chatByNo(env, chatNo);
   if (!chat || !name) throw new ManagerError("chat_not_found", "チャットがありません");
   if (chat.work && workKey(chat.work.name) === workKey(name) && chat.work.state === "進行中") return { chat, work: chat.work };
+  const any = await openWorkNamed(env, name); // v1.133.0：同じ名前の作業がほかの分野にあれば、そこへ入れる
+  if (any) return { chat: await attachWorkId(env, chatNo, Number(any.id)), work: any };
   const r = await attachWork(env, chat, name);
   return { chat: r.chat, work: r.work };
 }
@@ -187,12 +189,15 @@ async function applyCaptureRow(env: SbEnv, cap: Extract<CaptureCheck, { ok: true
   const hit = await chatByUrl(env, cap.url);
   if (hit) {
     const patch: Record<string, unknown> = { ...body };
+    const prev = await sb(env, `mk_chats?select=turns_json,transcript&no=eq.${hit.no}`);
     // v1.126.2：往復の番号があれば、前に受けた分と足し合わせる（画面に出ていない往復を消さない）
     if (cap.list.some((t) => t.k)) {
-      const prev = await sb(env, `mk_chats?select=turns_json&no=eq.${hit.no}`);
       const merged = mergeTurns((prev?.[0]?.turns_json as Turn[] | null) ?? null, cap.list);
       Object.assign(patch, { turns_json: merged, turns: merged.length, transcript: joinTurns(merged, cap.service) });
     }
+    // v1.133.0：誰の番。中身が変わったときだけ「返事が来た」にする（裏で開いただけのタブで点かない）
+    const turn = nextTurn(hit.turn, String(prev?.[0]?.transcript ?? "") !== String(patch.transcript), cap.seen);
+    if (turn && turn !== hit.turn) Object.assign(patch, { turn, turn_at: new Date().toISOString() });
     if (hit.surface === PANEL_SURFACE && hit.name !== cap.title) patch.name = cap.title; // 拡張が作った行だけ、題の変化に合わせる
     if (extMayWriteArea(hit, cap.project)) Object.assign(patch, { area: cap.project, area_src: "拡張" }); // v1.128.0：プロジェクト名を棚に
     const r = await updateChat(env, Number(hit.no), patch);
@@ -210,7 +215,7 @@ async function applyCaptureRow(env: SbEnv, cap: Extract<CaptureCheck, { ok: true
   }
   const row = await createChat(env, { name: cap.title, ai: cap.service === "chatgpt" ? "gpt" : "claude", state: "進行中", url: cap.url, surface: PANEL_SURFACE,
     ...(cap.project ? { area: cap.project, area_src: "拡張" } : {}) });
-  const r = await updateChat(env, Number(row.no), body);
+  const r = await updateChat(env, Number(row.no), { ...body, turn: "Naoki", turn_at: now });
   return { no: Number(r.no), how: "new", name: String(r.name) };
 }
 
@@ -301,7 +306,7 @@ export async function pinsByTitle(env: SbEnv, q: string, limit = 20): Promise<Ro
 
 /* ─── v1.129.0（2026-11-22 5便目）：作業（分野 ＞ 作業 ＞ チャット） ─── */
 
-const WORK_COLS = "id,name,area,state,level,created_at,touched_at";
+const WORK_COLS = "id,name,area,state,level,tabs,tabs_at,created_at,touched_at";
 
 export async function workById(env: SbEnv, id: number): Promise<Row | null> {
   if (!Number.isInteger(id) || id <= 0) return null;
@@ -314,14 +319,18 @@ export async function touchWork(env: SbEnv, id: number): Promise<void> {
 }
 
 /** 作業の一覧と、それぞれの中のチャット（状態だけ）。all でなければ済みは外す */
-export async function worksWithChats(env: SbEnv, opt: { all?: boolean; area?: string | null } = {}): Promise<Array<{ work: Row; chats: Row[] }>> {
+export async function worksWithChats(env: SbEnv, opt: { all?: boolean; area?: string | null } = {}): Promise<Array<{ work: Row; chats: Row[]; reqs: Row[] }>> {
   const q = [`select=${WORK_COLS}`, "order=touched_at.desc", "limit=500"];
   if (!opt.all) q.push(`state=eq.${enc("進行中")}`);
   if (opt.area === UNSORTED) q.push("area=is.null"); else if (opt.area) q.push(`area=eq.${enc(opt.area)}`);
   const works: Row[] = (await sb(env, `mk_works?${q.join("&")}`)) || [];
   if (!works.length) return [];
-  const chats: Row[] = (await sb(env, `mk_chats?select=no,state,touched_at,work_id&work_id=in.(${works.map((w) => w.id).join(",")})&limit=5000`)) || [];
-  return works.map((w) => ({ work: w, chats: chats.filter((c) => Number(c.work_id) === Number(w.id)) }));
+  const ids = works.map((w) => w.id).join(",");
+  const [chats, reqs]: [Row[], Row[]] = await Promise.all([
+    sb(env, `mk_chats?select=no,state,touched_at,work_id,turn&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
+    sb(env, `mk_requests?select=work_id,state&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
+  ]);
+  return works.map((w) => ({ work: w, chats: chats.filter((c) => Number(c.work_id) === Number(w.id)), reqs: reqs.filter((r) => Number(r.work_id) === Number(w.id)) }));
 }
 
 /** 同じ分野の開いている作業から、名前の形が同じものを探す。無ければ作る */
@@ -380,4 +389,51 @@ export async function workDetail(env: SbEnv, id: number): Promise<{ work: Row; c
     sb(env, `mk_pins?select=${PIN_INDEX_COLS}&chat_no=in.(${nos.join(",")})&order=created_at.desc&limit=500`),
   ]);
   return { work, chats, done: done || [], pins: pins || [] };
+}
+
+/* ─── v1.133.0（2026-11-22 7便目）：誰の番・タブの保存 ─── */
+
+/** 分野を問わず、開いている作業から名前の形が同じものを探す（いちばん最近触ったもの） */
+export async function openWorkNamed(env: SbEnv, name: string): Promise<Row | null> {
+  const k = workKey(name);
+  const open: Row[] = (await sb(env, `mk_works?select=${WORK_COLS}&state=eq.${enc("進行中")}&order=touched_at.desc&limit=500`)) || [];
+  return open.find((w) => workKey(w.name) === k) ?? null;
+}
+
+/** 拡張からの合図：AI が書き始めた／Naoki がそのタブを見た。台帳に無いチャットは何もしない */
+export async function setTurnByUrl(env: SbEnv, url: string, kind: "AI" | "seen"): Promise<Row | null> {
+  const c = await chatByUrl(env, url);
+  if (!c) return null;
+  const turn = kind === "AI" ? "AI" : c.turn === "新着" ? "Naoki" : null;
+  if (!turn || turn === c.turn) return c;
+  const rows = await sb(env, `mk_chats?no=eq.${c.no}&select=${CHAT_COLS}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ turn, turn_at: new Date().toISOString() }) });
+  return rows?.[0] ?? c;
+}
+
+/** 作業の色（まとまりを塗る）：中のチャットと依頼から */
+export async function workColor(env: SbEnv, workId: number): Promise<{ name: string; color: string } | null> {
+  const w = await workById(env, workId);
+  if (!w) return null;
+  const [chats, reqs] = await Promise.all([
+    sb(env, `mk_chats?select=no,state,turn&work_id=eq.${workId}&limit=500`),
+    sb(env, `mk_requests?select=state&work_id=eq.${workId}&limit=500`),
+  ]);
+  return { name: String(w.name), color: workProgress(w, chats || [], reqs || []).色 };
+}
+
+/** タブのまとまりの中身を作業へ写す。作業が無ければ作る（分野は中のチャットの分野でいちばん多いもの） */
+export async function saveGroupTabs(env: SbEnv, group: string, tabs: TabRow[]): Promise<{ work: Row; created: boolean }> {
+  const name = groupName(group);
+  if (!name) throw new ManagerError("invalid", "まとまりの名前がありません");
+  let work = await openWorkNamed(env, name);
+  let created = false;
+  if (!work) {
+    const areas: string[] = [];
+    for (const t of tabs) { const p = chatPageOf(t.url); if (!p) continue; const c = await chatByUrl(env, p.url); if (c?.area) areas.push(String(c.area)); }
+    const top = areas.sort((a, b) => areas.filter((x) => x === b).length - areas.filter((x) => x === a).length)[0] ?? null;
+    const r = await findOrCreateWork(env, name, top);
+    work = r.work; created = r.created;
+  }
+  const rows = await sb(env, `mk_works?id=eq.${work.id}&select=${WORK_COLS}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ tabs, tabs_at: new Date().toISOString(), touched_at: new Date().toISOString() }) });
+  return { work: rows?.[0] ?? work, created };
 }

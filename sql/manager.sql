@@ -205,3 +205,7 @@ create index if not exists mk_requests_state_idx on public.mk_requests (state, c
 alter table public.mk_requests enable row level security;
 revoke all on public.mk_requests from anon, authenticated;
 -- 実行係（ルーティン）の住所と鍵は mk_settings の routine_url・routine_token（ブラウザからは読めない）
+
+-- v1.133.0（2026-11-22 7便目）：誰の番とタブの保存（Supabase に入れ済み：manager_kun_tabs_turns）
+alter table public.mk_chats add column if not exists turn text check (turn in ('AI','新着','Naoki')), add column if not exists turn_at timestamptz;
+alter table public.mk_works add column if not exists tabs jsonb, add column if not exists tabs_at timestamptz;
