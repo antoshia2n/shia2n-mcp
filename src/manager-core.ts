@@ -242,7 +242,7 @@ export function mergeTurns(old: Turn[] | null | undefined, cur: Turn[]): Turn[] 
 }
 
 export type CaptureCheck =
-  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number; list: Turn[]; project: string | null }
+  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number; list: Turn[]; project: string | null; group: string | null }
   | { ok: false; message: string };
 /** 拡張から来た 1 件を確かめる。題は 120 字まで（無ければ最初の発言から）、全文は 2,000,000 字まで */
 export function checkCapture(body: Record<string, unknown>): CaptureCheck {
@@ -257,7 +257,7 @@ export function checkCapture(body: Record<string, unknown>): CaptureCheck {
   if (transcript.length > 2000000) return { ok: false, message: "全文が 2,000,000 字を超えています" };
   const fallback = turns[0].user.trim().replace(/\s+/g, " ").slice(0, 60) || "名前のないチャット";
   const title = chatName(String(body.title ?? "").replace(/\s*[-|｜]\s*(ChatGPT|Claude)\s*$/, "")) || fallback;
-  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length, list: turns, project: areaName(body.project) };
+  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length, list: turns, project: areaName(body.project), group: groupName(body.group) };
 }
 
 /** 鍵の文字列 → sha256（16 進）。鍵そのものは台帳に置かない */
@@ -381,4 +381,10 @@ export function prLinks(done: Array<{ link?: unknown; at?: unknown; chat_no?: un
     seen.add(u); out.push({ 住所: u, 時刻: jstShort(d.at), チャット番号: Number(d.chat_no) });
   }
   return out;
+}
+
+/** Chrome のタブのまとまりの名前（作業の名前になる）。空白をつめて 80 字まで。空は null（v1.132.0） */
+export function groupName(v: unknown): string | null {
+  const s = String(v ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
+  return s || null;
 }
