@@ -49,7 +49,9 @@ export function registerManagerTools(server: McpServer, env: Env): void {
         if (!c.ok) return asMcpTextResult({ ok: false, code: "invalid_pin", message: c.message });
         const { chat: row } = await resolveChat(env, chat);
         const p = await addPin(env, Number(row.no), c.title, c.body);
-        return asMcpTextResult({ ok: true, ...pinOut(p, row), 字数: c.body.length });
+        const o = pinOut(p, row);
+        // v1.139.0：説明を覚え直していないチャットでも、返事にリンクが付くよう、戻り値の中で頼む
+        return asMcpTextResult({ ok: true, ...o, 字数: c.body.length, 返事に書くこと: `「ピン：${o.題}」と、このリンクを押せる形で1行添える → ${o.リンク}` });
       } catch (e) { return fail(e); }
     }
   );
