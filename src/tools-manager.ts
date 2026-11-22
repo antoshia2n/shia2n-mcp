@@ -5,6 +5,7 @@ import type { Env } from "./index.js";
 import { STATES, areaName, linkUrl, normWorkState, workName, checkDone, checkPin, checkUpdate, chatOut, jstShort, normState, parseChatRef, parsePinRef, pickChats, pinNo, pinOut } from "./manager-core.js";
 import { ManagerError, addDone, addPin, attachWork, updateWork, workById, chatsByNos, lastPinTitles, listChats, pinFull, pinIndex, pinsByTitle, resolveChat, search, stateCounts, updateChat } from "./manager-store.js";
 import { initiativePatch, sessionsFor, syncDecisionTask } from "./manager-links.js";
+import { reportRequest, requestOut, requestsByState, submitRequest, workOfChat } from "./manager-run.js";
 
 /**
  * マネージャーくんの道具（2026-11-21 v1.125.0 開発部・統括の依頼 1便目）。命名規約：manager__<action>
@@ -192,8 +193,10 @@ export function registerManagerTools(server: McpServer, env: Env): void {
         const rows = (await listChats(env, { state: "判断待ち", limit: 200 })).reverse();
         const last = await lastPinTitles(env, rows.map((r) => Number(r.no)));
         const counts = await stateCounts(env);
+        const oks = await requestsByState(env, ["OK待ち"]).catch(() => []);
         return asMcpTextResult({
           ok: true, 件数: rows.length,
+          ...(oks.length ? { OK待ちの依頼: oks.map((x) => ({ 番号: Number(x.req.id), 作業: x.work?.name ?? "", 題: x.req.title, 住所: `https://manager.shia2n.jp/#r${x.req.id}` })) } : {}),
           一覧: rows.map((r) => { const o = chatOut(r); const lp = last[Number(r.no)]; return { 番号: o.番号, 名前: o.名前, AI: o.AI, 何をしているか: o.何をしているか, 住所: o.住所, 最後に触った: o.最後に触った, ...(lp ? { 最後のピン: `${r.no}#${lp.n} ${lp.title}` } : {}) }; }),
           状態ごと: counts,
         });
@@ -280,6 +283,52 @@ export function registerManagerTools(server: McpServer, env: Env): void {
           w = await updateWork(env, Number(w.id), { state: ws });
         }
         return asMcpTextResult({ ok: true, チャット番号: Number(row.no), 作業: w ? { 番号: Number(w.id), 名前: w.name, 状態: w.state, ...(created !== undefined ? { 新しく作った: created } : {}) } : null });
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  // ─── 9. manager__propose（v1.131.0 6便目） ──────────────────────
+  server.tool(
+    "manager__propose",
+    "このチャットの作業に「依頼」を 1 件出す（実行係＝Claude Code のルーティンに任せる仕事）。作業の段階が 1 なら Naoki の OK を待ち（TaskMaster に「OK待ち：…」が立つ）、2 ならそのまま実行係が動き、0 なら控えとして残るだけ。出す前に、このチャットが作業に入っていること（manager__work の name）。title は何をするかの 1 行、body は実行係が読んで迷わない中身（目的・やること・終わりの形）、why はなぜ、stop は止める条件（これに当たったら実行係は止まって報告する）、recipe は使うレシピの名前（決めていれば）。Naoki が「これ任せて」「実行係に回して」と言ったとき、または段階 2 の作業で次の手が決まったときに呼ぶ。勝手に何件も出さない（同じ作業で同時に動くのは 1 つ）。戻り値: 成功 { ok: true, 依頼: { 番号, 作業, 題, 状態, … }, 実行?: { ok, session_url?, message } }／失敗 { ok: false, code, message }。",
+    {
+      chat: z.string().max(500).describe(CHAT_DESC),
+      title: z.string().max(200).describe("何をするかの 1 行（120 字まで）"),
+      body: z.string().max(20000).optional().describe("実行係が読む中身（目的・やること・終わりの形）"),
+      why: z.string().max(1000).optional().describe("なぜ"),
+      stop: z.string().max(1000).optional().describe("止める条件"),
+      recipe: z.string().max(120).optional().describe("使うレシピの名前（決めていれば）"),
+    },
+    async ({ chat, title, body, why, stop, recipe }) => {
+      try {
+        const { chat: row } = await resolveChat(env, chat);
+        const work = await workOfChat(env, Number(row.no));
+        if (!work) return asMcpTextResult({ ok: false, code: "no_work", message: "このチャットはまだ作業に入っていません。先に manager__work の name で作業を決めてください" });
+        const r = await submitRequest(env, Number(work.id), { title, body, why, stop, recipe }, { source: "チャット", from_chat_no: Number(row.no) });
+        return asMcpTextResult({ ok: true, 依頼: requestOut(r.req, work), ...(r.fired ? { 実行: r.fired } : {}), 住所: `https://manager.shia2n.jp/#r${r.req.id}` });
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  // ─── 10. manager__report（v1.131.0 6便目） ──────────────────────
+  server.tool(
+    "manager__report",
+    "実行係（マネージャーくんの依頼で起きたセッション）が、依頼の結果を返す。終えたら state=済み、止める条件に当たった・判断が要る・続けられないときは state=止まった。result は Naoki が読んで分かる結果の数行（何をしたか・どこを見ればいいか・止まったなら何を決めてほしいか）。PR を出したら pr に住所と pr_title。呼ぶと依頼が閉じ、同じ作業の次の順番待ちが動く。依頼番号は届いた依頼の文の「依頼番号」。戻り値: 成功 { ok: true, 依頼: { 番号, 状態, … }, 次?: { ok, message } }／失敗 { ok: false, code, message }。",
+    {
+      request: z.number().int().positive().describe("依頼番号"),
+      state: z.string().max(10).describe("済み か 止まった"),
+      result: z.string().min(1).max(4000).describe("結果（数行）"),
+      pr: z.string().max(500).optional().describe("PR の住所"),
+      pr_title: z.string().max(200).optional().describe("PR で何をしたかの 1 行"),
+    },
+    async ({ request, state, result, pr, pr_title }) => {
+      try {
+        const st = /止|stop|fail|block/i.test(state) ? "止まった" : /済|完了|done|ok/i.test(state) ? "済み" : null;
+        if (!st) return asMcpTextResult({ ok: false, code: "invalid_state", message: "state は 済み か 止まった です" });
+        const l = linkUrl(pr);
+        if (!l.ok) return asMcpTextResult({ ok: false, code: "invalid_link", message: l.message });
+        const r = await reportRequest(env, request, { state: st, result, pr: l.url, pr_title: pr_title ?? null });
+        return asMcpTextResult({ ok: true, 依頼: requestOut(r.req), ...(r.next ? { 次: r.next } : {}) });
       } catch (e) { return fail(e); }
     }
   );

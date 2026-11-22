@@ -366,6 +366,7 @@ export function workOut(w: Row, chats: Row[] = []) {
     状態: workShownState(w, chats),
     チャットの数: chats.length,
     判断待ち: chats.filter((c) => c.state === "判断待ち").length,
+    段階: w.level === undefined || w.level === null ? 1 : Number(w.level),
     最後に触った: jstShort(last),
   };
 }

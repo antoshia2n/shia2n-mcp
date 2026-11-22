@@ -285,7 +285,7 @@ export async function pinsByTitle(env: SbEnv, q: string, limit = 20): Promise<Ro
 
 /* ─── v1.129.0（2026-11-22 5便目）：作業（分野 ＞ 作業 ＞ チャット） ─── */
 
-const WORK_COLS = "id,name,area,state,created_at,touched_at";
+const WORK_COLS = "id,name,area,state,level,created_at,touched_at";
 
 export async function workById(env: SbEnv, id: number): Promise<Row | null> {
   if (!Number.isInteger(id) || id <= 0) return null;
