@@ -379,6 +379,7 @@ export function workOut(w: Row, chats: Row[] = [], reqs: Row[] = []) {
     進み: workProgress(w, chats, reqs),
     タブの数: Array.isArray(w.tabs) ? w.tabs.length : 0,
     タブ: Array.isArray(w.tabs) ? w.tabs.map((t: any) => String(t.url)) : [],
+    保存したタブ: Array.isArray(w.tabs) ? w.tabs.map((t: any) => ({ 住所: String(t.url), 題: String(t.title || "") })) : [],
     最後にやったこと: w.last_done ? { 中身: String(w.last_done.text), 時刻: jstShort(w.last_done.at) } : null,
     今のチャット: nowChats(chats).map((c) => ({ 番号: Number(c.no), 名前: String(c.name ?? ""), 住所: c.url ? String(c.url) : null, AI: String(c.ai ?? ""), 番: turnLabel(c) })),
   };
