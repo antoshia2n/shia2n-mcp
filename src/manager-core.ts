@@ -432,7 +432,7 @@ export function workProgress(w: Row, chats: Row[], reqs: Row[]) {
 
 export type TabRow = { url: string; title: string };
 /** 保存するタブ：http(s) の住所だけ・同じ住所は 1 つ・40 本まで。題は 200 字まで */
-export function checkTabs(v: unknown): TabRow[] {
+export function checkTabs(v: unknown, max = 40): TabRow[] {
   const seen = new Set<string>();
   const out: TabRow[] = [];
   for (const t of Array.isArray(v) ? v : []) {
@@ -440,7 +440,7 @@ export function checkTabs(v: unknown): TabRow[] {
     if (!/^https?:\/\/[^\s]+$/i.test(url) || url.length > 2000 || seen.has(url)) continue;
     seen.add(url);
     out.push({ url, title: String((t as any)?.title ?? "").replace(/\s+/g, " ").trim().slice(0, 200) });
-    if (out.length >= 40) break;
+    if (out.length >= max) break;
   }
   return out;
 }
