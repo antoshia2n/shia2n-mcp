@@ -306,8 +306,9 @@ async function groupHook(request: Request, env: Env): Promise<Response> {
     const page = chatPageOf(body.url);
     const g = groupName(body.group);
     if (!page || !g) return out({ ok: false, error: "invalid", message: "チャットの住所とまとまりの名前が要ります" }, 400);
-    const c = await chatByUrl(env, page.url);
-    if (!c) return out({ ok: true, skip: true, message: "まだ台帳に無いチャット（読み込んだときに入れる）" });
+    // v1.132.1：台帳に無いチャットは、その場で行を作って作業に入れる（全文と名前は拡張が読んだときに入る）
+    let c = await chatByUrl(env, page.url);
+    if (!c) c = await createChat(env, { name: chatName(String(body.title || "").replace(/\s*[-|｜]\s*(ChatGPT|Claude)\s*$/, "")) || "読み込み待ちのチャット", ai: page.service === "chatgpt" ? "gpt" : "claude", state: "進行中", url: page.url, surface: PANEL_SURFACE });
     const r = await attachGroup(env, Number(c.no), g);
     return out({ ok: true, 番号: Number(c.no), 作業: r.work?.name ?? null });
   } catch (e) {
