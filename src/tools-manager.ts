@@ -1,9 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { pendingScores, setKind } from "./manager-score.js";
+import { setFolder, tmOpen } from "./manager-folders.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
-import { STATES, areaName, linkUrl, normWorkState, workName, checkDone, checkPin, checkUpdate, chatOut, jstShort, normState, parseChatRef, parsePinRef, pickChats, pinNo, pinOut } from "./manager-core.js";
+import { STATES, workKey, areaName, linkUrl, normWorkState, workName, checkDone, checkPin, checkUpdate, chatOut, jstShort, normState, parseChatRef, parsePinRef, pickChats, pinNo, pinOut } from "./manager-core.js";
 import { ManagerError, addDone, addPin, attachWork, updateWork, workById, chatsByNos, lastPinTitles, listChats, pinFull, pinIndex, pinsByTitle, resolveChat, search, stateCounts, updateChat } from "./manager-store.js";
 import { initiativePatch, sessionsFor, syncDecisionTask } from "./manager-links.js";
 import { reportRequest, requestOut, requestsByState, submitRequest, workOfChat } from "./manager-run.js";
@@ -267,7 +268,7 @@ export function registerManagerTools(server: McpServer, env: Env): void {
   // 前からある道具に足した欄が、つないだままのチャットに見えないことがあった（2026-11-22 の確かめ）ので、作業は新しい道具 1 本でも扱えるようにする
   server.tool(
     "manager__work",
-    "このチャットを作業に入れる・作業を済みにする・PR を作業に残す。作業は「マネージャーくん」「るーみんの LP 直し」のような仕事のまとまりで、画面の棚では 分野 ＞ 作業 ＞ チャット と並ぶ。name：このチャットが入る作業の名前（同じ分野の開いている作業に同じ名前があればそこへ入り、無ければ新しく作る。ai_log__add が返した 開いている作業 に同じものがあれば、その名前をそのまま渡す。空文字で作業から外す）。state：「済み」で作業を済みにする（作業全体が終わったときだけ。ほかのチャットがまだ動いているなら渡さない）、「進行中」で戻す。pr：PR を作ったら住所を渡す（作業の画面に PR として並び、やったことにも 1 行残る）。kind：作業の型（仕事の種類。例「X のポスト作成」「LP の直し」「アプリの便」）。作業を決めたときに 1 度渡す（Naoki の評価が型ごとにたまり、両方 100 点の型は自動で実行に上がる）。戻り値: 成功 { ok: true, チャット番号, 作業: { 番号, 名前, 状態, 新しく作った? } | null }／失敗 { ok: false, code, message }。",
+    "このチャットを作業に入れる・作業を済みにする・PR を作業に残す。作業は「マネージャーくん」「るーみんの LP 直し」のような仕事のまとまりで、画面の棚では 分野 ＞ 作業 ＞ チャット と並ぶ。name：このチャットが入る作業の名前（同じ分野の開いている作業に同じ名前があればそこへ入り、無ければ新しく作る。ai_log__add が返した 開いている作業 に同じものがあれば、その名前をそのまま渡す。空文字で作業から外す）。state：「済み」で作業を済みにする（作業全体が終わったときだけ。ほかのチャットがまだ動いているなら渡さない）、「進行中」で戻す。pr：PR を作ったら住所を渡す（作業の画面に PR として並び、やったことにも 1 行残る）。kind：作業の型（仕事の種類。例「X のポスト作成」「LP の直し」「アプリの便」）。作業を決めたときに 1 度渡す（Naoki の評価が型ごとにたまり、両方 100 点の型は自動で実行に上がる）。folder：作業のフォルダ＝TaskMaster のプロジェクトの名前（例「計画」）。名前が 1 つに当たればフォルダが決まり、TaskMaster にその作業のタスクが立つ（もうタスクがあればプロジェクトを移す）。0 件か 2 件以上に当たったら何も変えずに 候補 を返すので、候補の名前で渡し直す。空文字でフォルダを外す。チャットの area（部屋の札）とは別物。戻り値: 成功 { ok: true, チャット番号, 作業: { 番号, 名前, 状態, 型, フォルダ, タスク, 新しく作った? } | null }／失敗 { ok: false, code, message, 候補? }。",
     {
       chat: z.string().max(500).describe(CHAT_DESC),
       name: z.string().max(80).optional().describe("作業の名前（80 字まで）。空文字で作業から外す"),
@@ -275,14 +276,31 @@ export function registerManagerTools(server: McpServer, env: Env): void {
       pr: z.string().max(500).optional().describe("PR の住所（https://github.com/…/pull/…）"),
       pr_title: z.string().max(200).optional().describe("PR で何をしたかの 1 行（省くと「PR を出した」）"),
       kind: z.string().max(60).optional().describe("作業の型（仕事の種類・60 字まで）"),
+      folder: z.string().max(120).optional().describe("フォルダ＝TaskMaster のプロジェクトの名前。空文字で外す"),
     },
-    async ({ chat, name, state, pr, pr_title, kind }) => {
+    async ({ chat, name, state, pr, pr_title, kind, folder }) => {
       try {
         const ws = state === undefined || state === "" ? null : normWorkState(state);
         if (state && !ws) return asMcpTextResult({ ok: false, code: "invalid_work_state", message: "state は 済み か 進行中 です" });
         const l = linkUrl(pr);
         if (!l.ok) return asMcpTextResult({ ok: false, code: "invalid_link", message: l.message });
-        if (name === undefined && !ws && !l.url && kind === undefined) return asMcpTextResult({ ok: false, code: "nothing", message: "name・state・pr・kind のどれかを渡してください" });
+        if (name === undefined && !ws && !l.url && kind === undefined && folder === undefined) return asMcpTextResult({ ok: false, code: "nothing", message: "name・state・pr・kind・folder のどれかを渡してください" });
+        // v1.144.0：フォルダは先に名前を当てる（当たらなければ何も変えずに候補を返す）
+        let projectId: string | null | undefined;
+        if (folder !== undefined) {
+          if (!folder.trim()) projectId = null;
+          else {
+            const { projects } = await tmOpen(env);
+            const k = workKey(folder);
+            const exact = projects.filter((p) => String(p.title ?? "").trim() === folder.trim());
+            const hits = exact.length ? exact : projects.filter((p) => workKey(p.title) === k);
+            if (hits.length !== 1) {
+              const near = projects.filter((p) => { const t = workKey(p.title); return k && (t.includes(k) || k.includes(t)); });
+              return asMcpTextResult({ ok: false, code: hits.length ? "folder_ambiguous" : "folder_not_found", message: hits.length ? `「${folder}」という名前の TaskMaster のプロジェクトが ${hits.length} つあります。何も変えていません` : `「${folder}」という TaskMaster のプロジェクトがありません。何も変えていません。候補の名前で渡し直してください`, 候補: (near.length ? near : projects).map((p) => String(p.title ?? "")).slice(0, 40) });
+            }
+            projectId = String(hits[0].id);
+          }
+        }
         let { chat: row } = await resolveChat(env, chat);
         let created: boolean | undefined;
         if (name !== undefined) { const r = await attachWork(env, row, workName(name)); row = r.chat; created = r.work ? r.created : undefined; }
@@ -292,11 +310,15 @@ export function registerManagerTools(server: McpServer, env: Env): void {
         }
         let w = row.work_id ? await workById(env, Number(row.work_id)) : null;
         if (kind !== undefined && w) w = await setKind(env, Number(w.id), kind); // v1.136.0
+        if (projectId !== undefined) {
+          if (!w) return asMcpTextResult({ ok: false, code: "no_work", message: "このチャットはまだ作業に入っていません。name で作業を決めてから folder を渡してください" });
+          w = await setFolder(env, Number(w.id), projectId);
+        }
         if (ws) {
           if (!w) return asMcpTextResult({ ok: false, code: "no_work", message: "このチャットはまだ作業に入っていません。name で作業を決めてください" });
           w = await updateWork(env, Number(w.id), { state: ws });
         }
-        return asMcpTextResult({ ok: true, チャット番号: Number(row.no), 作業: w ? { 番号: Number(w.id), 名前: w.name, 状態: w.state, 型: w.kind ?? null, ...(created !== undefined ? { 新しく作った: created } : {}) } : null });
+        return asMcpTextResult({ ok: true, チャット番号: Number(row.no), 作業: w ? { 番号: Number(w.id), 名前: w.name, 状態: w.state, 型: w.kind ?? null, フォルダ: w.tm_project_name ?? null, タスク: w.tm_task_id ? `https://taskmaster.shia2n.jp/?task=${encodeURIComponent(String(w.tm_task_id))}` : null, ...(created !== undefined ? { 新しく作った: created } : {}) } : null });
       } catch (e) { return fail(e); }
     }
   );
