@@ -235,3 +235,15 @@ create unique index if not exists mk_works_tm_task_uq on public.mk_works (tm_tas
 -- v1.142.0（2026-11-22 9便目の 2）：改善係の出どころ（Supabase に入れ済み：manager_kun_kaizen_source）
 alter table public.mk_requests drop constraint if exists mk_requests_source_check;
 alter table public.mk_requests add constraint mk_requests_source_check check (source in ('Naoki','チャット','直し','改善係'));
+
+-- v1.145.0（2026-11-22）manager_kun_census：タブの棚卸しと統括の整理案（最新の 1 行だけ残す）
+create table if not exists public.mk_census (
+  id bigint generated always as identity primary key,
+  at timestamptz not null default now(),
+  tabs jsonb not null default '[]'::jsonb,
+  plan jsonb,
+  plan_at timestamptz,
+  applied_at timestamptz,
+  discarded_at timestamptz
+);
+alter table public.mk_census enable row level security;
