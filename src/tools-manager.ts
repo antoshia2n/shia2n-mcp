@@ -1,11 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { pendingScores, setKind } from "./manager-score.js";
 import { setFolder, tmOpen } from "./manager-folders.js";
+import { censusOut, latestCensus, setPlan } from "./manager-census.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
 import { STATES, workKey, areaName, linkUrl, normWorkState, workName, checkDone, checkPin, checkUpdate, chatOut, jstShort, normState, parseChatRef, parsePinRef, pickChats, pinNo, pinOut } from "./manager-core.js";
-import { ManagerError, addDone, addPin, attachWork, updateWork, workById, chatsByNos, lastPinTitles, listChats, pinFull, pinIndex, pinsByTitle, resolveChat, search, stateCounts, updateChat } from "./manager-store.js";
+import { ManagerError, worksWithChats, addDone, addPin, attachWork, updateWork, workById, chatsByNos, lastPinTitles, listChats, pinFull, pinIndex, pinsByTitle, resolveChat, search, stateCounts, updateChat } from "./manager-store.js";
 import { initiativePatch, sessionsFor, syncDecisionTask } from "./manager-links.js";
 import { reportRequest, requestOut, requestsByState, submitRequest, workOfChat } from "./manager-run.js";
 
@@ -319,6 +320,37 @@ export function registerManagerTools(server: McpServer, env: Env): void {
           w = await updateWork(env, Number(w.id), { state: ws });
         }
         return asMcpTextResult({ ok: true, チャット番号: Number(row.no), 作業: w ? { 番号: Number(w.id), 名前: w.name, 状態: w.state, 型: w.kind ?? null, フォルダ: w.tm_project_name ?? null, タスク: w.tm_task_id ? `https://taskmaster.shia2n.jp/?task=${encodeURIComponent(String(w.tm_task_id))}` : null, ...(created !== undefined ? { 新しく作った: created } : {}) } : null });
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  // ─── 8b. manager__tabs（v1.145.0 タブの棚卸し） ───────────────────
+  server.tool(
+    "manager__tabs",
+    "タブの棚卸しを読む・整理案を出す（統括が使う）。Naoki がパネルのタブの画面で「棚卸しを統括へ送る」を押すと、Chrome の全ウィンドウのタブ（番号・画面・まとまり・題・住所）が 1 回分残る。引数なしで呼ぶと、その棚卸しと、開いている作業の一覧（番号・名前・フォルダ・型）と、フォルダ（TaskMaster のプロジェクト）の名前が返る。整理案を出すときは items と close を渡す：items は [{ tabs: [タブの番号…], work_id: 入れる作業の番号 }] か、新しい作業なら [{ tabs, new_work: \"作業の名前\", folder: \"フォルダの名前\" }]。close は閉じてよいタブの番号（調べ終えた検索結果・重なったページなど）。note は Naoki に向けた一言（なぜこう分けたか）。どこにも入れず閉じもしないタブは、そのまま残る。案を出すだけでタブは動かない。Naoki がパネルで案を見て「この案で並べる」を押したときに初めて並ぶ。返事では、案を出したことと、パネルのタブの画面で確かめて押してほしいことを Naoki に書く。戻り値: { ok: true, 棚卸し: { 送った, タブの数, タブ: [...], 整理案, 並べ終えた }, 開いている作業?, フォルダ?, 返事に書くこと? }／失敗 { ok: false, code, message }。",
+    {
+      items: z.array(z.object({
+        tabs: z.array(z.number().int().positive()).max(300).describe("このまとまりに入れるタブの番号"),
+        work_id: z.number().int().positive().optional().describe("入れる作業の番号（開いている作業）"),
+        new_work: z.string().max(80).optional().describe("新しい作業の名前（work_id が無いとき）"),
+        folder: z.string().max(120).optional().describe("新しい作業のフォルダ＝TaskMaster のプロジェクトの名前"),
+      })).max(60).optional().describe("振り分け"),
+      close: z.array(z.number().int().positive()).max(300).optional().describe("閉じてよいタブの番号"),
+      note: z.string().max(1000).optional().describe("Naoki に向けた一言"),
+    },
+    async ({ items, close, note }) => {
+      try {
+        if (items === undefined && close === undefined) {
+          const c = await latestCensus(env);
+          if (!c) return asMcpTextResult({ ok: false, code: "no_census", message: "棚卸しがまだありません。Naoki にパネルのタブの画面で「棚卸しを統括へ送る」を押してもらってください" });
+          const [ws, tm] = await Promise.all([worksWithChats(env), tmOpen(env).catch(() => ({ projects: [] as any[] }))]);
+          return asMcpTextResult({ ok: true, 棚卸し: censusOut(c),
+            開いている作業: ws.map((x) => ({ 番号: Number(x.work.id), 名前: String(x.work.name), フォルダ: x.work.tm_project_name ?? null, 型: x.work.kind ?? null })),
+            フォルダ: tm.projects.map((p) => String(p.title)) });
+        }
+        const r = await setPlan(env, { items: items ?? [], close: close ?? [], note });
+        return asMcpTextResult({ ok: true, 棚卸し: censusOut(r.row),
+          返事に書くこと: `整理案を出しました（振り分け ${r.plan.items.length} つ・閉じる ${r.plan.close.length} 本）。パネルのタブの画面の上に案が出ているので、見て「この案で並べる」を押してください。` });
       } catch (e) { return fail(e); }
     }
   );

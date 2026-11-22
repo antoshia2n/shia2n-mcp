@@ -37,6 +37,7 @@ import { managerPage } from "./manager-page.js";
 import { addScore, kinds, scoresFor, setKind, setKindLevel } from "./manager-score.js";
 import { linkTask, setFolder, syncWorkDone, tmOpen } from "./manager-folders.js";
 import { runKaizen } from "./manager-kaizen.js";
+import { censusOut, discardPlan, latestCensus, markApplied, saveCensus } from "./manager-census.js";
 
 export const MANAGER_PATH = "/manager";
 
@@ -175,6 +176,15 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const w = await updateWork(env, Number(body.id), { tabs: tabs.length ? tabs : null, tabs_at: new Date().toISOString() });
       return reply({ ok: true, work: workOut(w) });
     }
+    // v1.145.0：タブの棚卸し（全ウィンドウのタブを統括へ）と統括の整理案
+    if (request.method === "GET" && op === "census") return reply({ ok: true, census: censusOut(await latestCensus(env)) });
+    if (request.method === "POST" && op === "census") {
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      return reply({ ok: true, census: censusOut(await saveCensus(env, body.windows)) });
+    }
+    if (request.method === "POST" && op === "census-applied") return reply({ ok: true, ...(await markApplied(env)), census: censusOut(await latestCensus(env)) });
+    if (request.method === "POST" && op === "census-discard") { await discardPlan(env); return reply({ ok: true, census: censusOut(await latestCensus(env)) }); }
     // v1.142.0：改善係を今すぐ動かす（設定の画面から）
     if (request.method === "POST" && op === "kaizen-now") return reply({ ok: true, ...(await runKaizen(env, { force: true })) });
     // v1.136.0：評価（クオリティ・仕組み）と型の段階
