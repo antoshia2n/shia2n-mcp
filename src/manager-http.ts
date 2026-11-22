@@ -26,8 +26,8 @@
  */
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
-import { STATES, areaName, normWorkState, prLinks, workName, workOut, checkCapture, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
-import { ManagerError, applyCapture, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
+import { ManagerError, applyCapture, attachGroup, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
@@ -106,6 +106,17 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
         done: d.done.map((x) => ({ やったこと: x.text, 住所: x.link ?? null, 時刻: jstShort(x.at), チャット番号: Number(x.chat_no), チャットの名前: name.get(Number(x.chat_no)) ?? "" })),
         prs: prLinks(d.done).map((p) => ({ ...p, チャットの名前: name.get(p.チャット番号) ?? "" })),
         pins: d.pins.map((p) => ({ チャット番号: Number(p.chat_no), 番号: Number(p.n), 題: p.title, 作った: jstShort(p.created_at), チャットの名前: name.get(Number(p.chat_no)) ?? "" })) });
+    }
+    if (request.method === "POST" && op === "work-attach-url") {
+      // v1.132.0：今のタブ（チャットの住所）を作業に入れる。台帳に無ければ行を作る（全文は拡張が読んだときに入る）
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      const page = chatPageOf(body.url);
+      if (!page) return reply({ ok: false, message: "Claude か ChatGPT のチャットの住所ではありません" }, 400);
+      let c = await chatByUrl(env, page.url);
+      if (!c) c = await createChat(env, { name: chatName(String(body.title || "").replace(/\s*[-|｜]\s*(ChatGPT|Claude)\s*$/, "")) || "名前のないチャット", ai: page.service === "chatgpt" ? "gpt" : "claude", state: "進行中", url: page.url, surface: PANEL_SURFACE });
+      const after = await attachWorkId(env, Number(c.no), Number(body.work_id));
+      return reply({ ok: true, chat: chatOut(after) });
     }
     if (request.method === "POST" && (op === "work-update" || op === "work-merge")) {
       let body: Record<string, unknown>;
@@ -281,10 +292,34 @@ async function capture(request: Request, env: Env): Promise<Response> {
   }
 }
 
+/** シアニンパネルから、タブのまとまりの名前を受ける（拡張の鍵で通す・書くだけ）（v1.132.0） */
+async function groupHook(request: Request, env: Env): Promise<Response> {
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Max-Age": "86400" } });
+  const out = (body: unknown, status = 200) => Response.json(body, { status, headers: { ...API_HEADERS, "Access-Control-Allow-Origin": "*" } });
+  if (request.method !== "POST") return out({ ok: false, error: "method_not_allowed" }, 405);
+  const auth = request.headers.get("Authorization") || "";
+  if (!/^Bearer mk_[A-Za-z0-9_-]{30,}$/.test(auth)) return out({ ok: false, error: "missing_key" }, 401);
+  try {
+    if (!(await useKey(env, await keyHash(auth.slice(7))))) return out({ ok: false, error: "key_revoked" }, 401);
+    let body: Record<string, unknown>;
+    try { body = await request.json() as Record<string, unknown>; } catch { return out({ ok: false, error: "bad_json" }, 400); }
+    const page = chatPageOf(body.url);
+    const g = groupName(body.group);
+    if (!page || !g) return out({ ok: false, error: "invalid", message: "チャットの住所とまとまりの名前が要ります" }, 400);
+    const c = await chatByUrl(env, page.url);
+    if (!c) return out({ ok: true, skip: true, message: "まだ台帳に無いチャット（読み込んだときに入れる）" });
+    const r = await attachGroup(env, Number(c.no), g);
+    return out({ ok: true, 番号: Number(c.no), 作業: r.work?.name ?? null });
+  } catch (e) {
+    return out({ ok: false, error: "failed", message: String((e as Error)?.message || e).slice(0, 300) }, 502);
+  }
+}
+
 export async function handleManager(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   if (path === `${MANAGER_PATH}/ext/capture`) return capture(request, env);
+  if (path === `${MANAGER_PATH}/ext/group`) return groupHook(request, env);
   if (path.startsWith(`${MANAGER_PATH}/api/`)) return api(request, env, url);
   if (request.method !== "GET" && request.method !== "HEAD") return new Response("method not allowed", { status: 405 });
   if (path === MANAGER_PATH || path === `${MANAGER_PATH}/`) {

@@ -236,3 +236,12 @@ test("prLinks：PR の住所だけを 1 つずつ", () => {
   ];
   assert.equal(prLinks(d).length, 1);
 });
+
+/* v1.132.0 */
+import { checkCapture as cc2, groupName } from "../src/manager-core.ts";
+test("groupName・checkCapture の group", () => {
+  assert.equal(groupName("  るーみん  LP "), "るーみん LP");
+  assert.equal(groupName(""), null);
+  const c = cc2({ url: "https://claude.ai/chat/0123abcd-0000-0000-0000-000000000000", title: "t", turns: [{ user: "a", reply: "b" }], group: "試しの作業" });
+  assert.ok(c.ok && c.group === "試しの作業");
+});

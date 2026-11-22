@@ -6,7 +6,7 @@
  * 表と関数を作る SQL は sql/manager.sql（ブラウザからは読めない・管理者キーだけ）。
  */
 import type { Env } from "./index.js";
-import { chatPageOf, extMayWriteArea, workKey, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, type CaptureCheck, type Turn } from "./manager-core.js";
+import { chatPageOf, extMayWriteArea, workKey, groupName, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, type CaptureCheck, type Turn } from "./manager-core.js";
 
 type Row = Record<string, any>;
 type SbEnv = Pick<Env, "SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY">;
@@ -166,6 +166,22 @@ export const PANEL_SURFACE = "シアニンパネル"; // 拡張が作った行�
  *   ① 住所が台帳にある行 ② 全文の中の「台帳 #N」の行（住所が空・同じ・拡張で読めないページのときだけ・住所を入れる） ③ 新しい行
  */
 export async function applyCapture(env: SbEnv, cap: Extract<CaptureCheck, { ok: true }>): Promise<{ no: number; how: "url" | "marker" | "new"; name: string }> {
+  const r = await applyCaptureRow(env, cap);
+  if (cap.group) await attachGroup(env, r.no, cap.group).catch(() => null); // v1.132.0：タブのまとまりの名前 → 作業
+  return r;
+}
+
+/** Chrome のタブのまとまりの名前の作業へ、チャットを入れる（同じ作業に入っていれば何もしない）（v1.132.0） */
+export async function attachGroup(env: SbEnv, chatNo: number, group: string): Promise<{ chat: Row; work: Row | null }> {
+  const name = groupName(group);
+  const chat = await chatByNo(env, chatNo);
+  if (!chat || !name) throw new ManagerError("chat_not_found", "チャットがありません");
+  if (chat.work && workKey(chat.work.name) === workKey(name) && chat.work.state === "進行中") return { chat, work: chat.work };
+  const r = await attachWork(env, chat, name);
+  return { chat: r.chat, work: r.work };
+}
+
+async function applyCaptureRow(env: SbEnv, cap: Extract<CaptureCheck, { ok: true }>): Promise<{ no: number; how: "url" | "marker" | "new"; name: string }> {
   const now = new Date().toISOString();
   const body = { transcript: cap.transcript, transcript_at: now, turns: cap.turns, service: cap.service, touched_at: now, turns_json: cap.list };
   const hit = await chatByUrl(env, cap.url);
