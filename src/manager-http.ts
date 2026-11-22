@@ -35,6 +35,7 @@ import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
 import { managerPage } from "./manager-page.js";
 import { addScore, kinds, scoresFor, setKind, setKindLevel } from "./manager-score.js";
+import { linkTask, setFolder, syncWorkDone, tmOpen } from "./manager-folders.js";
 
 export const MANAGER_PATH = "/manager";
 
@@ -140,7 +141,21 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (body.level !== undefined) { const lv = Number(body.level); if (![0, 1, 2].includes(lv)) return reply({ ok: false, message: "段階は 0・1・2 のどれかです" }, 400); patch.level = lv; }
       let w = Object.keys(patch).length || body.kind === undefined ? await updateWork(env, Number(body.id), patch) : null;
       if (body.kind !== undefined) w = await setKind(env, Number(body.id), body.kind); // v1.136.0：型
+      if (patch.state) await syncWorkDone(env, w!); // v1.138.0：完了をタスクへ
       return reply({ ok: true, work: workOut(w!) });
+    }
+    // v1.138.0：フォルダ（TaskMaster のプロジェクト）とタスク
+    if (request.method === "GET" && op === "tm") {
+      const t = await tmOpen(env);
+      const linked = new Set(((await worksWithChats(env, { all: true })) || []).map((x) => String(x.work.tm_task_id || "")).filter(Boolean));
+      return reply({ ok: true, projects: t.projects.map((p) => ({ 番号: String(p.id), 名前: String(p.title) })),
+        tasks: t.tasks.filter((x) => !x.repeat && !linked.has(String(x.id))).map((x) => ({ 番号: String(x.id), 題: String(x.title).slice(0, 120), プロジェクト: x.projectId ? String(x.projectId) : null, 期日: x.deadline ?? null })) });
+    }
+    if (request.method === "POST" && (op === "work-folder" || op === "work-task")) {
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      const w = op === "work-folder" ? await setFolder(env, Number(body.id), body.project_id ? String(body.project_id) : null) : await linkTask(env, Number(body.id), body.task_id ? String(body.task_id) : null);
+      return reply({ ok: true, work: workOut(w) });
     }
     // v1.136.0：評価（クオリティ・仕組み）と型の段階
     if (request.method === "POST" && (op === "score" || op === "kind-level")) {
