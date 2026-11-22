@@ -37,7 +37,7 @@ export function registerManagerTools(server: McpServer, env: Env): void {
   // ─── 1. manager__pin ─────────────────────────────────────────────
   server.tool(
     "manager__pin",
-    "Naoki が「これピン」「ピンして」と言ったら呼ぶ。直前のその回答に、あとで探すときの言葉で題を付け、回答の全文をそのまま残す（要約しない・省かない）。chat はこのチャットの番号（会話の最初の ai_log__add が返したチャット番号）。番号はチャットの中で #1 から付くが、Naoki には番号を見せず「ピン：題」の形で返す（あとで Naoki は題の言葉で呼ぶ）。戻り値: 成功 { ok: true, ピン: \"12#3\", チャット番号, 番号, 題, 作った }／失敗 { ok: false, code, message }。",
+    "Naoki が「これピン」「ピンして」と言ったら呼ぶ。直前のその回答に、あとで探すときの言葉で題を付け（Naoki が「26日7時でピン」のように題を言ったら、その言葉をそのまま題にする）、回答の全文をそのまま残す（要約しない・省かない）。chat はこのチャットの番号（会話の最初の ai_log__add が返したチャット番号）。番号はチャットの中で #1 から付くが、Naoki には番号を見せず「ピン：題」と、戻り値の リンク を押せる形で返す（あとで Naoki は題の言葉で呼ぶ）。戻り値: 成功 { ok: true, ピン: \"12#3\", チャット番号, 番号, 題, 作った, リンク }／失敗 { ok: false, code, message }。",
     {
       chat: z.string().max(500).describe(CHAT_DESC),
       title: z.string().max(200).describe("ピンの題（120 字まで）。中身が一目でわかる言葉で"),
@@ -49,7 +49,9 @@ export function registerManagerTools(server: McpServer, env: Env): void {
         if (!c.ok) return asMcpTextResult({ ok: false, code: "invalid_pin", message: c.message });
         const { chat: row } = await resolveChat(env, chat);
         const p = await addPin(env, Number(row.no), c.title, c.body);
-        return asMcpTextResult({ ok: true, ...pinOut(p, row), 字数: c.body.length });
+        const o = pinOut(p, row);
+        // v1.139.0：説明を覚え直していないチャットでも、返事にリンクが付くよう、戻り値の中で頼む
+        return asMcpTextResult({ ok: true, ...o, 字数: c.body.length, 返事に書くこと: `「ピン：${o.題}」と、このリンクを押せる形で1行添える → ${o.リンク}` });
       } catch (e) { return fail(e); }
     }
   );

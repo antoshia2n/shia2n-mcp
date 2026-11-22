@@ -186,6 +186,7 @@ export function pinOut(p: Row, chat?: Row | null, full = false) {
     番号: Number(p.n),
     題: String(p.title ?? ""),
     作った: jstShort(p.created_at),
+    リンク: `https://manager.shia2n.jp/#p${Number(p.chat_no)}-${Number(p.n)}`, // v1.139.0：そのピンを開く住所
     ...(chat ? { チャットの名前: String(chat.name ?? ""), チャットの住所: chat.url ? String(chat.url) : null } : {}),
     ...(full ? { 全文: String(p.body ?? ""), 字数: String(p.body ?? "").length } : {}),
   };
