@@ -175,3 +175,33 @@ revoke all on public.mk_works from anon, authenticated;
 alter table public.mk_chats add column if not exists work_id bigint references public.mk_works(id) on delete set null;
 create index if not exists mk_chats_work_idx on public.mk_chats (work_id);
 alter table public.mk_done add column if not exists link text check (link is null or (char_length(link) <= 500 and link ~ '^https://'));
+
+-- v1.131.0（2026-11-22 6便目）：任せる段階と依頼（Supabase に入れ済み：manager_kun_requests）
+alter table public.mk_works add column if not exists level smallint not null default 1 check (level between 0 and 2);
+create table if not exists public.mk_requests (
+  id bigint generated always as identity primary key,
+  work_id bigint not null references public.mk_works(id) on delete cascade,
+  title text not null check (char_length(title) between 1 and 120),
+  body text not null default '' check (char_length(body) <= 20000),
+  why text not null default '' check (char_length(why) <= 1000),
+  stop text not null default '' check (char_length(stop) <= 1000),
+  recipe text check (recipe is null or char_length(recipe) <= 120),
+  state text not null default 'OK待ち' check (state in ('OK待ち','順番待ち','実行中','済み','止まった','やめた')),
+  source text not null default 'Naoki' check (source in ('Naoki','チャット','直し')),
+  from_chat_no bigint references public.mk_chats(no) on delete set null,
+  run_chat_no bigint references public.mk_chats(no) on delete set null,
+  parent_id bigint references public.mk_requests(id) on delete set null,
+  session_url text check (session_url is null or char_length(session_url) <= 500),
+  result text not null default '' check (char_length(result) <= 4000),
+  fix text not null default '' check (char_length(fix) <= 4000),
+  tm_task_id text,
+  created_at timestamptz not null default now(),
+  fired_at timestamptz,
+  done_at timestamptz,
+  touched_at timestamptz not null default now()
+);
+create index if not exists mk_requests_work_idx on public.mk_requests (work_id, created_at desc);
+create index if not exists mk_requests_state_idx on public.mk_requests (state, created_at);
+alter table public.mk_requests enable row level security;
+revoke all on public.mk_requests from anon, authenticated;
+-- 実行係（ルーティン）の住所と鍵は mk_settings の routine_url・routine_token（ブラウザからは読めない）

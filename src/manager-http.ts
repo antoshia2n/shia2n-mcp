@@ -18,6 +18,7 @@
  *   v1.128.0（4便目）：chats に area（分野で絞る）と areas（棚ごとの数）、chat にやったことと最後の頼みごと、
  *   GET /manager/api/activity?range=today|week … 今日・今週やったこと（拡張だけのチャットは最後の頼みごとで代わりに出す）
  *   POST /manager/api/update に area（画面で決めた分野は拡張が上書きしない）
+ *   v1.131.0（6便目）：GET requests?state=・GET request?id=・GET request-text?id=・POST request-new・request-ok・request-cancel・request-fix、GET/POST routine（実行係の設定）、work-update に level、work に依頼
  *   v1.129.0（5便目）：GET works（作業の木）・GET work?id=（作業の中身）・POST work-update・POST work-merge、update に work（名前）・work_id
  *
  * 守り方は案件くんの受け口（anken-sheet-http.ts）と同じ：Firebase のログインの札を確かめ、Naoki 本人（NAOKI_UID）のときだけ読む・書く。
@@ -27,6 +28,7 @@ import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
 import { STATES, areaName, normWorkState, prLinks, workName, workOut, checkCapture, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
 import { ManagerError, applyCapture, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
 import { managerPage } from "./manager-page.js";
@@ -99,7 +101,8 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const d = await workDetail(env, id);
       if (!d) return reply({ ok: false, message: `作業 ${id} はありません` }, 404);
       const name = new Map(d.chats.map((c) => [Number(c.no), String(c.name)]));
-      return reply({ ok: true, work: workOut(d.work, d.chats), chats: d.chats.map(chatOut),
+      const reqs = await requestsOfWork(env, id);
+      return reply({ ok: true, work: workOut(d.work, d.chats), chats: d.chats.map(chatOut), requests: reqs.map((r) => requestOut(r)),
         done: d.done.map((x) => ({ やったこと: x.text, 住所: x.link ?? null, 時刻: jstShort(x.at), チャット番号: Number(x.chat_no), チャットの名前: name.get(Number(x.chat_no)) ?? "" })),
         prs: prLinks(d.done).map((p) => ({ ...p, チャットの名前: name.get(p.チャット番号) ?? "" })),
         pins: d.pins.map((p) => ({ チャット番号: Number(p.chat_no), 番号: Number(p.n), 題: p.title, 作った: jstShort(p.created_at), チャットの名前: name.get(Number(p.chat_no)) ?? "" })) });
@@ -115,8 +118,43 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (body.name !== undefined) { const n = workName(body.name); if (!n) return reply({ ok: false, message: "作業の名前が空です" }, 400); patch.name = n; }
       if (body.state !== undefined) { const st = normWorkState(body.state); if (!st) return reply({ ok: false, message: "状態は 進行中 か 済み です" }, 400); patch.state = st; }
       if (body.area !== undefined) patch.area = areaName(body.area);
+      if (body.level !== undefined) { const lv = Number(body.level); if (![0, 1, 2].includes(lv)) return reply({ ok: false, message: "段階は 0・1・2 のどれかです" }, 400); patch.level = lv; }
       const w = await updateWork(env, Number(body.id), patch);
       return reply({ ok: true, work: workOut(w) });
+    }
+    // v1.131.0：依頼と実行係
+    if (request.method === "GET" && op === "requests") {
+      const st = (sp.get("state") || "OK待ち").split(",").map((x) => x.trim()).filter((x) => ["OK待ち", "順番待ち", "実行中", "済み", "止まった", "やめた"].includes(x));
+      const rows = await requestsByState(env, st.length ? st : ["OK待ち"]);
+      return reply({ ok: true, requests: rows.map((x) => requestOut(x.req, x.work)) });
+    }
+    if (request.method === "GET" && op === "request") {
+      const r = await requestById(env, Number(sp.get("id")));
+      if (!r) return reply({ ok: false, message: "その依頼はありません" }, 404);
+      return reply({ ok: true, request: requestOut(r) });
+    }
+    if (request.method === "GET" && op === "request-text") {
+      return reply({ ok: true, text: await requestPlainText(env, Number(sp.get("id"))) });
+    }
+    if (request.method === "GET" && op === "routine") {
+      return reply({ ok: true, ...(await routineStatus(env)) });
+    }
+    if (request.method === "POST" && ["request-new", "request-ok", "request-cancel", "request-fix", "routine"].includes(op)) {
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      if (op === "routine") {
+        await saveRoutine(env, body.url, body.token);
+        const run = await runAllWaiting(env);
+        return reply({ ok: true, ...(await routineStatus(env)), 動かした: run.fired });
+      }
+      if (op === "request-new") {
+        const r = await submitRequest(env, Number(body.work_id), { title: body.title, body: body.body, why: body.why, stop: body.stop, recipe: body.recipe }, { source: "Naoki" });
+        return reply({ ok: true, request: requestOut(r.req), fired: r.fired });
+      }
+      if (op === "request-ok") { const r = await approveRequest(env, Number(body.id)); return reply({ ok: true, request: requestOut(r.req), fired: r.fired }); }
+      if (op === "request-cancel") { const r = await cancelRequest(env, Number(body.id)); return reply({ ok: true, request: requestOut(r) }); }
+      const r = await fixRequest(env, Number(body.id), String(body.fix ?? ""));
+      return reply({ ok: true, request: requestOut(r.req), fired: r.fired });
     }
     if (request.method === "GET" && op === "activity") {
       const range = sp.get("range") === "week" ? "week" : "today";

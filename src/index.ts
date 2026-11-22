@@ -550,6 +550,7 @@
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
  * v1.130.0（2026-11-22 開発部・ブレインくん 便B・Naoki OK 08:25）：ブレインくん（brain.shia2n.jp）の道具 3 本を足した。brain__read（ノート 1 件・種類・用途・本文・リンク・つながっているもの・意味のつながり）・brain__search（メモ・キーワード・パターン・アイデア・ネタの横断検索・種類で絞る）・brain__tidy（キーワード・パターンの重複と表記ゆれの候補）。どれも読むだけで、読むのは MCP_DEFAULT_USER_ID の行だけ。抜き出し・組み合わせの提案・評価はしない（Naoki の決め 11/21）。中身は src/brain-core.ts・src/tools-brain.ts、試験は test/brain-core.test.ts。新しい鍵は 0 個。
+ * v1.131.0（2026-11-22 開発部・マネージャーくん 6便目・Naoki OK 09:31）：任せる段階と自動実行（src/manager-run.ts 新設）。作業に段階（0＝実行しない・1＝OK で実行・2＝そのまま実行）、作業の下に依頼（表 mk_requests：OK待ち→順番待ち→実行中→済み／止まった／やめた）。実行役は Claude Code のルーティン 1 本（API で呼ぶ・住所と鍵は mk_settings・画面には鍵の末尾だけ）。呼ぶ前に状態を書き換えて 1 回だけ呼び、返事が来なければ止まったにする（二重に動かさない）。同じ作業で同時に動くのは 1 つ。新しい道具 manager__propose（チャットが依頼を出す）・manager__report（実行係が結果を返す・次の順番待ちが動く）。OK待ちは TaskMaster に「OK待ち：…」。直しは同じ作業に「直し」の依頼を出し、実行係がスキルの直しの入口（skills__feedback_add）に言葉を貯めてから直す。30 分ごとの見回りで順番待ちを動かす。新しい鍵は 0 個（ルーティンの鍵は Naoki が画面で入れる）。
  * v1.130.1（2026-11-22 開発部・マネージャーくん 細い画面の直し・Naoki「ぎゅうぎゅう・作業に行き着くまでが遠い」08:52）：細い画面（シアニンパネル）の上に「作業・チャット・今日」の切り替えを置き、最初は開いている作業を分野ごとに並べる（1 回押せば作業）。状態の札は横に流し、AI・取り組み・分野・NotebookLM は「絞り込み」にたたむ。余白を詰めた。広い画面の NotebookLM は棚の下へ。src/manager-page.ts のみ。
  * v1.129.0（2026-11-22 開発部・マネージャーくん 5便目・Naoki OK 08:10）：作業（分野 ＞ 作業 ＞ チャット）。表 mk_works（名前・分野・状態 進行中／済み）と mk_chats.work_id、mk_done.link。新しい道具 manager__work（チャットを作業に入れる＝同じ分野の開いている作業から同じ名前を探し無ければ作る・済みにする・PR を残す）。ai_log__add は同じ分野の開いている作業を返し、最初の返事の前に作業を決めるよう 次に で伝える。manager__update に work・work_state、manager__done に link。画面は左の棚を 分野 ＞ 作業 の木にし、作業の画面（チャット・PR・やったこと・ピン・済み・名前・まとめる）。シアニンパネルの中では、作業のチャットをタブのまとまりで開く・たたむ・閉じる。前からある道具に足した欄がつないだままのチャットに見えないことがあったので、作業は新しい道具 1 本でも扱える。新しい鍵は 0 個。
  * v1.128.1（2026-11-22 開発部・マネージャーくん 4便目の直し）：manager__get_pin の q が見えていないチャット（古い形の道具を持つもの）が chat に題の言葉を入れたとき、その名前のチャットが無ければピンの題から探す。src/tools-manager.ts のみ。
@@ -731,6 +732,7 @@ import { registerSozaiTools } from "./tools-sozai.js";
 import { registerAnkenTools } from "./tools-anken.js";
 import { registerXbunsekiTools } from "./tools-xbunseki.js";
 import { registerAiLogTools } from "./tools-ai-log.js";
+import { runAllWaiting } from "./manager-run.js";
 import { registerManagerTools } from "./tools-manager.js";
 import { registerBrainTools } from "./tools-brain.js";
 import { handleManager, MANAGER_PATH } from "./manager-http.js";
@@ -1407,7 +1409,8 @@ export default {
         runAndRecord(env, "manager_links", async () => {
           const t = await syncAllDecisionTasks(env);
           const n = await exportNotebook(env);
-          return { count: t.added + t.done + (n.wrote ? 1 : 0), detail: `判断のタスク 立てた ${t.added}・済み ${t.done}・失敗 ${t.errors}／NotebookLM：${n.message}` };
+          const q = await runAllWaiting(env); // v1.131.0：順番待ちの依頼（回数の上限で戻ったものなど）をもう一度動かす
+          return { count: t.added + t.done + (n.wrote ? 1 : 0) + q.fired, detail: `判断のタスク 立てた ${t.added}・済み ${t.done}・失敗 ${t.errors}／NotebookLM：${n.message}／依頼 動かした ${q.fired}・失敗 ${q.errors}` };
         })
       );
       // 2026-10-07（v1.1.0）：会員管理くんの自動写像（handleAutoMappingCron）を止めた。
