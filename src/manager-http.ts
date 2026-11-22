@@ -29,7 +29,7 @@
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
 import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkScore, scoreOut, scoreTrend, needsScore, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
-import { ManagerError, applyCapture, attachGroup, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { ManagerError, applyCapture, attachGroup, findOrCreateWork, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
@@ -155,6 +155,22 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       let body: Record<string, unknown>;
       try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
       const w = op === "work-folder" ? await setFolder(env, Number(body.id), body.project_id ? String(body.project_id) : null) : await linkTask(env, Number(body.id), body.task_id ? String(body.task_id) : null);
+      return reply({ ok: true, work: workOut(w) });
+    }
+    // v1.141.0：新しい作業（パネルから先に作る）と、保存したタブを直す（1 本外す・全部消す・元に戻す）
+    if (request.method === "POST" && (op === "work-new" || op === "work-tabs")) {
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      if (op === "work-new") {
+        const n = workName(body.name);
+        if (!n) return reply({ ok: false, message: "作業の名前を入れてください" }, 400);
+        const r = await findOrCreateWork(env, n, null);
+        let w = r.work;
+        if (body.project_id) w = await setFolder(env, Number(w.id), String(body.project_id));
+        return reply({ ok: true, work: workOut(w), 作った: r.created });
+      }
+      const tabs = checkTabs(body.tabs);
+      const w = await updateWork(env, Number(body.id), { tabs: tabs.length ? tabs : null, tabs_at: new Date().toISOString() });
       return reply({ ok: true, work: workOut(w) });
     }
     // v1.136.0：評価（クオリティ・仕組み）と型の段階
