@@ -374,6 +374,9 @@ export function workOut(w: Row, chats: Row[] = [], reqs: Row[] = []) {
     最後に触った: jstShort(last),
     進み: workProgress(w, chats, reqs),
     タブの数: Array.isArray(w.tabs) ? w.tabs.length : 0,
+    タブ: Array.isArray(w.tabs) ? w.tabs.map((t: any) => String(t.url)) : [],
+    最後にやったこと: w.last_done ? { 中身: String(w.last_done.text), 時刻: jstShort(w.last_done.at) } : null,
+    今のチャット: nowChats(chats).map((c) => ({ 番号: Number(c.no), 名前: String(c.name ?? ""), 住所: c.url ? String(c.url) : null, AI: String(c.ai ?? ""), 番: turnLabel(c) })),
   };
 }
 
@@ -435,4 +438,11 @@ export function checkTabs(v: unknown): TabRow[] {
     if (out.length >= 40) break;
   }
   return out;
+}
+
+/** 「今」のカードに出すチャット：閉じた・寝かせ中を除き、返事が来た → Naoki の番 → AI が作業中 → ほか、同じなら新しい順に 3 本（v1.134.0） */
+export function nowChats(chats: Row[]): Row[] {
+  const rank = (c: Row) => ({ "返事が来た": 0, "Naoki の番": 1, "AI が作業中": 2 } as Record<string, number>)[turnLabel(c) ?? ""] ?? 3;
+  return chats.filter((c) => c.state !== "閉じた" && c.state !== "寝かせ中" && c.name !== undefined)
+    .sort((a, b) => rank(a) - rank(b) || String(b.touched_at ?? "").localeCompare(String(a.touched_at ?? ""))).slice(0, 3);
 }

@@ -327,10 +327,17 @@ export async function worksWithChats(env: SbEnv, opt: { all?: boolean; area?: st
   if (!works.length) return [];
   const ids = works.map((w) => w.id).join(",");
   const [chats, reqs]: [Row[], Row[]] = await Promise.all([
-    sb(env, `mk_chats?select=no,state,touched_at,work_id,turn&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
+    sb(env, `mk_chats?select=no,name,ai,url,state,touched_at,work_id,turn&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
     sb(env, `mk_requests?select=work_id,state&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
   ]);
-  return works.map((w) => ({ work: w, chats: chats.filter((c) => Number(c.work_id) === Number(w.id)), reqs: reqs.filter((r) => Number(r.work_id) === Number(w.id)) }));
+  // v1.134.0：作業ごとの最後のやったこと（「今」のカード）
+  const byChat = new Map(chats.map((c) => [Number(c.no), Number(c.work_id)]));
+  const lastDone = new Map<number, Row>();
+  if (chats.length) {
+    const done: Row[] = (await sb(env, `mk_done?select=chat_no,text,at&chat_no=in.(${chats.map((c) => c.no).join(",")})&order=at.desc&limit=1000`)) || [];
+    for (const d of done) { const w = byChat.get(Number(d.chat_no)); if (w && !lastDone.has(w)) lastDone.set(w, d); }
+  }
+  return works.map((w) => ({ work: { ...w, last_done: lastDone.get(Number(w.id)) ?? null }, chats: chats.filter((c) => Number(c.work_id) === Number(w.id)), reqs: reqs.filter((r) => Number(r.work_id) === Number(w.id)) }));
 }
 
 /** 同じ分野の開いている作業から、名前の形が同じものを探す。無ければ作る */

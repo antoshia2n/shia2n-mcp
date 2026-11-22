@@ -276,3 +276,16 @@ test("checkTabs：http(s) だけ・同じ住所は 1 つ・40 本まで", () => 
   assert.deepEqual(t, [{ url: "https://github.com/a/b/pull/1", title: "PR" }]);
   assert.equal(checkTabs(Array.from({ length: 50 }, (_, i) => ({ url: `https://x.jp/${i}` }))).length, 40);
 });
+
+/* v1.134.0：「今」のカードのチャットの並び */
+import { nowChats } from "../src/manager-core.ts";
+test("nowChats：返事が来た → Naoki の番 → AI、閉じたは出さない、3 本まで", () => {
+  const cs = [
+    { no: 1, name: "a", state: "進行中", turn: "AI", touched_at: "2026-11-22T03:00:00Z" },
+    { no: 2, name: "b", state: "進行中", turn: "新着", touched_at: "2026-11-22T01:00:00Z" },
+    { no: 3, name: "c", state: "閉じた", turn: "新着", touched_at: "2026-11-22T04:00:00Z" },
+    { no: 4, name: "d", state: "判断待ち", turn: null, touched_at: "2026-11-22T02:00:00Z" },
+    { no: 5, name: "e", state: "進行中", turn: null, touched_at: "2026-11-22T05:00:00Z" },
+  ];
+  assert.deepEqual(nowChats(cs).map((c) => c.no), [2, 4, 1]);
+});
