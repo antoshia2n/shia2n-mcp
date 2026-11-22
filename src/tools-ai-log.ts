@@ -79,7 +79,7 @@ export function registerAiLogTools(server: McpServer, env: Env): void {
         } catch (e) { warnings.push(`マネージャーくんの台帳に行を作れませんでした：${String((e as Error)?.message || e).slice(0, 200)}`); }
         return asMcpTextResult({ ok: true, 時刻: toJst(String(r.at)), role: r.role, where: r.surface, title: r.title,
           ...(chat ? { チャット: chat, 開いている作業: openWorks, 次に: `このチャットの番号は ${chat.番号}。ピンは manager__pin、状態は manager__update、やったことは manager__done に chat=${chat.番号} を渡す。` +
-            (c.row.surface === "予約タスク" ? "" : `最初の返事を書く前に、このチャットの作業を manager__work の name で決める（開いている作業に同じ作業があればその名前をそのまま、無ければ何の作業か分かる短い名前で）。作業全体が終わったら manager__work の state に「済み」。`) +
+            (c.row.surface === "予約タスク" ? "" : `最初の返事を書く前に、このチャットの作業を manager__work の name で決め、同じ呼び出しで kind に作業の型（仕事の種類。例「X のポスト作成」「アプリの便」）も渡す（開いている作業に同じ作業があればその名前をそのまま、無ければ何の作業か分かる短い名前で）。作業全体が終わったら manager__work の state に「済み」。`) +
             `ひとまとまりの作業が終わった区切りごとに manager__done で「○○をした」を 1 行残す（PR を出したら manager__work の pr に住所）` +
             (c.row.surface === "予約タスク" ? "" : `。最初の返事の末尾に「（台帳 #${chat.番号}）」と 1 回だけ書く（シアニンパネルがこの字でチャットの住所を結ぶ）`) } : {}),
           ...(warnings.length ? { warnings } : {}) });

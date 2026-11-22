@@ -209,3 +209,20 @@ revoke all on public.mk_requests from anon, authenticated;
 -- v1.133.0（2026-11-22 7便目）：誰の番とタブの保存（Supabase に入れ済み：manager_kun_tabs_turns）
 alter table public.mk_chats add column if not exists turn text check (turn in ('AI','新着','Naoki')), add column if not exists turn_at timestamptz;
 alter table public.mk_works add column if not exists tabs jsonb, add column if not exists tabs_at timestamptz;
+
+-- v1.136.0（2026-11-22 9便目の 1）：作業の型と評価（Supabase に入れ済み：manager_kun_scores）
+alter table public.mk_works add column if not exists kind text check (kind is null or char_length(kind) between 1 and 60);
+create table if not exists public.mk_kinds (name text primary key check (char_length(name) between 1 and 60), level smallint not null default 1 check (level between 0 and 2), raised_at timestamptz, created_at timestamptz not null default now());
+create table if not exists public.mk_scores (
+  id bigint generated always as identity primary key,
+  work_id bigint not null references public.mk_works(id) on delete cascade,
+  request_id bigint references public.mk_requests(id) on delete set null,
+  kind text,
+  quality smallint not null check (quality between 0 and 100),
+  system smallint not null check (system between 0 and 100),
+  q_note text not null default '' check (char_length(q_note) <= 1000),
+  s_note text not null default '' check (char_length(s_note) <= 1000),
+  at timestamptz not null default now()
+);
+create unique index if not exists mk_scores_req_uq on public.mk_scores (request_id) where request_id is not null;
+alter table public.mk_kinds enable row level security; alter table public.mk_scores enable row level security;

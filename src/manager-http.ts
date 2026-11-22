@@ -28,12 +28,13 @@
  */
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
-import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
+import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkScore, scoreOut, scoreTrend, needsScore, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
 import { ManagerError, applyCapture, attachGroup, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
 import { managerPage } from "./manager-page.js";
+import { addScore, kinds, scoresFor, setKind, setKindLevel } from "./manager-score.js";
 
 export const MANAGER_PATH = "/manager";
 
@@ -96,7 +97,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     }
     if (request.method === "GET" && op === "works") {
       const ws = await worksWithChats(env, { all: sp.get("all") === "1" });
-      return reply({ ok: true, works: ws.map((x) => workOut(x.work, x.chats, x.reqs)) });
+      return reply({ ok: true, works: ws.map((x) => workOut(x.work, x.chats, x.reqs)), kinds: (await kinds(env)).map((k) => ({ 名前: String(k.name), 段階: Number(k.level) })) });
     }
     if (request.method === "GET" && op === "work") {
       const id = Number(sp.get("id"));
@@ -104,7 +105,11 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (!d) return reply({ ok: false, message: `作業 ${id} はありません` }, 404);
       const name = new Map(d.chats.map((c) => [Number(c.no), String(c.name)]));
       const reqs = await requestsOfWork(env, id);
-      return reply({ ok: true, work: workOut(d.work, d.chats, reqs), chats: d.chats.map(chatOut), requests: reqs.map((r) => requestOut(r)),
+      const sc = await scoresFor(env, d.work); // v1.136.0：評価
+      const byReq = new Map(sc.mine.filter((x) => x.request_id).map((x) => [Number(x.request_id), x]));
+      for (const r of reqs) r.scored = byReq.has(Number(r.id));
+      return reply({ ok: true, work: workOut(d.work, d.chats, reqs), chats: d.chats.map(chatOut), requests: reqs.map((r) => ({ ...requestOut(r), 評価: byReq.has(Number(r.id)) ? scoreOut(byReq.get(Number(r.id))!) : null, 評価待ち: needsScore(r) })),
+        scores: sc.mine.map(scoreOut), 型の流れ: sc.kind.length ? scoreTrend(sc.kind) : null, 型の段階: sc.kindRow ? Number(sc.kindRow.level) : null,
         tabs: (Array.isArray(d.work.tabs) ? d.work.tabs : []).map((t: any) => ({ 住所: String(t.url), 題: String(t.title || "") })), タブを写した: d.work.tabs_at ? jstShort(d.work.tabs_at) : null,
         done: d.done.map((x) => ({ やったこと: x.text, 住所: x.link ?? null, 時刻: jstShort(x.at), チャット番号: Number(x.chat_no), チャットの名前: name.get(Number(x.chat_no)) ?? "" })),
         prs: prLinks(d.done).map((p) => ({ ...p, チャットの名前: name.get(p.チャット番号) ?? "" })),
@@ -133,8 +138,20 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (body.state !== undefined) { const st = normWorkState(body.state); if (!st) return reply({ ok: false, message: "状態は 進行中 か 済み です" }, 400); patch.state = st; }
       if (body.area !== undefined) patch.area = areaName(body.area);
       if (body.level !== undefined) { const lv = Number(body.level); if (![0, 1, 2].includes(lv)) return reply({ ok: false, message: "段階は 0・1・2 のどれかです" }, 400); patch.level = lv; }
-      const w = await updateWork(env, Number(body.id), patch);
-      return reply({ ok: true, work: workOut(w) });
+      let w = Object.keys(patch).length || body.kind === undefined ? await updateWork(env, Number(body.id), patch) : null;
+      if (body.kind !== undefined) w = await setKind(env, Number(body.id), body.kind); // v1.136.0：型
+      return reply({ ok: true, work: workOut(w!) });
+    }
+    // v1.136.0：評価（クオリティ・仕組み）と型の段階
+    if (request.method === "POST" && (op === "score" || op === "kind-level")) {
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      if (op === "kind-level") { const n = await setKindLevel(env, String(body.name || ""), Number(body.level)); return reply({ ok: true, 作業の数: n }); }
+      const c = checkScore(body);
+      if (!c.ok) return reply({ ok: false, message: c.message }, 400);
+      const rid = body.request_id ? Number(body.request_id) : null;
+      const r = await addScore(env, Number(body.work_id), rid, c);
+      return reply({ ok: true, score: scoreOut(r.score), 上げた: r.raised });
     }
     // v1.131.0：依頼と実行係
     if (request.method === "GET" && op === "requests") {

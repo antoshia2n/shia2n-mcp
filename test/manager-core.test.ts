@@ -289,3 +289,22 @@ test("nowChats：返事が来た → Naoki の番 → AI、閉じたは出さな
   ];
   assert.deepEqual(nowChats(cs).map((c) => c.no), [2, 4, 1]);
 });
+
+/* v1.136.0：評価 */
+import { checkScore, isPerfect, scoreTrend, needsScore, kindName } from "../src/manager-core.ts";
+test("checkScore：0〜100 の整数だけ", () => {
+  assert.equal(checkScore({ quality: 100, system: "90" }).ok, true);
+  assert.equal(checkScore({ quality: 101, system: 90 }).ok, false);
+  assert.equal(checkScore({ quality: "", system: 90 }).ok, false);
+  assert.equal(checkScore({ quality: 85.5, system: 90 }).ok, false);
+});
+test("isPerfect・scoreTrend・needsScore・kindName", () => {
+  assert.equal(isPerfect({ quality: 100, system: 100 }), true);
+  assert.equal(isPerfect({ quality: 100, system: 90 }), false);
+  const t = scoreTrend([{ quality: 100, system: 80 }, { quality: 80, system: 60 }]);
+  assert.deepEqual([t.回数, t.クオリティ, t.仕組み, t.前のクオリティ], [2, 90, 70, null]);
+  assert.equal(needsScore({ state: "済み", done_at: "2026-11-22T06:00:00Z" }), true);
+  assert.equal(needsScore({ state: "済み", done_at: "2026-11-22T06:00:00Z", scored: true }), false);
+  assert.equal(needsScore({ state: "済み", done_at: "2026-11-21T06:00:00Z" }), false);
+  assert.equal(kindName("  X の  ポスト作成 "), "X の ポスト作成");
+});

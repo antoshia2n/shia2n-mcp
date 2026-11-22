@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { setKind } from "./manager-score.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
@@ -255,21 +256,22 @@ export function registerManagerTools(server: McpServer, env: Env): void {
   // 前からある道具に足した欄が、つないだままのチャットに見えないことがあった（2026-11-22 の確かめ）ので、作業は新しい道具 1 本でも扱えるようにする
   server.tool(
     "manager__work",
-    "このチャットを作業に入れる・作業を済みにする・PR を作業に残す。作業は「マネージャーくん」「るーみんの LP 直し」のような仕事のまとまりで、画面の棚では 分野 ＞ 作業 ＞ チャット と並ぶ。name：このチャットが入る作業の名前（同じ分野の開いている作業に同じ名前があればそこへ入り、無ければ新しく作る。ai_log__add が返した 開いている作業 に同じものがあれば、その名前をそのまま渡す。空文字で作業から外す）。state：「済み」で作業を済みにする（作業全体が終わったときだけ。ほかのチャットがまだ動いているなら渡さない）、「進行中」で戻す。pr：PR を作ったら住所を渡す（作業の画面に PR として並び、やったことにも 1 行残る）。戻り値: 成功 { ok: true, チャット番号, 作業: { 番号, 名前, 状態, 新しく作った? } | null }／失敗 { ok: false, code, message }。",
+    "このチャットを作業に入れる・作業を済みにする・PR を作業に残す。作業は「マネージャーくん」「るーみんの LP 直し」のような仕事のまとまりで、画面の棚では 分野 ＞ 作業 ＞ チャット と並ぶ。name：このチャットが入る作業の名前（同じ分野の開いている作業に同じ名前があればそこへ入り、無ければ新しく作る。ai_log__add が返した 開いている作業 に同じものがあれば、その名前をそのまま渡す。空文字で作業から外す）。state：「済み」で作業を済みにする（作業全体が終わったときだけ。ほかのチャットがまだ動いているなら渡さない）、「進行中」で戻す。pr：PR を作ったら住所を渡す（作業の画面に PR として並び、やったことにも 1 行残る）。kind：作業の型（仕事の種類。例「X のポスト作成」「LP の直し」「アプリの便」）。作業を決めたときに 1 度渡す（Naoki の評価が型ごとにたまり、両方 100 点の型は自動で実行に上がる）。戻り値: 成功 { ok: true, チャット番号, 作業: { 番号, 名前, 状態, 新しく作った? } | null }／失敗 { ok: false, code, message }。",
     {
       chat: z.string().max(500).describe(CHAT_DESC),
       name: z.string().max(80).optional().describe("作業の名前（80 字まで）。空文字で作業から外す"),
       state: z.string().max(10).optional().describe("済み か 進行中"),
       pr: z.string().max(500).optional().describe("PR の住所（https://github.com/…/pull/…）"),
       pr_title: z.string().max(200).optional().describe("PR で何をしたかの 1 行（省くと「PR を出した」）"),
+      kind: z.string().max(60).optional().describe("作業の型（仕事の種類・60 字まで）"),
     },
-    async ({ chat, name, state, pr, pr_title }) => {
+    async ({ chat, name, state, pr, pr_title, kind }) => {
       try {
         const ws = state === undefined || state === "" ? null : normWorkState(state);
         if (state && !ws) return asMcpTextResult({ ok: false, code: "invalid_work_state", message: "state は 済み か 進行中 です" });
         const l = linkUrl(pr);
         if (!l.ok) return asMcpTextResult({ ok: false, code: "invalid_link", message: l.message });
-        if (name === undefined && !ws && !l.url) return asMcpTextResult({ ok: false, code: "nothing", message: "name・state・pr のどれかを渡してください" });
+        if (name === undefined && !ws && !l.url && kind === undefined) return asMcpTextResult({ ok: false, code: "nothing", message: "name・state・pr・kind のどれかを渡してください" });
         let { chat: row } = await resolveChat(env, chat);
         let created: boolean | undefined;
         if (name !== undefined) { const r = await attachWork(env, row, workName(name)); row = r.chat; created = r.work ? r.created : undefined; }
@@ -278,11 +280,12 @@ export function registerManagerTools(server: McpServer, env: Env): void {
           await addDone(env, Number(row.no), d.ok ? d.text : "PR を出した", l.url);
         }
         let w = row.work_id ? await workById(env, Number(row.work_id)) : null;
+        if (kind !== undefined && w) w = await setKind(env, Number(w.id), kind); // v1.136.0
         if (ws) {
           if (!w) return asMcpTextResult({ ok: false, code: "no_work", message: "このチャットはまだ作業に入っていません。name で作業を決めてください" });
           w = await updateWork(env, Number(w.id), { state: ws });
         }
-        return asMcpTextResult({ ok: true, チャット番号: Number(row.no), 作業: w ? { 番号: Number(w.id), 名前: w.name, 状態: w.state, ...(created !== undefined ? { 新しく作った: created } : {}) } : null });
+        return asMcpTextResult({ ok: true, チャット番号: Number(row.no), 作業: w ? { 番号: Number(w.id), 名前: w.name, 状態: w.state, 型: w.kind ?? null, ...(created !== undefined ? { 新しく作った: created } : {}) } : null });
       } catch (e) { return fail(e); }
     }
   );
