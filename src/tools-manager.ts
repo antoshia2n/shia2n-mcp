@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { setKind } from "./manager-score.js";
+import { pendingScores, setKind } from "./manager-score.js";
 import { z } from "zod";
 import { asMcpTextResult } from "./app-client.js";
 import type { Env } from "./index.js";
@@ -189,7 +189,7 @@ export function registerManagerTools(server: McpServer, env: Env): void {
   // ─── 5. manager__waiting ─────────────────────────────────────────
   server.tool(
     "manager__waiting",
-    "判断待ちのチャットの一覧（読むだけ）。統括が起動したときに最初に読む。各行に、何を決めてほしいか（何をしているか）・住所・最後のピンの題が付く。古く待たせているものが上。戻り値: { ok: true, 件数, 一覧: [{ 番号, 名前, AI, 何をしているか, 住所, 最後に触った, 最後のピン? }], 状態ごと }／失敗 { ok: false, message }。",
+    "判断待ちのチャットの一覧と、Naoki がまだ評価していない作業の一覧（読むだけ）。統括が起動したときに最初に読む。各行に、何を決めてほしいか（何をしているか）・住所・最後のピンの題が付く。古く待たせているものが上。評価待ち は、済んだ依頼か、型の付いた完了した作業で、クオリティと仕組みの評価がまだのもの（作業ごと・型つき・古い順）。統括は件数を Naoki に知らせ、住所を開いて評価してもらう。戻り値: { ok: true, 件数, 一覧: [{ 番号, 名前, AI, 何をしているか, 住所, 最後に触った, 最後のピン? }], 評価待ちの件数, 評価待ち: [{ 作業番号, 作業, 型, フォルダ, 待っている数, 依頼: [{ 番号, 題, 済んだ }], 作業ごと評価, 待ちはじめ, 住所 }], 状態ごと }／失敗 { ok: false, message }。",
     {},
     async () => {
       try {
@@ -197,10 +197,19 @@ export function registerManagerTools(server: McpServer, env: Env): void {
         const last = await lastPinTitles(env, rows.map((r) => Number(r.no)));
         const counts = await stateCounts(env);
         const oks = await requestsByState(env, ["OK待ち"]).catch(() => []);
+        const ps = await pendingScores(env).catch(() => []);
         return asMcpTextResult({
           ok: true, 件数: rows.length,
           ...(oks.length ? { OK待ちの依頼: oks.map((x) => ({ 番号: Number(x.req.id), 作業: x.work?.name ?? "", 題: x.req.title, 住所: `https://manager.shia2n.jp/#r${x.req.id}` })) } : {}),
           一覧: rows.map((r) => { const o = chatOut(r); const lp = last[Number(r.no)]; return { 番号: o.番号, 名前: o.名前, AI: o.AI, 何をしているか: o.何をしているか, 住所: o.住所, 最後に触った: o.最後に触った, ...(lp ? { 最後のピン: `${r.no}#${lp.n} ${lp.title}` } : {}) }; }),
+          評価待ちの件数: ps.reduce((a, x) => a + x.reqs.length + (x.whole ? 1 : 0), 0),
+          評価待ち: ps.map((x) => ({
+            作業番号: Number(x.work.id), 作業: String(x.work.name ?? ""), 型: x.work.kind ? String(x.work.kind) : null,
+            フォルダ: x.work.tm_project_name ? String(x.work.tm_project_name) : null,
+            待っている数: x.reqs.length + (x.whole ? 1 : 0),
+            依頼: x.reqs.map((r) => ({ 番号: Number(r.id), 題: String(r.title ?? ""), 済んだ: jstShort(r.done_at) })),
+            作業ごと評価: x.whole, 待ちはじめ: jstShort(x.since), 住所: `https://manager.shia2n.jp/#w${x.work.id}`,
+          })),
           状態ごと: counts,
         });
       } catch (e) { return fail(e); }

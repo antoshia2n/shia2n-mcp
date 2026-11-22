@@ -7,7 +7,7 @@
  */
 import type { Env } from "./index.js";
 import { ManagerError, updateWork, workById } from "./manager-store.js";
-import { isPerfect, kindName, workKey, type ScoreCheck } from "./manager-core.js";
+import { SCORE_FROM, isPerfect, kindName, workKey, type ScoreCheck } from "./manager-core.js";
 
 type Row = Record<string, any>;
 const enc = encodeURIComponent;
@@ -99,4 +99,38 @@ export async function scoredRequests(env: Env, workIds: number[]): Promise<Set<n
   if (!workIds.length) return new Set();
   const rows: Row[] = (await sb(env, `mk_scores?select=request_id&work_id=in.(${workIds.join(",")})&request_id=not.is.null&limit=5000`)) || [];
   return new Set(rows.map((r) => Number(r.request_id)));
+}
+
+/**
+ * 評価待ちの一覧（v1.143.0・統括「朝に 1 回で、まだ評価していない作業を型つきで取りたい」2026-11-22）
+ *   ・依頼：SCORE_FROM より後に済みになり、その依頼への評価が無いもの
+ *   ・作業：SCORE_FROM より後に完了になり、型が付いていて、その作業への評価が 1 つも無いもの（依頼を通さず終えた作業）。
+ *     型の無い完了は外す（試しの作業や、まとめて閉じた重なりが評価待ちに並ばないように。評価は型ごとにたまって自動化に効くため）
+ *   作業ごとにまとめ、古く待たせているものが上。
+ */
+export async function pendingScores(env: Env): Promise<Array<{ work: Row; reqs: Row[]; whole: boolean; since: string }>> {
+  const from = enc(SCORE_FROM);
+  const [reqs, done]: [Row[], Row[]] = await Promise.all([
+    sb(env, `mk_requests?select=id,work_id,title,done_at&state=eq.${enc("済み")}&done_at=gte.${from}&order=done_at.asc&limit=500`).then((x) => x || []),
+    sb(env, `mk_works?select=id&state=eq.${enc("済み")}&touched_at=gte.${from}&kind=not.is.null&limit=500`).then((x) => x || []),
+  ]);
+  const ids = [...new Set([...reqs.map((r) => Number(r.work_id)), ...done.map((w) => Number(w.id))])];
+  if (!ids.length) return [];
+  const [scores, works]: [Row[], Row[]] = await Promise.all([
+    sb(env, `mk_scores?select=work_id,request_id&work_id=in.(${ids.join(",")})&limit=5000`).then((x) => x || []),
+    sb(env, `mk_works?select=id,name,kind,state,tm_project_name,touched_at&id=in.(${ids.join(",")})`).then((x) => x || []),
+  ]);
+  const scoredReq = new Set(scores.filter((s) => s.request_id).map((s) => Number(s.request_id)));
+  const scoredWork = new Set(scores.map((s) => Number(s.work_id)));
+  const doneIds = new Set(done.map((w) => Number(w.id)));
+  const out: Array<{ work: Row; reqs: Row[]; whole: boolean; since: string }> = [];
+  for (const w of works) {
+    const id = Number(w.id);
+    const rs = reqs.filter((r) => Number(r.work_id) === id && !scoredReq.has(Number(r.id)));
+    const whole = doneIds.has(id) && !scoredWork.has(id);
+    if (!rs.length && !whole) continue;
+    const since = [...rs.map((r) => String(r.done_at)), ...(whole ? [String(w.touched_at)] : [])].sort()[0];
+    out.push({ work: w, reqs: rs, whole, since });
+  }
+  return out.sort((a, b) => a.since.localeCompare(b.since));
 }
