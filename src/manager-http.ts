@@ -36,6 +36,7 @@ import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "
 import { managerPage } from "./manager-page.js";
 import { addScore, kinds, scoresFor, setKind, setKindLevel } from "./manager-score.js";
 import { linkTask, setFolder, syncWorkDone, tmOpen } from "./manager-folders.js";
+import { runKaizen } from "./manager-kaizen.js";
 
 export const MANAGER_PATH = "/manager";
 
@@ -132,6 +133,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
       if (op === "work-merge") {
         const w = await mergeWork(env, Number(body.from), Number(body.to));
+        if (w.dropped_task) await syncWorkDone(env, { tm_task_id: w.dropped_task, state: "済み" }); // v1.142.0：まとめて消えた作業のタスクは完了に
         return reply({ ok: true, work: workOut(w) });
       }
       const patch: Record<string, unknown> = {};
@@ -173,6 +175,8 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const w = await updateWork(env, Number(body.id), { tabs: tabs.length ? tabs : null, tabs_at: new Date().toISOString() });
       return reply({ ok: true, work: workOut(w) });
     }
+    // v1.142.0：改善係を今すぐ動かす（設定の画面から）
+    if (request.method === "POST" && op === "kaizen-now") return reply({ ok: true, ...(await runKaizen(env, { force: true })) });
     // v1.136.0：評価（クオリティ・仕組み）と型の段階
     if (request.method === "POST" && (op === "score" || op === "kind-level")) {
       let body: Record<string, unknown>;

@@ -382,9 +382,21 @@ export async function mergeWork(env: SbEnv, from: number, to: number): Promise<R
   if (from === to) throw new ManagerError("invalid_merge", "同じ作業にはまとめられません");
   const [a, b] = await Promise.all([workById(env, from), workById(env, to)]);
   if (!a || !b) throw new ManagerError("work_not_found", "作業が見つかりません");
-  await sb(env, `mk_chats?work_id=eq.${from}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ work_id: to }) });
+  const min = { method: "PATCH", headers: { Prefer: "return=minimal" } };
+  await sb(env, `mk_chats?work_id=eq.${from}`, { ...min, body: JSON.stringify({ work_id: to }) });
+  // v1.142.0：依頼と評価も移す（前は作業を消したときに一緒に消えていた）
+  await sb(env, `mk_requests?work_id=eq.${from}`, { ...min, body: JSON.stringify({ work_id: to }) });
+  await sb(env, `mk_scores?work_id=eq.${from}`, { ...min, body: JSON.stringify({ work_id: to }) });
+  // 保存したタブは足し合わせ、型・フォルダ・タスクは移す先に無いときだけ引き継ぐ
+  const tabs = [...(Array.isArray(b.tabs) ? b.tabs : []), ...(Array.isArray(a.tabs) ? a.tabs : [])].filter((t: any, i: number, xs: any[]) => xs.findIndex((x: any) => x.url === t.url) === i).slice(0, 40);
+  const patch: Record<string, unknown> = { tabs: tabs.length ? tabs : null };
+  if (!b.kind && a.kind) patch.kind = a.kind;
+  if (!b.tm_project_id && a.tm_project_id) Object.assign(patch, { tm_project_id: a.tm_project_id, tm_project_name: a.tm_project_name });
+  const moveTask = !b.tm_task_id && a.tm_task_id;
   await sb(env, `mk_works?id=eq.${from}`, { method: "DELETE", headers: { Prefer: "return=minimal" } });
-  return updateWork(env, to, {});
+  if (moveTask) Object.assign(patch, { tm_task_id: a.tm_task_id, tm_deadline: a.tm_deadline, tm_priority: a.tm_priority });
+  const after = await updateWork(env, to, patch);
+  return Object.assign(after, { dropped_task: !moveTask && a.tm_task_id ? String(a.tm_task_id) : null });
 }
 
 /** 作業の中身：チャット・やったこと（住所つき）・ピンの題 */

@@ -550,6 +550,7 @@
  * v1.50.0（2026-10-26 開発部・X攻略くん 4便目）：X攻略くんの画面から TaskMaster へタスクを送る受け口 GET/POST /xkoryaku/tasks（xkoryaku-task-http.ts・X攻略くんの住所から開いた画面で Naoki 本人の Firebase ログインのときだけ）。GET は送り先に選べるプロジェクト（active）と、名指しのタスクの今（済み・廃案・消えた。id で読むだけ）。POST は { title, projectId, deadline } を taskmaster__add_task と同じ 1 本で入れる。xbunseki__get_week の今週の計画などに、参考ポスト（スワイプくん）と TaskMaster へ送ったタスクを添える。設定の追加 0 個。
  * v1.105.0（2026-11-15 開発部・レシピの便 1・Naoki OK 20:03）：レシピ（スキルの組み合わせ・正本 shia2n-skills の recipes/<名前>/RECIPE.md）を読む recipes__list と recipes__get。recipes__get はレシピが固定したコミットの SKILL.md を全部まとめて返す（スキルを直してもレシピの中身は動かない）。skills__get に ref（40 桁のコミット）を足し、固定した版の別ファイルも読めるようにした。Claude の入口と GPT の入口 /content/mcp の両方（registerSkillsTools が両方に出ている）。計算は src/skills-core.ts の parseRecipeHead・recipeFolders、試験は test/recipes.test.ts。設定の追加 0 個。
  * v1.130.0（2026-11-22 開発部・ブレインくん 便B・Naoki OK 08:25）：ブレインくん（brain.shia2n.jp）の道具 3 本を足した。brain__read（ノート 1 件・種類・用途・本文・リンク・つながっているもの・意味のつながり）・brain__search（メモ・キーワード・パターン・アイデア・ネタの横断検索・種類で絞る）・brain__tidy（キーワード・パターンの重複と表記ゆれの候補）。どれも読むだけで、読むのは MCP_DEFAULT_USER_ID の行だけ。抜き出し・組み合わせの提案・評価はしない（Naoki の決め 11/21）。中身は src/brain-core.ts・src/tools-brain.ts、試験は test/brain-core.test.ts。新しい鍵は 0 個。
+ * v1.142.0（2026-11-22 開発部・マネージャーくん 9便目の 2・Naoki「気付いたことも改善しつつ進めて」14:55）：改善係（src/manager-kaizen.ts）。月曜 9 時台に週 1 回、前の回からの評価の一言・止まった依頼・型ごとの数を材料に、作業「マネージャーくんの改善係」へ見直しの依頼を出す（出どころ 改善係・すぐ動く・案を出すだけで保存しない）。実行係は案を manager__propose で 1 件ずつ出し、段階 1 なので OK待ち になる。材料が無い週は出さない。設定の画面に「今すぐ動かす」。気づきの直し：作業をまとめるとき依頼・評価・保存したタブ・型・フォルダ・タスクも移す（前は依頼と評価が消えていた）、移さなかったタスクは完了に。似た名前の作業を「今」と作業の画面で案内し、1 押しで TaskMaster につながっている方へまとめる。Supabase は manager_kun_kaizen_source。
  * v1.141.0（2026-11-22 開発部・マネージャーくん 12便目・Naoki「タブはもっと管理しやすく。フォルダから辿る・保存が不要なタブは削除かアーカイブ・先にタブを作ってページを追加」→ OK 14:44）：パネルの「タブ」をフォルダ ▸ 作業 ▸ タブの木に（左・真ん中・右の見出しはやめ、作業の行に画面の名前）。＋新しい作業（名前とフォルダ → 作業と TaskMaster のタスク、拡張が新しいタブ 1 本でまとまりを作る）、今のタブを入れる、タブを 1 本ずつ外す（開いていれば閉じる・閉じていれば保存から外す）、完了した作業はアーカイブにたたむ、保存したタブの削除（元に戻せる）。読み口 POST work-new・work-tabs、作業の返す形に 保存したタブ（住所と題）。シアニンパネル 1.17.0 と組。設定の追加 0 個。
  * v1.140.0（2026-11-22 開発部・マネージャーくん 11便目・整理の確定案の③④）：パネルの入口を 今・タブ・探す の 3 つに（「作業」「今日」はパネルでは出さず、今日やったことは「今」の下に 8 件まで）。作業の画面を使う順に：フォルダとタスク → チャット → 評価 → 段階と依頼、保存したタブ・PR・やったこと・ピンは件数だけ見せてたたむ。段階 0 で依頼の無い作業は依頼の欄を出さない。棚の下の「実行係の設定」「NotebookLM へ書き出す」は「設定」の中へ。設定の追加 0 個。
  * v1.139.0（2026-11-22 開発部・Naoki「ピンをつける時に『26日7時』とかって指定してつけれる？そのピンのリンクみたいなの作れたりする？」）：manager__pin の説明に「Naoki が題を言ったらその言葉をそのまま題にする」「リンクを押せる形で返す」を足し、ピンの返す形に リンク（https://manager.shia2n.jp/#p<チャット>-<番号>）を足した。ピンの画面に「リンクをコピー」。設定の追加 0 個。
@@ -746,6 +747,7 @@ import { registerXbunsekiTools } from "./tools-xbunseki.js";
 import { registerAiLogTools } from "./tools-ai-log.js";
 import { runAllWaiting } from "./manager-run.js";
 import { syncFromTaskmaster } from "./manager-folders.js";
+import { runKaizen } from "./manager-kaizen.js";
 import { registerManagerTools } from "./tools-manager.js";
 import { registerBrainTools } from "./tools-brain.js";
 import { handleManager, MANAGER_PATH } from "./manager-http.js";
@@ -1423,8 +1425,9 @@ export default {
           const t = await syncAllDecisionTasks(env);
           const n = await exportNotebook(env);
           const q = await runAllWaiting(env); // v1.131.0：順番待ちの依頼（回数の上限で戻ったものなど）をもう一度動かす
+          const kz = await runKaizen(env).catch((e) => ({ ran: false, reason: String((e as Error)?.message || e).slice(0, 120) })); // v1.142.0：週 1 回の改善係
           const tmSync = await syncFromTaskmaster(env).catch((e) => ({ error: String((e as Error)?.message || e).slice(0, 120) })); // v1.138.0：TaskMaster の期日・重要度・完了を作業へ
-          return { count: t.added + t.done + (n.wrote ? 1 : 0) + q.fired, detail: `判断のタスク 立てた ${t.added}・済み ${t.done}・失敗 ${t.errors}／NotebookLM：${n.message}／依頼 動かした ${q.fired}・失敗 ${q.errors}／TaskMaster ${"error" in tmSync ? "読めない：" + tmSync.error : `写した ${tmSync.updated}・完了 ${tmSync.done}`}` };
+          return { count: t.added + t.done + (n.wrote ? 1 : 0) + q.fired, detail: `判断のタスク 立てた ${t.added}・済み ${t.done}・失敗 ${t.errors}／NotebookLM：${n.message}／依頼 動かした ${q.fired}・失敗 ${q.errors}／改善係 ${kz.ran ? "出した" : kz.reason}／TaskMaster ${"error" in tmSync ? "読めない：" + tmSync.error : `写した ${tmSync.updated}・完了 ${tmSync.done}`}` };
         })
       );
       // 2026-10-07（v1.1.0）：会員管理くんの自動写像（handleAutoMappingCron）を止めた。

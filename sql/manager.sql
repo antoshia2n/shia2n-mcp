@@ -231,3 +231,7 @@ alter table public.mk_kinds enable row level security; alter table public.mk_sco
 alter table public.mk_works add column if not exists tm_project_id text, add column if not exists tm_project_name text, add column if not exists tm_task_id text,
   add column if not exists tm_deadline text, add column if not exists tm_priority text, add column if not exists tm_synced_at timestamptz;
 create unique index if not exists mk_works_tm_task_uq on public.mk_works (tm_task_id) where tm_task_id is not null;
+
+-- v1.142.0（2026-11-22 9便目の 2）：改善係の出どころ（Supabase に入れ済み：manager_kun_kaizen_source）
+alter table public.mk_requests drop constraint if exists mk_requests_source_check;
+alter table public.mk_requests add constraint mk_requests_source_check check (source in ('Naoki','チャット','直し','改善係'));
