@@ -371,6 +371,7 @@ export function workOut(w: Row, chats: Row[] = [], reqs: Row[] = []) {
     チャットの数: chats.length,
     判断待ち: chats.filter((c) => c.state === "判断待ち").length,
     段階: w.level === undefined || w.level === null ? 1 : Number(w.level),
+    型: w.kind ? String(w.kind) : null,
     最後に触った: jstShort(last),
     進み: workProgress(w, chats, reqs),
     タブの数: Array.isArray(w.tabs) ? w.tabs.length : 0,
@@ -422,7 +423,7 @@ export function workProgress(w: Row, chats: Row[], reqs: Row[]) {
   const naoki = chats.filter((c) => { const t = turnLabel(c); return t === "Naoki の番" || t === "返事が来た"; }).length + reqs.filter((r) => r.state === "OK待ち").length;
   const ai = chats.filter((c) => turnLabel(c) === "AI が作業中").length + reqs.filter((r) => r.state === "実行中" || r.state === "順番待ち").length;
   const color = w.state === "済み" ? "grey" : naoki ? "red" : ai ? "blue" : "green";
-  return { Naokiの番: naoki, AIが作業中: ai, 依頼の済み: live.filter((r) => r.state === "済み").length, 依頼の全部: live.length, 色: color as "grey" | "red" | "blue" | "green" };
+  return { Naokiの番: naoki, AIが作業中: ai, 依頼の済み: live.filter((r) => r.state === "済み").length, 依頼の全部: live.length, 評価待ち: reqs.filter(needsScore).length, 色: color as "grey" | "red" | "blue" | "green" };
 }
 
 export type TabRow = { url: string; title: string };
@@ -445,4 +446,43 @@ export function nowChats(chats: Row[]): Row[] {
   const rank = (c: Row) => ({ "返事が来た": 0, "Naoki の番": 1, "AI が作業中": 2 } as Record<string, number>)[turnLabel(c) ?? ""] ?? 3;
   return chats.filter((c) => c.state !== "閉じた" && c.state !== "寝かせ中" && c.name !== undefined)
     .sort((a, b) => rank(a) - rank(b) || String(b.touched_at ?? "").localeCompare(String(a.touched_at ?? ""))).slice(0, 3);
+}
+
+/* ─── v1.136.0（2026-11-22 9便目）：作業の型と評価（クオリティ・仕組み） ─── */
+
+/** 作業の型（仕事の種類）。空白をつめて 60 字まで。空は null */
+export function kindName(v: unknown): string | null {
+  const s = String(v ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+  return s || null;
+}
+
+export type ScoreCheck = { ok: true; quality: number; system: number; q_note: string; s_note: string } | { ok: false; message: string };
+/** 評価：クオリティ・仕組み とも 0〜100 の整数。一言は 1000 字まで */
+export function checkScore(v: Record<string, unknown>): ScoreCheck {
+  const n = (x: unknown) => (x === "" || x === null || x === undefined ? NaN : Number(x));
+  const q = n(v.quality), s = n(v.system);
+  if (!Number.isInteger(q) || q < 0 || q > 100) return { ok: false, message: "クオリティは 0〜100 の数で付けてください" };
+  if (!Number.isInteger(s) || s < 0 || s > 100) return { ok: false, message: "仕組みは 0〜100 の数で付けてください" };
+  const t = (x: unknown) => String(x ?? "").trim().slice(0, 1000);
+  return { ok: true, quality: q, system: s, q_note: t(v.q_note), s_note: t(v.s_note) };
+}
+
+/** 両方 100 点か（自動化へ上げる合図） */
+export const isPerfect = (s: { quality: number; system: number }) => Number(s.quality) === 100 && Number(s.system) === 100;
+
+/** 点数の流れ：新しい順の評価から、直近 5 回の平均と、その前の 5 回の平均（無ければ null） */
+export function scoreTrend(rows: Array<Record<string, any>>) {
+  const avg = (xs: Array<Record<string, any>>, k: "quality" | "system") => xs.length ? Math.round(xs.reduce((a, x) => a + Number(x[k]), 0) / xs.length) : null;
+  const now = rows.slice(0, 5), prev = rows.slice(5, 10);
+  return { 回数: rows.length, クオリティ: avg(now, "quality"), 仕組み: avg(now, "system"), 前のクオリティ: avg(prev, "quality"), 前の仕組み: avg(prev, "system") };
+}
+
+/** 評価待ち：この便より後に済みになった依頼で、まだ評価していないもの */
+export const SCORE_FROM = "2026-11-22T05:00:00Z";
+export function needsScore(r: Row): boolean {
+  return r.state === "済み" && !r.scored && !!r.done_at && String(r.done_at) >= SCORE_FROM;
+}
+
+export function scoreOut(s: Row) {
+  return { 番号: Number(s.id), 依頼: s.request_id ? Number(s.request_id) : null, 型: s.kind ? String(s.kind) : null, クオリティ: Number(s.quality), 仕組み: Number(s.system), クオリティの一言: String(s.q_note ?? ""), 仕組みの一言: String(s.s_note ?? ""), 時刻: jstShort(s.at) };
 }

@@ -306,7 +306,7 @@ export async function pinsByTitle(env: SbEnv, q: string, limit = 20): Promise<Ro
 
 /* ─── v1.129.0（2026-11-22 5便目）：作業（分野 ＞ 作業 ＞ チャット） ─── */
 
-const WORK_COLS = "id,name,area,state,level,tabs,tabs_at,created_at,touched_at";
+const WORK_COLS = "id,name,area,state,level,kind,tabs,tabs_at,created_at,touched_at";
 
 export async function workById(env: SbEnv, id: number): Promise<Row | null> {
   if (!Number.isInteger(id) || id <= 0) return null;
@@ -328,8 +328,11 @@ export async function worksWithChats(env: SbEnv, opt: { all?: boolean; area?: st
   const ids = works.map((w) => w.id).join(",");
   const [chats, reqs]: [Row[], Row[]] = await Promise.all([
     sb(env, `mk_chats?select=no,name,ai,url,state,touched_at,work_id,turn&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
-    sb(env, `mk_requests?select=work_id,state&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
+    sb(env, `mk_requests?select=id,work_id,state,done_at&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
   ]);
+  // v1.136.0：評価した依頼に印（評価待ちの数のため）
+  const scored = new Set(((await sb(env, `mk_scores?select=request_id&work_id=in.(${ids})&request_id=not.is.null&limit=5000`)) || []).map((r: Row) => Number(r.request_id)));
+  for (const r of reqs) r.scored = scored.has(Number(r.id));
   // v1.134.0：作業ごとの最後のやったこと（「今」のカード）
   const byChat = new Map(chats.map((c) => [Number(c.no), Number(c.work_id)]));
   const lastDone = new Map<number, Row>();
