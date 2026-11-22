@@ -226,3 +226,8 @@ create table if not exists public.mk_scores (
 );
 create unique index if not exists mk_scores_req_uq on public.mk_scores (request_id) where request_id is not null;
 alter table public.mk_kinds enable row level security; alter table public.mk_scores enable row level security;
+
+-- v1.138.0（2026-11-22 10便目）：フォルダ（TaskMaster のプロジェクト）とタスク（Supabase に入れ済み：manager_kun_folders_tasks）
+alter table public.mk_works add column if not exists tm_project_id text, add column if not exists tm_project_name text, add column if not exists tm_task_id text,
+  add column if not exists tm_deadline text, add column if not exists tm_priority text, add column if not exists tm_synced_at timestamptz;
+create unique index if not exists mk_works_tm_task_uq on public.mk_works (tm_task_id) where tm_task_id is not null;

@@ -372,6 +372,8 @@ export function workOut(w: Row, chats: Row[] = [], reqs: Row[] = []) {
     判断待ち: chats.filter((c) => c.state === "判断待ち").length,
     段階: w.level === undefined || w.level === null ? 1 : Number(w.level),
     型: w.kind ? String(w.kind) : null,
+    フォルダ: w.tm_project_id ? { 番号: String(w.tm_project_id), 名前: String(w.tm_project_name ?? "") } : null,
+    タスク: w.tm_task_id ? { 番号: String(w.tm_task_id), 期日: w.tm_deadline ? String(w.tm_deadline) : null, 重要度: w.tm_priority ? String(w.tm_priority) : null, 住所: `https://taskmaster.shia2n.jp/?task=${encodeURIComponent(String(w.tm_task_id))}` } : null,
     最後に触った: jstShort(last),
     進み: workProgress(w, chats, reqs),
     タブの数: Array.isArray(w.tabs) ? w.tabs.length : 0,
