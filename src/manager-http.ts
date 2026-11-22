@@ -14,6 +14,8 @@
  *   POST /manager/api/ext-revoke      … 拡張の鍵を全部止める（v1.126.0）
  *   GET  /manager/api/ext-status      … 鍵がつながっているか・最後に使った時刻（v1.126.0）
  *   POST /manager/ext/capture         … シアニンパネルが読んだチャットの全文を受ける。拡張の鍵（書くだけ）で通す（v1.126.0）
+ *   POST /manager/ext/turn            … 誰の番の合図（AI が書き始めた・Naoki が見た）（v1.133.0）
+ *   POST /manager/ext/tabs            … タブのまとまりの中身（チャット以外も）を作業へ写す（v1.133.0）
  *   manager.shia2n.jp の / は /manager と同じ画面（v1.126.0）
  *   v1.128.0（4便目）：chats に area（分野で絞る）と areas（棚ごとの数）、chat にやったことと最後の頼みごと、
  *   GET /manager/api/activity?range=today|week … 今日・今週やったこと（拡張だけのチャットは最後の頼みごとで代わりに出す）
@@ -26,8 +28,8 @@
  */
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
-import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
-import { ManagerError, applyCapture, attachGroup, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
+import { ManagerError, applyCapture, attachGroup, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
@@ -94,7 +96,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     }
     if (request.method === "GET" && op === "works") {
       const ws = await worksWithChats(env, { all: sp.get("all") === "1" });
-      return reply({ ok: true, works: ws.map((x) => workOut(x.work, x.chats)) });
+      return reply({ ok: true, works: ws.map((x) => workOut(x.work, x.chats, x.reqs)) });
     }
     if (request.method === "GET" && op === "work") {
       const id = Number(sp.get("id"));
@@ -102,7 +104,8 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       if (!d) return reply({ ok: false, message: `作業 ${id} はありません` }, 404);
       const name = new Map(d.chats.map((c) => [Number(c.no), String(c.name)]));
       const reqs = await requestsOfWork(env, id);
-      return reply({ ok: true, work: workOut(d.work, d.chats), chats: d.chats.map(chatOut), requests: reqs.map((r) => requestOut(r)),
+      return reply({ ok: true, work: workOut(d.work, d.chats, reqs), chats: d.chats.map(chatOut), requests: reqs.map((r) => requestOut(r)),
+        tabs: (Array.isArray(d.work.tabs) ? d.work.tabs : []).map((t: any) => ({ 住所: String(t.url), 題: String(t.title || "") })), タブを写した: d.work.tabs_at ? jstShort(d.work.tabs_at) : null,
         done: d.done.map((x) => ({ やったこと: x.text, 住所: x.link ?? null, 時刻: jstShort(x.at), チャット番号: Number(x.chat_no), チャットの名前: name.get(Number(x.chat_no)) ?? "" })),
         prs: prLinks(d.done).map((p) => ({ ...p, チャットの名前: name.get(p.チャット番号) ?? "" })),
         pins: d.pins.map((p) => ({ チャット番号: Number(p.chat_no), 番号: Number(p.n), 題: p.title, 作った: jstShort(p.created_at), チャットの名前: name.get(Number(p.chat_no)) ?? "" })) });
@@ -286,7 +289,7 @@ async function capture(request: Request, env: Env): Promise<Response> {
     const c = checkCapture(body);
     if (!c.ok) return out({ ok: false, error: "invalid", message: c.message }, 400);
     const r = await applyCapture(env, c);
-    return out({ ok: true, 番号: r.no, 結び方: r.how, 名前: r.name, 往復: c.turns });
+    return out({ ok: true, 番号: r.no, 結び方: r.how, 名前: r.name, 往復: c.turns, ...(await paintOf(env, r.no)) });
   } catch (e) {
     return out({ ok: false, error: "failed", message: String((e as Error)?.message || e).slice(0, 300) }, 502);
   }
@@ -310,17 +313,66 @@ async function groupHook(request: Request, env: Env): Promise<Response> {
     let c = await chatByUrl(env, page.url);
     if (!c) c = await createChat(env, { name: chatName(String(body.title || "").replace(/\s*[-|｜]\s*(ChatGPT|Claude)\s*$/, "")) || "読み込み待ちのチャット", ai: page.service === "chatgpt" ? "gpt" : "claude", state: "進行中", url: page.url, surface: PANEL_SURFACE });
     const r = await attachGroup(env, Number(c.no), g);
-    return out({ ok: true, 番号: Number(c.no), 作業: r.work?.name ?? null });
+    return out({ ok: true, 番号: Number(c.no), 作業: r.work?.name ?? null, ...(await paintOf(env, Number(c.no))) });
   } catch (e) {
     return out({ ok: false, error: "failed", message: String((e as Error)?.message || e).slice(0, 300) }, 502);
   }
 }
+
+/** そのチャットの作業の色（拡張がまとまりを塗る）。作業に入っていなければ空 */
+async function paintOf(env: Env, chatNo: number): Promise<{ まとまり?: { 名前: string; 色: string } }> {
+  try {
+    const c = await chatByNo(env, chatNo);
+    const p = c?.work_id ? await workColor(env, Number(c.work_id)) : null;
+    return p ? { まとまり: { 名前: p.name, 色: p.color } } : {};
+  } catch { return {}; }
+}
+
+/** 拡張の鍵で通す口の共通の形（書くだけ）（v1.133.0） */
+async function extHook(request: Request, env: Env, fn: (body: Record<string, unknown>) => Promise<{ status?: number; body: Record<string, unknown> }>): Promise<Response> {
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Max-Age": "86400" } });
+  const out = (body: unknown, status = 200) => Response.json(body, { status, headers: { ...API_HEADERS, "Access-Control-Allow-Origin": "*" } });
+  if (request.method !== "POST") return out({ ok: false, error: "method_not_allowed" }, 405);
+  const auth = request.headers.get("Authorization") || "";
+  if (!/^Bearer mk_[A-Za-z0-9_-]{30,}$/.test(auth)) return out({ ok: false, error: "missing_key" }, 401);
+  try {
+    if (!(await useKey(env, await keyHash(auth.slice(7))))) return out({ ok: false, error: "key_revoked" }, 401);
+    if (Number(request.headers.get("Content-Length") || 0) > 200_000) return out({ ok: false, error: "too_large" }, 413);
+    let body: Record<string, unknown>;
+    try { body = await request.json() as Record<string, unknown>; } catch { return out({ ok: false, error: "bad_json" }, 400); }
+    const r = await fn(body);
+    return out(r.body, r.status ?? 200);
+  } catch (e) {
+    return out({ ok: false, error: "failed", message: String((e as Error)?.message || e).slice(0, 300) }, 502);
+  }
+}
+
+/** 誰の番の合図：AI が書き始めた（AI）／Naoki がそのタブを見た（seen） */
+const turnHook = (request: Request, env: Env) => extHook(request, env, async (b) => {
+  const page = chatPageOf(b.url);
+  const kind = b.kind === "AI" ? "AI" : b.kind === "seen" ? "seen" : null;
+  if (!page || !kind) return { status: 400, body: { ok: false, error: "invalid" } };
+  const c = await setTurnByUrl(env, page.url, kind);
+  return { body: { ok: true, 番号: c ? Number(c.no) : null, ...(c ? await paintOf(env, Number(c.no)) : {}) } };
+});
+
+/** タブのまとまりの中身（チャット以外も）を作業へ写す */
+const tabsHook = (request: Request, env: Env) => extHook(request, env, async (b) => {
+  const g = groupName(b.group);
+  const tabs = checkTabs(b.tabs);
+  if (!g || !tabs.length) return { status: 400, body: { ok: false, error: "invalid", message: "まとまりの名前とタブが要ります" } };
+  const r = await saveGroupTabs(env, g, tabs);
+  const p = await workColor(env, Number(r.work.id));
+  return { body: { ok: true, 作業: String(r.work.name), 作業番号: Number(r.work.id), 作った: r.created, タブの数: tabs.length, ...(p ? { まとまり: { 名前: p.name, 色: p.color } } : {}) } };
+});
 
 export async function handleManager(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   if (path === `${MANAGER_PATH}/ext/capture`) return capture(request, env);
   if (path === `${MANAGER_PATH}/ext/group`) return groupHook(request, env);
+  if (path === `${MANAGER_PATH}/ext/turn`) return turnHook(request, env);
+  if (path === `${MANAGER_PATH}/ext/tabs`) return tabsHook(request, env);
   if (path.startsWith(`${MANAGER_PATH}/api/`)) return api(request, env, url);
   if (request.method !== "GET" && request.method !== "HEAD") return new Response("method not allowed", { status: 405 });
   if (path === MANAGER_PATH || path === `${MANAGER_PATH}/`) {

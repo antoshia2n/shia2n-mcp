@@ -174,6 +174,7 @@ export function chatOut(r: Row) {
     判断のタスク: r.tm_task_id ? `https://taskmaster.shia2n.jp/?task=${encodeURIComponent(String(r.tm_task_id))}` : null,
     分野: r.area ? String(r.area) : null,
     作業: r.work && r.work.id ? { 番号: Number(r.work.id), 名前: String(r.work.name ?? ""), 状態: String(r.work.state ?? "") } : null,
+    番: turnLabel(r),
   };
 }
 
@@ -245,7 +246,7 @@ export function mergeTurns(old: Turn[] | null | undefined, cur: Turn[]): Turn[] 
 }
 
 export type CaptureCheck =
-  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number; list: Turn[]; project: string | null; group: string | null }
+  | { ok: true; url: string; service: "claude" | "chatgpt"; title: string; transcript: string; turns: number; list: Turn[]; project: string | null; group: string | null; seen: boolean }
   | { ok: false; message: string };
 /** 拡張から来た 1 件を確かめる。題は 120 字まで（無ければ最初の発言から）、全文は 2,000,000 字まで */
 export function checkCapture(body: Record<string, unknown>): CaptureCheck {
@@ -260,7 +261,7 @@ export function checkCapture(body: Record<string, unknown>): CaptureCheck {
   if (transcript.length > 2000000) return { ok: false, message: "全文が 2,000,000 字を超えています" };
   const fallback = turns[0].user.trim().replace(/\s+/g, " ").slice(0, 60) || "名前のないチャット";
   const title = chatName(String(body.title ?? "").replace(/\s*[-|｜]\s*(ChatGPT|Claude)\s*$/, "")) || fallback;
-  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length, list: turns, project: areaName(body.project), group: groupName(body.group) };
+  return { ok: true, url: page.url, service: page.service, title, transcript, turns: turns.length, list: turns, project: areaName(body.project), group: groupName(body.group), seen: body.seen !== false };
 }
 
 /** 鍵の文字列 → sha256（16 進）。鍵そのものは台帳に置かない */
@@ -360,7 +361,7 @@ export function workShownState(w: Row, chats: Row[]): "済み" | "判断待ち" 
 }
 
 /** 作業の 1 行 → 返す形 */
-export function workOut(w: Row, chats: Row[] = []) {
+export function workOut(w: Row, chats: Row[] = [], reqs: Row[] = []) {
   const last = [w.touched_at, ...chats.map((c) => c.touched_at)].filter(Boolean).sort().pop();
   return {
     番号: Number(w.id),
@@ -371,6 +372,8 @@ export function workOut(w: Row, chats: Row[] = []) {
     判断待ち: chats.filter((c) => c.state === "判断待ち").length,
     段階: w.level === undefined || w.level === null ? 1 : Number(w.level),
     最後に触った: jstShort(last),
+    進み: workProgress(w, chats, reqs),
+    タブの数: Array.isArray(w.tabs) ? w.tabs.length : 0,
   };
 }
 
@@ -390,4 +393,46 @@ export function prLinks(done: Array<{ link?: unknown; at?: unknown; chat_no?: un
 export function groupName(v: unknown): string | null {
   const s = String(v ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
   return s || null;
+}
+
+/* ─── v1.133.0（2026-11-22 7便目）：誰の番・作業の進み具合・タブの保存 ─── */
+
+export type Turn3 = "AI" | "新着" | "Naoki";
+/** チャットの「誰の番」。寝かせ中・閉じたは出さない */
+export function turnLabel(r: Row): "AI が作業中" | "返事が来た" | "Naoki の番" | null {
+  if (r.state === "寝かせ中" || r.state === "閉じた") return null;
+  if (r.turn === "AI") return "AI が作業中";
+  if (r.turn === "新着") return "返事が来た";
+  if (r.turn === "Naoki" || r.state === "判断待ち") return "Naoki の番";
+  return null;
+}
+
+/** 拡張が読んだあとの番：中身が変わっていなければ前のまま（見たなら 新着 → Naoki）。変わったら 見ていれば Naoki・見ていなければ 新着 */
+export function nextTurn(prev: string | null | undefined, changed: boolean, seen: boolean): Turn3 | null {
+  if (!changed) return prev === "新着" && seen ? "Naoki" : prev === "AI" ? (seen ? "Naoki" : "新着") : null;
+  return seen ? "Naoki" : "新着";
+}
+
+/** 作業の進み具合：Naoki の番の数・AI が作業中の数・依頼の済み／全部・まとまりの色 */
+export function workProgress(w: Row, chats: Row[], reqs: Row[]) {
+  const live = reqs.filter((r) => r.state !== "やめた");
+  const naoki = chats.filter((c) => { const t = turnLabel(c); return t === "Naoki の番" || t === "返事が来た"; }).length + reqs.filter((r) => r.state === "OK待ち").length;
+  const ai = chats.filter((c) => turnLabel(c) === "AI が作業中").length + reqs.filter((r) => r.state === "実行中" || r.state === "順番待ち").length;
+  const color = w.state === "済み" ? "grey" : naoki ? "red" : ai ? "blue" : "green";
+  return { Naokiの番: naoki, AIが作業中: ai, 依頼の済み: live.filter((r) => r.state === "済み").length, 依頼の全部: live.length, 色: color as "grey" | "red" | "blue" | "green" };
+}
+
+export type TabRow = { url: string; title: string };
+/** 保存するタブ：http(s) の住所だけ・同じ住所は 1 つ・40 本まで。題は 200 字まで */
+export function checkTabs(v: unknown): TabRow[] {
+  const seen = new Set<string>();
+  const out: TabRow[] = [];
+  for (const t of Array.isArray(v) ? v : []) {
+    const url = String((t as any)?.url ?? "").trim();
+    if (!/^https?:\/\/[^\s]+$/i.test(url) || url.length > 2000 || seen.has(url)) continue;
+    seen.add(url);
+    out.push({ url, title: String((t as any)?.title ?? "").replace(/\s+/g, " ").trim().slice(0, 200) });
+    if (out.length >= 40) break;
+  }
+  return out;
 }
