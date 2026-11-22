@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.143.0"; // 2026-11-22 マネージャーくん：manager__waiting に評価待ち（統括から）
+export const APP_VERSION = "1.144.0"; // 2026-11-22 マネージャーくん：manager__work に folder（統括から）
