@@ -73,7 +73,7 @@ export function checkRequest(v: ReqInput): ReqCheck {
 export function autoQueue(level: number, source: string): boolean {
   if (level <= 0) return false;
   if (level >= 2) return true;
-  return source === "Naoki" || source === "直し";
+  return source === "Naoki" || source === "直し" || source === "改善係"; // v1.142.0：改善係の見直しは案を出すだけなのですぐ動かす
 }
 
 /** ルーティンへ渡す文（保存したプロンプトに添えて届く・65,536 字まで） */
@@ -205,7 +205,7 @@ async function syncRequestTask(env: Env, r: Row): Promise<void> {
 }
 
 /** 依頼を作る。段階と出どころで、そのまま順番待ちへ入れて動かすか、OK待ちで止めるかを決める */
-export async function submitRequest(env: Env, workId: number, input: ReqInput, meta: { source: "Naoki" | "チャット" | "直し"; from_chat_no?: number | null; parent_id?: number | null; fix?: string }): Promise<{ req: Row; fired: FireResult | null }> {
+export async function submitRequest(env: Env, workId: number, input: ReqInput, meta: { source: "Naoki" | "チャット" | "直し" | "改善係"; from_chat_no?: number | null; parent_id?: number | null; fix?: string }): Promise<{ req: Row; fired: FireResult | null }> {
   const c = checkRequest(input);
   if (!c.ok) throw new ManagerError("invalid_request", c.message);
   const work = await workById(env, workId);
