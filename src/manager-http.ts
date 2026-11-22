@@ -29,7 +29,7 @@
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
 import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkScore, scoreOut, scoreTrend, needsScore, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
-import { ManagerError, applyCapture, attachGroup, findOrCreateWork, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { ManagerError, openWorkNamed, applyCapture, attachGroup, findOrCreateWork, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
@@ -421,8 +421,10 @@ const turnHook = (request: Request, env: Env) => extHook(request, env, async (b)
 /** タブのまとまりの中身（チャット以外も）を作業へ写す */
 const tabsHook = (request: Request, env: Env) => extHook(request, env, async (b) => {
   const g = groupName(b.group);
-  const tabs = checkTabs(b.tabs);
+  let tabs = checkTabs(b.tabs);
   if (!g || !tabs.length) return { status: 400, body: { ok: false, error: "invalid", message: "まとまりの名前とタブが要ります" } };
+  // v1.146.0：add＝今ある保存に足す（「全部しまう」の受け箱。前にしまった分を消さない・新しいものを上に・100 本まで）
+  if (b.add === true) { const cur = await openWorkNamed(env, g); tabs = checkTabs([...tabs, ...(Array.isArray(cur?.tabs) ? cur!.tabs : [])], 100); }
   const r = await saveGroupTabs(env, g, tabs);
   const p = await workColor(env, Number(r.work.id));
   return { body: { ok: true, 作業: String(r.work.name), 作業番号: Number(r.work.id), 作った: r.created, タブの数: tabs.length, ...(p ? { まとまり: { 名前: p.name, 色: p.color } } : {}) } };
