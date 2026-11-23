@@ -38,7 +38,7 @@ import { addScore, kinds, scoresFor, setKind, setKindLevel } from "./manager-sco
 import { linkTask, setFolder, syncWorkDone, tmOpen } from "./manager-folders.js";
 import { runKaizen } from "./manager-kaizen.js";
 import { censusOut, discardPlan, latestCensus, markApplied, saveCensus } from "./manager-census.js";
-import { archiveList, deleteWork, tabHits } from "./manager-archive.js";
+import { archiveList, canDelete, deleteWork, tabHits } from "./manager-archive.js";
 
 export const MANAGER_PATH = "/manager";
 
@@ -182,6 +182,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const rows = await archiveList(env, (sp.get("q") || "").trim().slice(0, 200), sp.get("state") || "");
       return reply({ ok: true, works: rows });
     }
+    if (request.method === "GET" && op === "work-can-delete") return reply({ ok: true, ...(await canDelete(env, Number(sp.get("id")))) });
     if (request.method === "POST" && op === "work-delete") {
       let body: Record<string, unknown>;
       try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
