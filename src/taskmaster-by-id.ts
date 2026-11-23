@@ -16,7 +16,8 @@ const API = "https://firestore.googleapis.com/v1/" + DB + "/documents";
 
 type Ctx = { token: string; uid: string };
 export type TaskNow = { exists: boolean; deadline: unknown; hasDeadline: boolean; startDate?: unknown; hasStartDate?: boolean;
-  completed: boolean; archived: boolean; updateTime: string };
+  completed: boolean; archived: boolean; updateTime: string;
+  priority?: unknown; projectId?: unknown }; // v1.149.0：マネージャーくんの写し（manager-folders.ts の syncFromTaskmaster）が使う
 
 /** 結んだタスクだけを id で読む（全部は読まない） */
 export async function readTasksById(ctx: Ctx, ids: string[]): Promise<Map<string, TaskNow>> {
@@ -37,7 +38,8 @@ export async function readTasksById(ctx: Ctx, ids: string[]): Promise<Map<string
         const v = (k: string) => (k in f ? fromVal(f[k] as FVal) : undefined);
         out.set(id, { exists: true, deadline: v("deadline"), hasDeadline: "deadline" in f,
           startDate: v("startDate"), hasStartDate: "startDate" in f,
-          completed: v("completed") === true, archived: v("archived") === true, updateTime: r.found.updateTime ?? "" });
+          completed: v("completed") === true, archived: v("archived") === true, updateTime: r.found.updateTime ?? "",
+          priority: v("priority"), projectId: v("projectId") });
       } else if (r.missing) {
         out.set(decodeURIComponent(r.missing.split("/").pop() || ""), { exists: false, deadline: undefined, hasDeadline: false, hasStartDate: false, completed: false, archived: false, updateTime: "" });
       }

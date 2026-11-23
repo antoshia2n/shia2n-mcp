@@ -7,7 +7,8 @@
  *   ・繰り返しのタスクはつながない（完了すると次の回が立つため）
  */
 import type { Env } from "./index.js";
-import { handleTaskmasterAddTask, handleTaskmasterTasks, handleTaskmasterUpdateTask } from "./taskmaster.js";
+import { expandValue, fsGetOrNull, getFirestoreToken, handleTaskmasterAddTask, handleTaskmasterTasks, handleTaskmasterUpdateTask } from "./taskmaster.js";
+import { readTasksById } from "./taskmaster-by-id.js";
 import { ManagerError, workById } from "./manager-store.js";
 
 type Row = Record<string, any>;
@@ -92,19 +93,34 @@ export async function syncWorkDone(env: Env, w: Row): Promise<void> {
   try { await tmUpdate(env, body); } catch {}
 }
 
-/** 15・45 分ごと：つながっているタスクの期日・重要度を写し、TaskMaster で完了したものは作業も完了にする */
+/**
+ * 15・45 分ごと：つながっているタスクの期日・重要度を写し、TaskMaster で完了したものは作業も完了にする
+ * v1.149.0（2026-11-23 開発部・Naoki OK 17:04）：結んだタスクだけを id で読む（documents:batchGet）。
+ *   それまでは毎回 tmOpen で未完了のタスクを全部（2026-11-23 実測 193 件）読んでいて、1 日 48 回で約 9,300 回。
+ *   Firestore の無料枠（1 日 5 万回の読み）を使い切り、同じ日の 16 時台にログインと TaskMaster が止まった件の一部。
+ *   プロジェクトの文書（1 回の読み）は、期日か重要度が変わって写すときだけ読む。
+ */
+const nullStr = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 export async function syncFromTaskmaster(env: Env): Promise<{ updated: number; done: number }> {
   const works: Row[] = (await sb(env, `mk_works?select=id,tm_task_id,tm_deadline,tm_priority&tm_task_id=not.is.null&state=eq.${encodeURIComponent("進行中")}&limit=500`)) || [];
   if (!works.length) return { updated: 0, done: 0 };
-  const { tasks, projects } = await tmOpen(env);
-  const byId = new Map(tasks.map((t) => [String(t.id), t]));
+  if (!env.NAOKI_UID) throw new Error("NAOKI_UID がありません");
+  const token = await getFirestoreToken(env), uid = env.NAOKI_UID;
+  const now = await readTasksById({ token, uid }, [...new Set(works.map((w) => String(w.tm_task_id)))]);
+  let projects: Row[] | null = null;
   let updated = 0, done = 0;
   for (const w of works) {
-    const t = byId.get(String(w.tm_task_id));
-    if (!t) { await patchWork(env, Number(w.id), { state: "済み" }); done++; continue; }
-    const p = projects.find((x) => x.id === t.projectId);
-    if (t.deadline !== w.tm_deadline || t.priority !== w.tm_priority) {
-      await patchWork(env, Number(w.id), { tm_deadline: t.deadline ?? null, tm_priority: t.priority ?? null, ...(p ? { tm_project_id: p.id, tm_project_name: p.title } : {}), tm_synced_at: new Date().toISOString() });
+    const t = now.get(String(w.tm_task_id));
+    if (!t) continue; // 返りに無い（読めなかった）ものには触らない
+    // 前と同じ：開いているタスク（未完了・アーカイブでない）に無ければ、作業も完了
+    if (!t.exists || t.completed || t.archived) { await patchWork(env, Number(w.id), { state: "済み" }); done++; continue; }
+    const deadline = nullStr(t.deadline), priority = nullStr(t.priority) ?? "medium", projectId = nullStr(t.projectId);
+    if (deadline !== w.tm_deadline || priority !== w.tm_priority) {
+      projects ??= await fsGetOrNull(token, `users/${uid}/app_data/projects`)
+        .then((d) => (d ? expandValue(d) : []).map((p: Row) => ({ id: String(p.id ?? p.projectId ?? ""), title: String(p.title ?? ""), status: String(p.status ?? "") })).filter((p) => p.status !== "archived"))
+        .catch(() => [] as Row[]);
+      const p = projects.find((x) => x.id === projectId);
+      await patchWork(env, Number(w.id), { tm_deadline: deadline, tm_priority: priority, ...(p ? { tm_project_id: p.id, tm_project_name: p.title } : {}), tm_synced_at: new Date().toISOString() });
       updated++;
     }
   }
