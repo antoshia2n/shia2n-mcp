@@ -38,7 +38,7 @@ export function registerTaskmasterTools(server: McpServer, env: Env): void {
 
   server.tool(
     "taskmaster__list_tasks",
-    "TaskMasterに登録されているNaokiの未完了タスクとプロジェクト一覧を取得する。archived:false かつ completed:false のみ返す。秘書Claudeが毎朝起動時に呼び出す。戻り値は { tasks: [{id, title, status, priority, deadline, groupId, projectId, sub?}], projects: [{id, title, status, endDate}] }。sub はサブタスクがあるタスクだけ {n, done, pct（進捗率 %）, by（time＝見積もり時間で／count＝件数で）, est_total（見積もりの合計・分）, est_left（残り・分）, missing（見積もりが空の数）}。with_subtasks: true でサブタスクの中身 subtasks: [{id, title, done, est?（分）, memo?}] も返す（見積もりを入れる前に id を見るとき）。",
+    "TaskMasterに登録されているNaokiの未完了タスクとプロジェクト一覧を取得する。archived:false かつ completed:false のみ返す。秘書Claudeが毎朝起動時に呼び出す。戻り値は { tasks: [{id, title, status, priority, deadline, groupId, projectId, sub?, postponed?, postpones?}], projects: [{id, title, status, endDate}] }。sub はサブタスクがあるタスクだけ {n, done, pct（進捗率 %）, by（time＝見積もり時間で／count＝件数で）, est_total（見積もりの合計・分）, est_left（残り・分）, missing（見積もりが空の数）}。with_subtasks: true でサブタスクの中身 subtasks: [{id, title, done, est?（分）, memo?}] も返す（見積もりを入れる前に id を見るとき）。。postponed は TaskMaster の「先延ばし」で期限をずらした回数、postpones はその履歴（直近 10 回・at＝いつ・from＝元の期限・to＝新しい期限・why＝理由）で、先延ばしがあるタスクだけ",
     {
       with_subtasks: z.boolean().optional().describe("true でサブタスクの中身（id・名前・済み・見積もり・メモの頭）も返す。省略時は数と進捗率だけ"),
     },

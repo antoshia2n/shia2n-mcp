@@ -300,6 +300,9 @@ type TaskRecord = {
   templateId?: string;
   /** サブタスクの数・進捗率・見積もり（分）。サブタスクがあるときだけ（v1.81.0） */
   sub?: SubStats;
+  /** 先延ばしした回数と、直近 10 回の履歴（2026-11-23・ある時だけ） */
+  postponed?: number;
+  postpones?: { at: string; from: string; to: string; why?: string }[];
 };
 
 type ProjectRecord = {
@@ -331,6 +334,8 @@ function toTask(t: Item): TaskRecord {
     ...(typeof t.repeat === "string" && t.repeat ? { repeat: t.repeat } : {}),
     ...(typeof t.templateId === "string" && t.templateId ? { templateId: t.templateId } : {}),
     ...(() => { const st = subStats(t); return st ? { sub: st } : {}; })(),
+    // 2026-11-23：TaskMaster の先延ばしの回数と履歴（いつ・元の期限・新しい期限・理由）。ある時だけ
+    ...(() => { const pp = Array.isArray(t.postpones) ? (t.postpones as unknown[]).filter((x) => x && typeof x === "object") as Item[] : []; return pp.length ? { postponed: pp.length, postpones: pp.slice(-10).map((x) => ({ at: str(x.at), from: str(x.from), to: str(x.to), ...(str(x.why) ? { why: str(x.why) } : {}) })) } : {}; })(),
   };
 }
 
@@ -428,13 +433,18 @@ const dayGap = (from: string, to: string) => Math.round((Date.parse(to + "T00:00
 const shiftDay = (s: string, n: number) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 /** 次の回の着手日と期限（taskmaster の nextRepeatDates と同じ決まり・2026-11-07 にそろえた）。
  *  今日以前になるときは今日より後まで進める。着手日と期限のあいだの日数を保つ。着手日だけなら着手日だけ進める */
-export function nextRepeatDates(t: Item, todayStr: string): { deadline: string; startDate: string } | null {
+// 2026-11-23（TaskMaster の先延ばし）：先延ばしした回は、ずらす前の日付（repeatFrom）から数え、ずらした日より後にする（画面と同じ）
+export function nextRepeatDates(t0: Item, todayStr: string): { deadline: string; startDate: string } | null {
+  const rf = t0.repeatFrom && typeof t0.repeatFrom === "object" ? (t0.repeatFrom as Item) : null;
+  const moved = rf ? String((isDay(t0.deadline) && t0.deadline) || (isDay(t0.startDate) && t0.startDate) || "") : "";
+  const t: Item = moved ? { ...t0, deadline: typeof rf!.deadline === "string" ? rf!.deadline : "", startDate: typeof rf!.startDate === "string" ? rf!.startDate : "" } : t0;
+  const floor = moved && moved > todayStr ? moved : todayStr;
   const repeat = typeof t.repeat === "string" ? t.repeat : "";
   const hasDl = isDay(t.deadline), hasStart = isDay(t.startDate);
   const anchor = hasDl ? (t.deadline as string) : hasStart ? (t.startDate as string) : todayStr;
   let d = nextRepeatDate(anchor, repeat);
   if (!d) return null;
-  for (let i = 0; d && d <= todayStr && i < 1000; i++) d = nextRepeatDate(d, repeat);
+  for (let i = 0; d && d <= floor && i < 1000; i++) d = nextRepeatDate(d, repeat);
   if (!d) return null;
   if (!hasDl && hasStart) return { deadline: "", startDate: d };
   if (!hasStart) return { deadline: d, startDate: typeof t.startDate === "string" ? t.startDate : "" };
@@ -451,6 +461,7 @@ export function nextRepeatTask(t: Item, todayStr: string): Item | null {
   // サブタスクのメモはその回だけ（見積もりは持ち越す・画面と同じ 2026-11-12）
   const subs = Array.isArray(t.subtasks) ? (t.subtasks as unknown[]).map((x) => (x && typeof x === "object" ? (({ memo: _m, ...r }) => ({ ...r, done: false }))(x as Item) : x)) : [];
   return { ...t, id: repeatNextId(t, nd), seriesId: seriesOf(t), spawnedFrom: String(t.id), deadline: nd.deadline, startDate: nd.startDate,
+    postpones: [], repeatFrom: null, // 先延ばしの記録はその回だけ（2026-11-23）
     completed: false, status: "todo", doneAt: "", completedAt: "", archived: false,
     order: typeof t.order === "number" ? t.order + 1 : t.order, subtasks: subs, labels: [], waitFor: "", doneWhen: "",
     // テンプレ付きはメモ＝その回の記録なので、次の回はまっさら（画面の toggleDone と同じ・2026-10-26）
