@@ -79,6 +79,7 @@ export async function linkTask(env: Env, workId: number, taskId: string | null):
   return patchWork(env, workId, { tm_task_id: t.id, tm_project_id: p?.id ?? null, tm_project_name: p?.title ?? null, tm_deadline: t.deadline ?? null, tm_priority: t.priority ?? null, tm_synced_at: new Date().toISOString() });
 }
 
+export async function tmUpdateTask(env: Env, body: Record<string, unknown>): Promise<Response> { return tmUpdate(env, body); }
 async function tmUpdate(env: Env, body: Record<string, unknown>): Promise<Response> {
   return handleTaskmasterUpdateTask(new Request("https://internal/taskmaster/tasks/update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }), env);
 }
@@ -86,7 +87,9 @@ async function tmUpdate(env: Env, body: Record<string, unknown>): Promise<Respon
 /** 作業の完了・戻しを、つながっているタスクへ写す（TaskMaster が止まっていても作業は止めない） */
 export async function syncWorkDone(env: Env, w: Row): Promise<void> {
   if (!w?.tm_task_id) return;
-  try { await tmUpdate(env, { task_id: w.tm_task_id, status: w.state === "済み" ? "done" : "todo" }); } catch {}
+  // v1.147.0：中止は完了にせずアーカイブ（TaskMaster の archived）。戻すとアーカイブも外す
+  const body = w.state === "中止" ? { task_id: w.tm_task_id, archived: true } : { task_id: w.tm_task_id, status: w.state === "済み" ? "done" : "todo", archived: false };
+  try { await tmUpdate(env, body); } catch {}
 }
 
 /** 15・45 分ごと：つながっているタスクの期日・重要度を写し、TaskMaster で完了したものは作業も完了にする */
