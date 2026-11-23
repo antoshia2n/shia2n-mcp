@@ -179,6 +179,7 @@ export async function attachGroup(env: SbEnv, chatNo: number, group: string): Pr
   if (chat.work && workKey(chat.work.name) === workKey(name) && chat.work.state === "進行中") return { chat, work: chat.work };
   const any = await openWorkNamed(env, name); // v1.133.0：同じ名前の作業がほかの分野にあれば、そこへ入れる
   if (any) return { chat: await attachWorkId(env, chatNo, Number(any.id)), work: any };
+  if (await recentlyGone(env, name)) return { chat, work: null }; // v1.148.3：片づけた名前は作り直さない
   const r = await attachWork(env, chat, name);
   return { chat: r.chat, work: r.work };
 }
@@ -416,6 +417,22 @@ export async function workDetail(env: SbEnv, id: number): Promise<{ work: Row; c
 /* ─── v1.133.0（2026-11-22 7便目）：誰の番・タブの保存 ─── */
 
 /** 分野を問わず、開いている作業から名前の形が同じものを探す（いちばん最近触ったもの） */
+/**
+ * v1.148.3（2026-11-23 Naoki「削除したのに復活して入ってくる」）：完了・中止・削除した作業の名前を、30 分は作り直さない。
+ * Chrome にその名前のまとまりが残っていると、拡張の自動保存（3 秒）やチャットの読み取りが同じ名前の作業を新しく作っていた。
+ */
+export const GONE_MIN = 30;
+export async function recentlyGone(env: SbEnv, name: string): Promise<boolean> {
+  const k = workKey(name), since = new Date(Date.now() - GONE_MIN * 60_000).toISOString();
+  const [closed, gone]: [Row[], Row[]] = await Promise.all([
+    sb(env, `mk_works?select=name&state=in.(${enc("済み")},${enc("中止")})&closed_at=gte.${enc(since)}&limit=200`).then((x) => x || []),
+    sb(env, `mk_gone?select=key&at=gte.${enc(since)}&limit=200`).then((x) => x || []).catch(() => []),
+  ]);
+  return closed.some((w) => workKey(w.name) === k) || gone.some((g) => g.key === k);
+}
+export async function markGone(env: SbEnv, name: string): Promise<void> {
+  await sb(env, "mk_gone", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ key: workKey(name), name, at: new Date().toISOString() }) }).catch(() => null);
+}
 export async function openWorkNamed(env: SbEnv, name: string): Promise<Row | null> {
   const k = workKey(name);
   const open: Row[] = (await sb(env, `mk_works?select=${WORK_COLS}&state=eq.${enc("進行中")}&order=touched_at.desc&limit=500`)) || [];
@@ -444,11 +461,12 @@ export async function workColor(env: SbEnv, workId: number): Promise<{ name: str
 }
 
 /** タブのまとまりの中身を作業へ写す。作業が無ければ作る（分野は中のチャットの分野でいちばん多いもの） */
-export async function saveGroupTabs(env: SbEnv, group: string, tabs: TabRow[]): Promise<{ work: Row; created: boolean }> {
+export async function saveGroupTabs(env: SbEnv, group: string, tabs: TabRow[]): Promise<{ work: Row | null; created: boolean; skipped?: boolean }> {
   const name = groupName(group);
   if (!name) throw new ManagerError("invalid", "まとまりの名前がありません");
   let work = await openWorkNamed(env, name);
   let created = false;
+  if (!work && await recentlyGone(env, name)) return { work: null, created: false, skipped: true }; // v1.148.3
   if (!work) {
     const areas: string[] = [];
     for (const t of tabs) { const p = chatPageOf(t.url); if (!p) continue; const c = await chatByUrl(env, p.url); if (c?.area) areas.push(String(c.area)); }

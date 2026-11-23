@@ -439,6 +439,7 @@ const tabsHook = (request: Request, env: Env) => extHook(request, env, async (b)
   // v1.146.0：add＝今ある保存に足す（「全部しまう」の受け箱。前にしまった分を消さない・新しいものを上に・100 本まで）
   if (b.add === true) { const cur = await openWorkNamed(env, g); tabs = checkTabs([...tabs, ...(Array.isArray(cur?.tabs) ? cur!.tabs : [])], 100); }
   const r = await saveGroupTabs(env, g, tabs);
+  if (!r.work) return { body: { ok: true, 外した: true, message: "片づけたばかりの作業の名前なので、作り直していません" } };
   const p = await workColor(env, Number(r.work.id));
   return { body: { ok: true, 作業: String(r.work.name), 作業番号: Number(r.work.id), 作った: r.created, タブの数: tabs.length, ...(p ? { まとまり: { 名前: p.name, 色: p.color } } : {}) } };
 });

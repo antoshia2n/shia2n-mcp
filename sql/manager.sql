@@ -253,3 +253,7 @@ alter table public.mk_works drop constraint if exists mk_works_state_check;
 alter table public.mk_works add constraint mk_works_state_check check (state in ('進行中','済み','中止'));
 alter table public.mk_works add column if not exists closed_at timestamptz;
 update public.mk_works set closed_at = touched_at where state = '済み' and closed_at is null;
+
+-- v1.148.3（2026-11-23）manager_kun_gone：消した作業の名前（30 分は同じ名前のまとまりから作り直さない）
+create table if not exists public.mk_gone (key text primary key, name text not null, at timestamptz not null default now());
+alter table public.mk_gone enable row level security;
