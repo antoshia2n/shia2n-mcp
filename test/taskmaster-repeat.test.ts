@@ -43,3 +43,17 @@ test("画面と同じ日付の決まり：遅れて終えた回は今日より�
     { deadline: "2026-11-06", startDate: "2026-11-03" });
   assert.deepEqual(nextRepeatDates({ repeat: "weekly", startDate: "2026-10-26" }, "2026-10-29"), { deadline: "", startDate: "2026-11-02" });
 });
+
+test("先延ばしした繰り返しの回：ずらす前の日付から数え、記録は次の回へ持ち越さない（2026-11-23）", () => {
+  const t = { id: "w", title: "週の分析", repeat: "weekly", deadline: "2026-11-25", startDate: "", repeatFrom: { deadline: "2026-11-23", startDate: "" },
+    postpones: [{ at: "2026-11-23T18:00:00+09:00", from: "2026-11-23", to: "2026-11-25" }], status: "done", completed: true };
+  assert.deepEqual(nextRepeatDates(t, "2026-11-25"), { deadline: "2026-11-30", startDate: "" });
+  const n = nextRepeatTask(t, "2026-11-25")!;
+  assert.equal(n.deadline, "2026-11-30");
+  assert.deepEqual(n.postpones, []);
+  assert.equal(n.repeatFrom, null);
+  // 毎日の回を明日へずらした：次の回はずらした日より後
+  assert.equal(nextRepeatDates({ id: "d", repeat: "daily", deadline: "2026-11-24", repeatFrom: { deadline: "2026-11-23", startDate: "" } }, "2026-11-23")!.deadline, "2026-11-25");
+  // ずらしていない回は前と同じ
+  assert.equal(nextRepeatDates({ id: "d", repeat: "daily", deadline: "2026-11-23" }, "2026-11-23")!.deadline, "2026-11-24");
+});
