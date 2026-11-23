@@ -63,6 +63,14 @@ export async function archiveList(env: Env, q: string, state: string): Promise<R
   return out;
 }
 
+/** 消せるか（評価や依頼の記録が無いか）。パネルの「削除」が先に聞く（v1.148.2） */
+export async function canDelete(env: Env, id: number): Promise<{ 消せる: boolean; 名前: string }> {
+  const w: Row | undefined = ((await sb(env, `mk_works?select=id,name&id=eq.${id}`)) || [])[0];
+  if (!w) throw new ManagerError("work_not_found", "作業がありません");
+  const [s, r] = await Promise.all([sb(env, `mk_scores?select=id&work_id=eq.${id}&limit=1`), sb(env, `mk_requests?select=id&work_id=eq.${id}&limit=1`)]);
+  return { 消せる: !(s || []).length && !(r || []).length, 名前: String(w.name) };
+}
+
 /** アーカイブから消す（作業と保存したタブ。チャットは台帳に残り、どの作業にも入っていない状態になる） */
 export async function deleteWork(env: Env, id: number): Promise<{ 消した: string }> {
   const w: Row | undefined = ((await sb(env, `mk_works?select=id,name,state,tm_task_id&id=eq.${id}`)) || [])[0];
