@@ -5,7 +5,7 @@
  *   ・検索：保存したタブの題と住所も探す（開いている・保存済みの作業だけ）
  */
 import type { Env } from "./index.js";
-import { ManagerError } from "./manager-store.js";
+import { ManagerError, markGone } from "./manager-store.js";
 import { jstShort } from "./manager-core.js";
 import { tmUpdateTask } from "./manager-folders.js";
 
@@ -80,6 +80,7 @@ export async function deleteWork(env: Env, id: number): Promise<{ 消した: str
   if ((s || []).length || (r || []).length) throw new ManagerError("work_kept", `「${w.name}」は評価や依頼の記録があるため削除できません（アーカイブに残します）`);
   if (w.tm_task_id) await tmUpdateTask(env, { task_id: w.tm_task_id, archived: true }).catch(() => null);
   await sb(env, `mk_works?id=eq.${id}`, { method: "DELETE" });
+  await markGone(env, String(w.name)); // v1.148.3：同じ名前のまとまりから作り直さない
   return { 消した: String(w.name) };
 }
 
