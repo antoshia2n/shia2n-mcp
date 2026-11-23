@@ -38,6 +38,7 @@ import { addScore, kinds, scoresFor, setKind, setKindLevel } from "./manager-sco
 import { linkTask, setFolder, syncWorkDone, tmOpen } from "./manager-folders.js";
 import { runKaizen } from "./manager-kaizen.js";
 import { censusOut, discardPlan, latestCensus, markApplied, saveCensus } from "./manager-census.js";
+import { archiveList, deleteWork, tabHits } from "./manager-archive.js";
 
 export const MANAGER_PATH = "/manager";
 
@@ -139,7 +140,7 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       }
       const patch: Record<string, unknown> = {};
       if (body.name !== undefined) { const n = workName(body.name); if (!n) return reply({ ok: false, message: "作業の名前が空です" }, 400); patch.name = n; }
-      if (body.state !== undefined) { const st = normWorkState(body.state); if (!st) return reply({ ok: false, message: "状態は 進行中 か 済み です" }, 400); patch.state = st; }
+      if (body.state !== undefined) { const st = normWorkState(body.state); if (!st) return reply({ ok: false, message: "状態は 進行中・済み・中止 のどれかです" }, 400); patch.state = st; patch.closed_at = st === "進行中" ? null : new Date().toISOString(); }
       if (body.area !== undefined) patch.area = areaName(body.area);
       if (body.level !== undefined) { const lv = Number(body.level); if (![0, 1, 2].includes(lv)) return reply({ ok: false, message: "段階は 0・1・2 のどれかです" }, 400); patch.level = lv; }
       let w = Object.keys(patch).length || body.kind === undefined ? await updateWork(env, Number(body.id), patch) : null;
@@ -175,6 +176,17 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       const tabs = checkTabs(body.tabs);
       const w = await updateWork(env, Number(body.id), { tabs: tabs.length ? tabs : null, tabs_at: new Date().toISOString() });
       return reply({ ok: true, work: workOut(w) });
+    }
+    // v1.147.0：アーカイブ（完了・中止した作業。タブとピンごと）と削除
+    if (request.method === "GET" && op === "archive") {
+      const rows = await archiveList(env, (sp.get("q") || "").trim().slice(0, 200), sp.get("state") || "");
+      return reply({ ok: true, works: rows });
+    }
+    if (request.method === "POST" && op === "work-delete") {
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      const r = await deleteWork(env, Number(body.id));
+      return reply({ ok: true, ...r });
     }
     // v1.145.0：タブの棚卸し（全ウィンドウのタブを統括へ）と統括の整理案
     if (request.method === "GET" && op === "census") return reply({ ok: true, census: censusOut(await latestCensus(env)) });
@@ -259,8 +271,8 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
     if (request.method === "GET" && op === "search") {
       const q = (sp.get("q") || "").trim().slice(0, 200);
       if (!q) return reply({ ok: true, hits: [] });
-      const rows = await search(env, q, 50);
-      return reply({ ok: true, hits: rows.map((r) => ({
+      const [rows, tabs] = await Promise.all([search(env, q, 50), tabHits(env, q, 20)]);
+      return reply({ ok: true, tabs, hits: rows.map((r) => ({
         種類: r.kind === "pin" ? "ピン" : "チャット",
         ピン: r.kind === "pin" ? `${r.chat_no}#${r.pin_n}` : null,
         チャット番号: Number(r.chat_no), 番号: r.pin_n == null ? null : Number(r.pin_n),

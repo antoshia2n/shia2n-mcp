@@ -247,3 +247,9 @@ create table if not exists public.mk_census (
   discarded_at timestamptz
 );
 alter table public.mk_census enable row level security;
+
+-- v1.147.0（2026-11-23）manager_kun_work_cancel：作業の「中止」と片づけた時刻
+alter table public.mk_works drop constraint if exists mk_works_state_check;
+alter table public.mk_works add constraint mk_works_state_check check (state in ('進行中','済み','中止'));
+alter table public.mk_works add column if not exists closed_at timestamptz;
+update public.mk_works set closed_at = touched_at where state = '済み' and closed_at is null;

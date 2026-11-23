@@ -338,9 +338,10 @@ export function workKey(v: unknown): string {
 }
 
 /** 作業の状態を言い換えて受ける。当てはまらなければ null */
-export function normWorkState(v: unknown): "進行中" | "済み" | null {
+export function normWorkState(v: unknown): "進行中" | "済み" | "中止" | null {
   const k = String(v ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
   if (!k) return null;
+  if (["中止", "やめた", "やめる", "アーカイブ", "cancel", "canceled", "cancelled", "archived"].includes(k)) return "中止"; // v1.147.0
   if (["済み", "済", "完了", "終わり", "閉じた", "閉じる", "done", "closed"].includes(k)) return "済み";
   if (["進行中", "進行", "再開", "戻す", "open", "active"].includes(k)) return "進行中";
   return null;
