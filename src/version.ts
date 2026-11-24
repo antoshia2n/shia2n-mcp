@@ -11,4 +11,4 @@
  * 版を上げるときは、この 1 行だけを書き換える。
  * 何を変えたかは index.ts の先頭の履歴に足す。
  */
-export const APP_VERSION = "1.150.0"; // 2026-11-23 TaskMaster の先延ばし：回数と履歴を taskmaster__list_tasks で返す・繰り返しの次の回の数え方を画面とそろえる
+export const APP_VERSION = "1.149.0"; // 2026-11-24 マネージャーくん：保存は押したものだけ
