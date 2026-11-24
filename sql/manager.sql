@@ -257,3 +257,7 @@ update public.mk_works set closed_at = touched_at where state = '済み' and clo
 -- v1.148.3（2026-11-23）manager_kun_gone：消した作業の名前（30 分は同じ名前のまとまりから作り直さない）
 create table if not exists public.mk_gone (key text primary key, name text not null, at timestamptz not null default now());
 alter table public.mk_gone enable row level security;
+
+-- v1.150.3（2026-11-24）manager_kun_pin_url：ピンごとの元のチャットの住所
+alter table public.mk_pins add column if not exists url text;
+update public.mk_pins p set url = c.url from public.mk_chats c where c.no = p.chat_no and c.url is not null and p.url is null;
