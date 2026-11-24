@@ -179,9 +179,7 @@ export async function attachGroup(env: SbEnv, chatNo: number, group: string): Pr
   if (chat.work && workKey(chat.work.name) === workKey(name) && chat.work.state === "進行中") return { chat, work: chat.work };
   const any = await openWorkNamed(env, name); // v1.133.0：同じ名前の作業がほかの分野にあれば、そこへ入れる
   if (any) return { chat: await attachWorkId(env, chatNo, Number(any.id)), work: any };
-  if (await recentlyGone(env, name)) return { chat, work: null }; // v1.148.3：片づけた名前は作り直さない
-  const r = await attachWork(env, chat, name);
-  return { chat: r.chat, work: r.work };
+  return { chat, work: null }; // v1.150.1：未保存のまとまりからは作業を作らない（v1.148.3 の片づけた名前もここで止まる）
 }
 
 async function applyCaptureRow(env: SbEnv, cap: Extract<CaptureCheck, { ok: true }>): Promise<{ no: number; how: "url" | "marker" | "new"; name: string }> {
@@ -461,12 +459,14 @@ export async function workColor(env: SbEnv, workId: number): Promise<{ name: str
 }
 
 /** タブのまとまりの中身を作業へ写す。作業が無ければ作る（分野は中のチャットの分野でいちばん多いもの） */
-export async function saveGroupTabs(env: SbEnv, group: string, tabs: TabRow[]): Promise<{ work: Row | null; created: boolean; skipped?: boolean }> {
+export async function saveGroupTabs(env: SbEnv, group: string, tabs: TabRow[], create = false): Promise<{ work: Row | null; created: boolean; skipped?: boolean; unsaved?: boolean }> {
   const name = groupName(group);
   if (!name) throw new ManagerError("invalid", "まとまりの名前がありません");
   let work = await openWorkNamed(env, name);
   let created = false;
   if (!work && await recentlyGone(env, name)) return { work: null, created: false, skipped: true }; // v1.148.3
+  // v1.150.1（2026-11-24 Naoki「保存は保存したいやつだけ」）：自動保存は、保存済みの作業のタブを追いかけるだけ。作業は Naoki が「保存」を押したとき（create）だけ作る
+  if (!work && !create) return { work: null, created: false, unsaved: true };
   if (!work) {
     const areas: string[] = [];
     for (const t of tabs) { const p = chatPageOf(t.url); if (!p) continue; const c = await chatByUrl(env, p.url); if (c?.area) areas.push(String(c.area)); }
