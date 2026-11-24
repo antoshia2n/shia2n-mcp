@@ -15,6 +15,7 @@
  *   GET  /manager/api/ext-status      … 鍵がつながっているか・最後に使った時刻（v1.126.0）
  *   POST /manager/ext/capture         … シアニンパネルが読んだチャットの全文を受ける。拡張の鍵（書くだけ）で通す（v1.126.0）
  *   POST /manager/ext/turn            … 誰の番の合図（AI が書き始めた・Naoki が見た）（v1.133.0）
+ *   POST /manager/ext/pin             … ピンの中身（チャットの画面でその出力まで動かすため）（v1.150.2）
  *   POST /manager/ext/tabs            … タブのまとまりの中身（チャット以外も）を作業へ写す（v1.133.0）
  *   manager.shia2n.jp の / は /manager と同じ画面（v1.126.0）
  *   v1.128.0（4便目）：chats に area（分野で絞る）と areas（棚ごとの数）、chat にやったことと最後の頼みごと、
@@ -444,6 +445,15 @@ const tabsHook = (request: Request, env: Env) => extHook(request, env, async (b)
   return { body: { ok: true, 作業: String(r.work.name), 作業番号: Number(r.work.id), 作った: r.created, タブの数: tabs.length, ...(p ? { まとまり: { 名前: p.name, 色: p.color } } : {}) } };
 });
 
+/* v1.150.2（2026-11-24 Naoki「ピンのリンクがマネージャーくんに飛ぶ」→ 元のチャットのその出力まで）：拡張がピンの中身を受け取り、チャットの画面で同じ文を探して動かす */
+const pinHook = (request: Request, env: Env) => extHook(request, env, async (b) => {
+  const chat = Number(b.chat), n = Number(b.n);
+  if (!Number.isInteger(chat) || !Number.isInteger(n) || chat < 1 || n < 1) return { status: 400, body: { ok: false, error: "invalid", message: "ピンの番号が違います" } };
+  const p = await pinFull(env, chat, n);
+  if (!p) return { status: 404, body: { ok: false, error: "pin_not_found", message: "ピンがありません" } };
+  return { body: { ok: true, 題: String(p.title ?? ""), 中身: String(p.body ?? "").slice(0, 4000) } };
+});
+
 export async function handleManager(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -451,6 +461,7 @@ export async function handleManager(request: Request, env: Env): Promise<Respons
   if (path === `${MANAGER_PATH}/ext/group`) return groupHook(request, env);
   if (path === `${MANAGER_PATH}/ext/turn`) return turnHook(request, env);
   if (path === `${MANAGER_PATH}/ext/tabs`) return tabsHook(request, env);
+  if (path === `${MANAGER_PATH}/ext/pin`) return pinHook(request, env);
   if (path.startsWith(`${MANAGER_PATH}/api/`)) return api(request, env, url);
   if (request.method !== "GET" && request.method !== "HEAD") return new Response("method not allowed", { status: 405 });
   if (path === MANAGER_PATH || path === `${MANAGER_PATH}/`) {
