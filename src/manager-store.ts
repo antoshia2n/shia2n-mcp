@@ -6,7 +6,7 @@
  * 表と関数を作る SQL は sql/manager.sql（ブラウザからは読めない・管理者キーだけ）。
  */
 import type { Env } from "./index.js";
-import { chatPageOf, extMayWriteArea, workKey, groupName, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, nextTurn, workProgress, type CaptureCheck, type Turn, type TabRow } from "./manager-core.js";
+import { chatPageOf, flatText, pinKeys, extMayWriteArea, workKey, groupName, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, nextTurn, workProgress, type CaptureCheck, type Turn, type TabRow } from "./manager-core.js";
 
 type Row = Record<string, any>;
 type SbEnv = Pick<Env, "SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY">;
@@ -118,7 +118,25 @@ export async function updateChat(env: SbEnv, no: number, patch: Record<string, u
 export async function addPin(env: SbEnv, chatNo: number, title: string, body: string): Promise<Row> {
   const rows = await sb(env, `rpc/mk_add_pin`, { method: "POST", body: JSON.stringify({ p_chat: chatNo, p_title: title, p_body: body }) });
   if (!rows?.[0]) throw new ManagerError("not_written", "ピンの行が返ってきませんでした");
+  // v1.150.3：チャットの住所が分かっていれば、ピンにも写す（あとでチャットの住所が変わっても、ピンはその会話を指す）
+  const c = await chatByNo(env, chatNo).catch(() => null);
+  if (c?.url && rows[0].id) await sb(env, `mk_pins?id=eq.${rows[0].id}`, { method: "PATCH", body: JSON.stringify({ url: c.url }) }).catch(() => null);
   return { ...rows[0], title };
+}
+
+/** v1.150.3（Naoki「ピンからチャットに飛びたいのにマネージャーくんが開く」）：住所の分からないピンを、拡張が読んだチャットの中身から見つけて住所を付ける。
+ *  GPT が道具で作ったチャットは住所を持たないことがあり、1 つの台帳のチャットが ChatGPT の会話いくつかにまたがることもあるので、ピンごとに付ける */
+export async function linkPinsByText(env: SbEnv, url: string, transcript: string): Promise<number> {
+  if (!url || !transcript) return 0;
+  const pins: Row[] = (await sb(env, `mk_pins?select=id,body&url=is.null&order=created_at.desc&limit=200`)) || [];
+  if (!pins.length) return 0;
+  const flat = flatText(transcript);
+  let n = 0;
+  for (const p of pins) {
+    const ks = pinKeys(String(p.body ?? ""));
+    if (ks.length && ks.some((k) => flat.includes(k))) { await sb(env, `mk_pins?id=eq.${p.id}`, { method: "PATCH", body: JSON.stringify({ url }) }).catch(() => null); n++; }
+  }
+  return n;
 }
 
 /** そのチャットのピンの目次（題だけ・番号順） */
@@ -127,7 +145,7 @@ export async function pinIndex(env: SbEnv, chatNo: number): Promise<Row[]> {
 }
 
 export async function pinFull(env: SbEnv, chatNo: number, n: number): Promise<Row | null> {
-  const rows = await sb(env, `mk_pins?select=id,chat_no,n,title,body,created_at&chat_no=eq.${chatNo}&n=eq.${n}`);
+  const rows = await sb(env, `mk_pins?select=id,chat_no,n,title,body,url,created_at&chat_no=eq.${chatNo}&n=eq.${n}`);
   return rows?.[0] ?? null;
 }
 
@@ -139,7 +157,7 @@ export async function transcriptOf(env: SbEnv, no: number): Promise<{ transcript
 
 export async function pinById(env: SbEnv, id: string): Promise<Row | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
-  const rows = await sb(env, `mk_pins?select=id,chat_no,n,title,body,created_at&id=eq.${id}`);
+  const rows = await sb(env, `mk_pins?select=id,chat_no,n,title,body,url,created_at&id=eq.${id}`);
   return rows?.[0] ?? null;
 }
 
@@ -167,6 +185,7 @@ export const PANEL_SURFACE = "シアニンパネル"; // 拡張が作った行�
  */
 export async function applyCapture(env: SbEnv, cap: Extract<CaptureCheck, { ok: true }>): Promise<{ no: number; how: "url" | "marker" | "new"; name: string }> {
   const r = await applyCaptureRow(env, cap);
+  await linkPinsByText(env, cap.url, cap.transcript).catch(() => 0); // v1.150.3
   if (cap.group) await attachGroup(env, r.no, cap.group).catch(() => null); // v1.132.0：タブのまとまりの名前 → 作業
   return r;
 }

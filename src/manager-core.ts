@@ -189,8 +189,16 @@ export function pinOut(p: Row, chat?: Row | null, full = false) {
     リンク: `https://manager.shia2n.jp/#p${Number(p.chat_no)}-${Number(p.n)}`, // v1.139.0：そのピンを開く住所
     ...(chat ? { チャットの名前: String(chat.name ?? ""), チャットの住所: chat.url ? String(chat.url) : null } : {}),
     ...(full ? { 全文: String(p.body ?? ""), 字数: String(p.body ?? "").length } : {}),
+    ...(p.url !== undefined ? { 住所: p.url ? String(p.url) : (chat && chat.url ? String(chat.url) : null) } : {}), // v1.150.3：そのピンがある元のチャットの住所
   };
 }
+/** v1.150.3：ピンの中身を探す鍵（記号と空白を除いた頭と真ん中の 80 字）。拡張が読んだチャットの中身と比べる */
+export function pinKeys(body: string): string[] {
+  const b = String(body ?? "").replace(/[\s#*`>|_~\-]+/g, "");
+  if (b.length < 30) return [];
+  return [b.slice(0, 80), b.slice(Math.max(0, Math.floor(b.length / 2) - 40), Math.max(0, Math.floor(b.length / 2) - 40) + 80)];
+}
+export const flatText = (t: string) => String(t ?? "").replace(/[\s#*`>|_~\-]+/g, "");
 
 /* ─── v1.126.0（2026-11-21 2便目）：シアニンパネルが自動で読んだチャットを受ける ─── */
 
