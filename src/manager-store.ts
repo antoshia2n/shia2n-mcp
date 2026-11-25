@@ -118,10 +118,38 @@ export async function updateChat(env: SbEnv, no: number, patch: Record<string, u
 export async function addPin(env: SbEnv, chatNo: number, title: string, body: string): Promise<Row> {
   const rows = await sb(env, `rpc/mk_add_pin`, { method: "POST", body: JSON.stringify({ p_chat: chatNo, p_title: title, p_body: body }) });
   if (!rows?.[0]) throw new ManagerError("not_written", "ピンの行が返ってきませんでした");
-  // v1.150.3：チャットの住所が分かっていれば、ピンにも写す（あとでチャットの住所が変わっても、ピンはその会話を指す）
+  // v1.150.3：チャットの住所が分かっていれば、ピンにも写す
+  // v1.150.4：分からなければ、同じ AI で直前（3 分以内）に答えていたタブの住所。何番目の回答か（と ChatGPT の回答の印）も残す
   const c = await chatByNo(env, chatNo).catch(() => null);
-  if (c?.url && rows[0].id) await sb(env, `mk_pins?id=eq.${rows[0].id}`, { method: "PATCH", body: JSON.stringify({ url: c.url }) }).catch(() => null);
+  if (rows[0].id) await placePin(env, String(rows[0].id), c).catch(() => null);
   return { ...rows[0], title };
+}
+
+/** v1.150.4：AI が答え始めたタブ（拡張の「AI」の合図）を覚える。古いものは 1 日で消す */
+export async function noteBusy(env: SbEnv, url: string, service: string, turns: number, key: string | null): Promise<void> {
+  await sb(env, "mk_busy", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ url, service, turns: Number.isFinite(turns) && turns > 0 ? Math.floor(turns) : null, turn_key: key ? key.slice(0, 200) : null, at: new Date().toISOString() }) });
+  await sb(env, `mk_busy?at=lt.${enc(new Date(Date.now() - 86400_000).toISOString())}`, { method: "DELETE" }).catch(() => null);
+}
+const BUSY_MS = 3 * 60_000;
+async function placePin(env: SbEnv, pinId: string, chat: Row | null): Promise<void> {
+  const service = chat?.ai === "gpt" ? "chatgpt" : "claude";
+  const since = enc(new Date(Date.now() - BUSY_MS).toISOString());
+  const busy: Row[] = (await sb(env, `mk_busy?select=url,turns,turn_key,at&service=eq.${service}&at=gte.${since}&order=at.desc&limit=10`)) || [];
+  let url: string | null = chat?.url ? String(chat.url) : null;
+  let hit: Row | null = null;
+  if (url) hit = busy.find((b) => b.url === url) ?? null;
+  else {
+    const urls = [...new Set(busy.map((b) => String(b.url)))];
+    if (urls.length === 1) { hit = busy[0]; url = String(hit.url); } // 2 つ以上が同時に答えていたら決め打ちしない
+  }
+  if (!url) return;
+  await sb(env, `mk_pins?id=eq.${pinId}`, { method: "PATCH", body: JSON.stringify({ url, ...(hit ? { turn: hit.turns ?? null, turn_key: hit.turn_key ?? null } : {}) }) });
+  if (chat && !chat.url) await sb(env, `mk_chats?no=eq.${chat.no}`, { method: "PATCH", body: JSON.stringify({ url }) }).catch(() => null);
+}
+/** ピンの画面から、会話を選んで付ける */
+export async function setPinUrl(env: SbEnv, chatNo: number, n: number, url: string): Promise<void> {
+  if (!Number.isInteger(chatNo) || !Number.isInteger(n)) throw new ManagerError("invalid", "ピンが分かりません");
+  await sb(env, `mk_pins?chat_no=eq.${chatNo}&n=eq.${n}`, { method: "PATCH", body: JSON.stringify({ url }) });
 }
 
 /** v1.150.3（Naoki「ピンからチャットに飛びたいのにマネージャーくんが開く」）：住所の分からないピンを、拡張が読んだチャットの中身から見つけて住所を付ける。
@@ -145,7 +173,7 @@ export async function pinIndex(env: SbEnv, chatNo: number): Promise<Row[]> {
 }
 
 export async function pinFull(env: SbEnv, chatNo: number, n: number): Promise<Row | null> {
-  const rows = await sb(env, `mk_pins?select=id,chat_no,n,title,body,url,created_at&chat_no=eq.${chatNo}&n=eq.${n}`);
+  const rows = await sb(env, `mk_pins?select=id,chat_no,n,title,body,url,turn,turn_key,created_at&chat_no=eq.${chatNo}&n=eq.${n}`);
   return rows?.[0] ?? null;
 }
 
