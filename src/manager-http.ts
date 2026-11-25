@@ -30,7 +30,7 @@
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
 import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkScore, scoreOut, scoreTrend, needsScore, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
-import { ManagerError, openWorkNamed, applyCapture, attachGroup, findOrCreateWork, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { noteBusy, setPinUrl, ManagerError, openWorkNamed, applyCapture, attachGroup, findOrCreateWork, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
@@ -263,6 +263,14 @@ async function api(request: Request, env: Env, url: URL): Promise<Response> {
       });
       return reply({ ok: true, range, items });
     }
+    if (request.method === "POST" && op === "pin-url") {
+      let body: Record<string, unknown>;
+      try { body = await request.json() as Record<string, unknown>; } catch { return reply({ ok: false, message: "送った中身の形が違います" }, 400); }
+      const page = chatPageOf(body.url);
+      if (!page) return reply({ ok: false, message: "Claude か ChatGPT の会話の住所を入れてください" }, 400);
+      await setPinUrl(env, Number(body.chat), Number(body.n), page.url);
+      return reply({ ok: true });
+    }
     if (request.method === "GET" && op === "pin") {
       const no = Number(sp.get("chat")), n = Number(sp.get("n"));
       if (!Number.isInteger(no) || no <= 0 || !Number.isInteger(n) || n <= 0) return reply({ ok: false, message: "ピンが分かりません" }, 400);
@@ -429,6 +437,8 @@ const turnHook = (request: Request, env: Env) => extHook(request, env, async (b)
   const kind = b.kind === "AI" ? "AI" : b.kind === "seen" ? "seen" : null;
   if (!page || !kind) return { status: 400, body: { ok: false, error: "invalid" } };
   const c = await setTurnByUrl(env, page.url, kind);
+  // v1.150.4：AI が答え始めたタブを覚える（ピンを付けた会話と、何番目の回答かを決めるため）
+  if (kind === "AI") await noteBusy(env, page.url, page.service, Number(b.turns), typeof b.key === "string" ? b.key : null).catch(() => null);
   return { body: { ok: true, 番号: c ? Number(c.no) : null, ...(c ? await paintOf(env, Number(c.no)) : {}) } };
 });
 
@@ -451,7 +461,7 @@ const pinHook = (request: Request, env: Env) => extHook(request, env, async (b) 
   if (!Number.isInteger(chat) || !Number.isInteger(n) || chat < 1 || n < 1) return { status: 400, body: { ok: false, error: "invalid", message: "ピンの番号が違います" } };
   const p = await pinFull(env, chat, n);
   if (!p) return { status: 404, body: { ok: false, error: "pin_not_found", message: "ピンがありません" } };
-  return { body: { ok: true, 題: String(p.title ?? ""), 中身: String(p.body ?? "").slice(0, 4000) } };
+  return { body: { ok: true, 題: String(p.title ?? ""), 中身: String(p.body ?? "").slice(0, 4000), 回答番号: p.turn ?? null, 印: p.turn_key ?? null } };
 });
 
 export async function handleManager(request: Request, env: Env): Promise<Response> {

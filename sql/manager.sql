@@ -261,3 +261,9 @@ alter table public.mk_gone enable row level security;
 -- v1.150.3（2026-11-24）manager_kun_pin_url：ピンごとの元のチャットの住所
 alter table public.mk_pins add column if not exists url text;
 update public.mk_pins p set url = c.url from public.mk_chats c where c.no = p.chat_no and c.url is not null and p.url is null;
+
+-- v1.150.4（2026-11-25）manager_kun_pin_turn：答え始めたタブと、ピンの回答の番号・印
+create table if not exists public.mk_busy (url text primary key, service text not null, turns int, turn_key text, at timestamptz not null default now());
+alter table public.mk_busy enable row level security;
+alter table public.mk_pins add column if not exists turn int;
+alter table public.mk_pins add column if not exists turn_key text;
