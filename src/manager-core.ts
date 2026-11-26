@@ -175,6 +175,7 @@ export function chatOut(r: Row) {
     分野: r.area ? String(r.area) : null,
     作業: r.work && r.work.id ? { 番号: Number(r.work.id), 名前: String(r.work.name ?? ""), 状態: String(r.work.state ?? "") } : null,
     番: turnLabel(r),
+    番の時刻: r.turn_at ? String(r.turn_at) : null, // v1.150.5：「あなたの番」を待っている時間の長い順に並べる
   };
 }
 

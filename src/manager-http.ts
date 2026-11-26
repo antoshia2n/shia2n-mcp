@@ -30,7 +30,7 @@
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
 import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkScore, scoreOut, scoreTrend, needsScore, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
-import { noteBusy, setPinUrl, ManagerError, openWorkNamed, applyCapture, attachGroup, findOrCreateWork, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
+import { yourTurnChats, noteBusy, setPinUrl, ManagerError, openWorkNamed, applyCapture, attachGroup, findOrCreateWork, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
 import { APPLE_TOUCH_PNG_B64, FAVICON_32_PNG_B64, FAVICON_SVG, SHELL_JS } from "./manager-assets.js";
@@ -455,6 +455,12 @@ const tabsHook = (request: Request, env: Env) => extHook(request, env, async (b)
   return { body: { ok: true, 作業: String(r.work.name), 作業番号: Number(r.work.id), 作った: r.created, タブの数: tabs.length, ...(p ? { まとまり: { 名前: p.name, 色: p.color } } : {}) } };
 });
 
+/* v1.150.5（2026-11-26 Naoki「Naoki の番が目立たない・見逃す」）：拡張が「Naoki の番」のチャットの住所を聞く（アイコンの数字・タブ名の ●） */
+const yoursHook = (request: Request, env: Env) => extHook(request, env, async () => {
+  const rows = await yourTurnChats(env);
+  return { body: { ok: true, 件数: rows.length, 住所: rows.map((r) => r.url).filter(Boolean) } };
+});
+
 /* v1.150.2（2026-11-24 Naoki「ピンのリンクがマネージャーくんに飛ぶ」→ 元のチャットのその出力まで）：拡張がピンの中身を受け取り、チャットの画面で同じ文を探して動かす */
 const pinHook = (request: Request, env: Env) => extHook(request, env, async (b) => {
   const chat = Number(b.chat), n = Number(b.n);
@@ -472,6 +478,7 @@ export async function handleManager(request: Request, env: Env): Promise<Respons
   if (path === `${MANAGER_PATH}/ext/turn`) return turnHook(request, env);
   if (path === `${MANAGER_PATH}/ext/tabs`) return tabsHook(request, env);
   if (path === `${MANAGER_PATH}/ext/pin`) return pinHook(request, env);
+  if (path === `${MANAGER_PATH}/ext/yours`) return yoursHook(request, env);
   if (path.startsWith(`${MANAGER_PATH}/api/`)) return api(request, env, url);
   if (request.method !== "GET" && request.method !== "HEAD") return new Response("method not allowed", { status: 405 });
   if (path === MANAGER_PATH || path === `${MANAGER_PATH}/`) {
