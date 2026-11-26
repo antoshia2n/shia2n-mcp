@@ -125,6 +125,11 @@ export async function addPin(env: SbEnv, chatNo: number, title: string, body: st
   return { ...rows[0], title };
 }
 
+/** v1.150.5：Naoki の番のチャット（返事が来た・Naoki の番・判断待ち）。寝かせ中と閉じたは出さない */
+export async function yourTurnChats(env: SbEnv): Promise<Row[]> {
+  const rows: Row[] = (await sb(env, `mk_chats?select=no,url,turn,turn_at,state&or=(turn.in.(${enc("新着")},Naoki),state.eq.${enc("判断待ち")})&limit=200`)) || [];
+  return rows.filter((r) => r.state !== "寝かせ中" && r.state !== "閉じた").map((r) => ({ ...r, url: r.url ? (chatPageOf(r.url)?.url ?? r.url) : null }));
+}
 /** v1.150.4：AI が答え始めたタブ（拡張の「AI」の合図）を覚える。古いものは 1 日で消す */
 export async function noteBusy(env: SbEnv, url: string, service: string, turns: number, key: string | null): Promise<void> {
   await sb(env, "mk_busy", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ url, service, turns: Number.isFinite(turns) && turns > 0 ? Math.floor(turns) : null, turn_key: key ? key.slice(0, 200) : null, at: new Date().toISOString() }) });
