@@ -308,3 +308,17 @@ test("isPerfect・scoreTrend・needsScore・kindName", () => {
   assert.equal(needsScore({ state: "済み", done_at: "2026-11-21T06:00:00Z" }), false);
   assert.equal(kindName("  X の  ポスト作成 "), "X の ポスト作成");
 });
+
+import { badgeCount } from "../src/manager-core.ts";
+test("badgeCount：判断待ちと 24 時間以内の新着だけ数える（見たあとの Naoki の番は数えない）", () => {
+  const now = Date.parse("2026-11-27T00:00:00Z");
+  const rows = [
+    { state: "判断待ち", turn: null, turn_at: null },
+    { state: "判断待ち", turn: "Naoki", turn_at: "2026-11-20T00:00:00Z" },
+    { state: "進行中", turn: "新着", turn_at: "2026-11-26T12:00:00Z" },
+    { state: "進行中", turn: "新着", turn_at: "2026-11-25T00:00:00Z" },
+    { state: "進行中", turn: "Naoki", turn_at: "2026-11-26T23:00:00Z" },
+    { state: "閉じた", turn: "新着", turn_at: "2026-11-26T23:00:00Z" },
+  ];
+  assert.equal(badgeCount(rows, now), 3);
+});

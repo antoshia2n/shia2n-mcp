@@ -29,7 +29,7 @@
  */
 import type { Env } from "./index.js";
 import { verifyIdToken } from "./gate.js";
-import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkScore, scoreOut, scoreTrend, needsScore, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut } from "./manager-core.js";
+import { STATES, areaName, chatPageOf, chatName, groupName, normWorkState, prLinks, workName, workOut, checkCapture, checkTabs, checkScore, scoreOut, scoreTrend, needsScore, checkUpdate, chatOut, jstShort, jstSince, keyHash, newKey, normState, pinOut, badgeCount } from "./manager-core.js";
 import { yourTurnChats, noteBusy, setPinUrl, ManagerError, openWorkNamed, applyCapture, attachGroup, findOrCreateWork, saveGroupTabs, setTurnByUrl, workColor, chatByUrl, createChat, PANEL_SURFACE, areaCounts, attachWork, attachWorkId, mergeWork, updateWork, workDetail, worksWithChats, chatByNo, chatsByNos, chatsReadSince, doneOf, doneSince, issueKey, keyStatus, lastAsks, listChats, pinFull, pinIndex, revokeKeys, search, stateCounts, transcriptOf, updateChat, useKey } from "./manager-store.js";
 import { approveRequest, cancelRequest, fixRequest, requestById, requestOut, requestPlainText, requestsByState, requestsOfWork, routineStatus, runAllWaiting, saveRoutine, submitRequest } from "./manager-run.js";
 import { NOTEBOOK_DOC_KEY, docIdOf, exportNotebook, initiativePatch, initiatives, notebookStatus, sessionsFor, setSetting, syncDecisionTask } from "./manager-links.js";
@@ -458,7 +458,7 @@ const tabsHook = (request: Request, env: Env) => extHook(request, env, async (b)
 /* v1.150.5（2026-11-26 Naoki「Naoki の番が目立たない・見逃す」）：拡張が「Naoki の番」のチャットの住所を聞く（アイコンの数字・タブ名の ●） */
 const yoursHook = (request: Request, env: Env) => extHook(request, env, async () => {
   const rows = await yourTurnChats(env);
-  return { body: { ok: true, 件数: rows.length, 住所: rows.map((r) => r.url).filter(Boolean) } };
+  return { body: { ok: true, 件数: badgeCount(rows, Date.now()), 番の数: rows.length, 住所: rows.map((r) => r.url).filter(Boolean) } };
 });
 
 /* v1.150.2（2026-11-24 Naoki「ピンのリンクがマネージャーくんに飛ぶ」→ 元のチャットのその出力まで）：拡張がピンの中身を受け取り、チャットの画面で同じ文を探して動かす */
