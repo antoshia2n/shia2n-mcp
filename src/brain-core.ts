@@ -59,3 +59,31 @@ export function tidyCandidates(notes: BrNote[], kind?: "kw" | "pt"): TidyItem[] 
   }
   return out;
 }
+
+/* ── AI の候補（v1.152.0・2026-11-27 Naoki OK 12:57）：Claude が読んだ結果を br_ai に入れる前の確かめ ── */
+export type AiKind = "kw" | "pt" | "task";
+export type AiIn = { note_id?: string | null; kind: AiKind; title: string; use?: string | null; why?: string };
+export type AiRow = { kind: string; title: string; state: string };
+export type AiAdd = { note_id: string | null; kind: AiKind; title: string; use_id: string | null; why: string };
+/**
+ * 入れてよい候補だけを返す。外すのは：題が空・同じ回の中で重なる・候補箱に同じ種類で同じ題がある（捨てたものも含む＝一度捨てたものは出し直さない）・
+ * キーワードとパターンは同じ題のノートがもうある・元のノートが見つからない。用途は名前で受け、設定の用途の id に置き換える（当たらなければ用途なし）
+ */
+export function planSuggestions(items: AiIn[], have: AiRow[], notes: Pick<BrNote, "id" | "title" | "daily">[], uses: Map<string, string>): { add: AiAdd[]; skipped: { title: string; reason: string }[] } {
+  const seen = new Set(have.map(r => r.kind + ":" + normName(r.title)));
+  const noteTitles = new Set(notes.filter(n => !n.daily).map(n => normName(n.title)));
+  const ids = new Set(notes.map(n => n.id));
+  const useId = new Map([...uses].map(([id, n]) => [normName(n), id]));
+  const add: AiAdd[] = []; const skipped: { title: string; reason: string }[] = [];
+  for (const it of items) {
+    const title = String(it.title ?? "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 200);
+    if (!title) { skipped.push({ title: "", reason: "題が空" }); continue; }
+    const key = it.kind + ":" + normName(title);
+    if (seen.has(key)) { skipped.push({ title, reason: "候補箱にもうある（捨てたものも含む）" }); continue; }
+    if (it.kind !== "task" && noteTitles.has(normName(title))) { skipped.push({ title, reason: "同じ題のノートがもうある" }); continue; }
+    if (it.note_id && !ids.has(it.note_id)) { skipped.push({ title, reason: "元のノートが見つからない" }); continue; }
+    seen.add(key);
+    add.push({ note_id: it.note_id || null, kind: it.kind, title, use_id: it.kind === "kw" && it.use ? useId.get(normName(it.use)) ?? null : null, why: String(it.why ?? "").trim().slice(0, 500) });
+  }
+  return { add, skipped };
+}
