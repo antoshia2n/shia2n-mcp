@@ -431,15 +431,19 @@ export function turnLabel(r: Row): "AI が作業中" | "返事が来た" | "Naok
  * 見たあとの「Naoki の番」は、返事を書くまで残り続けて数がふくらむ（11/27 に 46）ため数えない（タブ名の ● はそのまま）
  */
 export const BADGE_NEW_MS = 24 * 3600_000;
-export function badgeCount(rows: Row[], now: number): number {
-  return rows.filter((r) => {
-    if (r.state === "寝かせ中" || r.state === "閉じた") return false;
-    if (r.state === "判断待ち") return true;
-    if (r.turn !== "新着") return false;
-    const t = r.turn_at ? Date.parse(String(r.turn_at)) : NaN;
-    return Number.isFinite(t) && now - t <= BADGE_NEW_MS;
-  }).length;
+/** v1.151.0：要対応＝判断待ち、または 24 時間以内に返事が来て まだ見ていない（アイコンの数・作業の並び・パネルの数で同じ決め） */
+export function needsYou(r: Row, now: number): boolean {
+  if (r.state === "寝かせ中" || r.state === "閉じた") return false;
+  if (r.state === "判断待ち") return true;
+  if (r.turn !== "新着") return false;
+  const t = r.turn_at ? Date.parse(String(r.turn_at)) : NaN;
+  return Number.isFinite(t) && now - t <= BADGE_NEW_MS;
 }
+export function badgeCount(rows: Row[], now: number): number {
+  return rows.filter((r) => needsYou(r, now)).length;
+}
+/** v1.151.0：3 日触っていない「進行中」のチャットは寝かせ中へ（触ると戻る） */
+export const SLEEP_AFTER_MS = 3 * 86400_000;
 
 /** 拡張が読んだあとの番：中身が変わっていなければ前のまま（見たなら 新着 → Naoki）。変わったら 見ていれば Naoki・見ていなければ 新着 */
 export function nextTurn(prev: string | null | undefined, changed: boolean, seen: boolean): Turn3 | null {
@@ -453,7 +457,10 @@ export function workProgress(w: Row, chats: Row[], reqs: Row[]) {
   const naoki = chats.filter((c) => { const t = turnLabel(c); return t === "Naoki の番" || t === "返事が来た"; }).length + reqs.filter((r) => r.state === "OK待ち").length;
   const ai = chats.filter((c) => turnLabel(c) === "AI が作業中").length + reqs.filter((r) => r.state === "実行中" || r.state === "順番待ち").length;
   const color = w.state === "済み" ? "grey" : naoki ? "red" : ai ? "blue" : "green";
-  return { Naokiの番: naoki, AIが作業中: ai, 依頼の済み: live.filter((r) => r.state === "済み").length, 依頼の全部: live.length, 評価待ち: reqs.filter(needsScore).length, 色: color as "grey" | "red" | "blue" | "green" };
+  const now = Date.now();
+  const need = chats.filter((c) => needsYou(c, now)).length + reqs.filter((r) => r.state === "OK待ち").length;
+  const wait = chats.filter((c) => c.state !== "判断待ち" && turnLabel(c) === "Naoki の番").length;
+  return { Naokiの番: naoki, 要対応: need, 返事待ち: wait, AIが作業中: ai, 依頼の済み: live.filter((r) => r.state === "済み").length, 依頼の全部: live.length, 評価待ち: reqs.filter(needsScore).length, 色: color as "grey" | "red" | "blue" | "green" };
 }
 
 export type TabRow = { url: string; title: string };

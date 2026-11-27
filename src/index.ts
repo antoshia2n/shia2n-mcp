@@ -552,6 +552,12 @@
  * v1.130.0（2026-11-22 開発部・ブレインくん 便B・Naoki OK 08:25）：ブレインくん（brain.shia2n.jp）の道具 3 本を足した。brain__read（ノート 1 件・種類・用途・本文・リンク・つながっているもの・意味のつながり）・brain__search（メモ・キーワード・パターン・アイデア・ネタの横断検索・種類で絞る）・brain__tidy（キーワード・パターンの重複と表記ゆれの候補）。どれも読むだけで、読むのは MCP_DEFAULT_USER_ID の行だけ。抜き出し・組み合わせの提案・評価はしない（Naoki の決め 11/21）。中身は src/brain-core.ts・src/tools-brain.ts、試験は test/brain-core.test.ts。新しい鍵は 0 個。
  * v1.150.0（2026-11-23 開発部・Naoki OK 17:57）：TaskMaster の「先延ばし」に合わせた。taskmaster__list_tasks が先延ばしの回数（postponed）と直近 10 回の履歴（postpones）を返す。繰り返しの次の回は、先延ばしする前の日付（repeatFrom）から数え、ずらした日より後にする（画面の nextRepeatDates と同じ）。次の回に先延ばしの記録を持ち越さない。
  * v1.149.0（2026-11-23 開発部・Naoki OK 17:04）：マネージャーくんの 15・45 分ごとの TaskMaster の写し（syncFromTaskmaster）を、結んだタスクだけ id で読む形に。それまでは毎回未完了のタスクを全部（193 件）読み、1 日約 9,300 回。同じ日の 16 時台に Firestore の無料枠（1 日 5 万回の読み）を使い切り、ログインと TaskMaster が止まった。
+ * v1.151.0（2026-11-27 開発部・Naoki「作業とタブを管理して効率的に仕事を進めるためのものだけど満たしてるか」→ レビュー → 作る前の1枚とデモに OK 09:38）：
+ *   ・3 日触っていない「進行中」のチャットを 30 分ごとに寝かせ中へ（15,45 の見回り）。読んだ・書いた・AI が答え始めたら進行中へ戻る（判断待ちは下げない）
+ *   ・要対応＝判断待ち＋24 時間以内の見ていない返事（needsYou）。作業の 進み に 要対応・返事待ち。アイコンの数・作業の並び・パネルの数をこの決めにそろえた
+ *   ・本体の最初の画面を作業に（要対応 → AI 作業中 → ほか）。チャット・今日・アーカイブは上のタブ。入れている絞り込みは札で出して ✕ で外す
+ *   ・完了の候補（3 日触っていない作業）とフォルダなしを 1 行ずつ（本体の一覧の下・パネルの上）。完了・中止・まだ をその場で。似た作業は同じフォルダの中だけ
+ *   ・作業の詳細の一番上に「やる」。評価・任せる段階・依頼は「ほかの設定」にたたむ。完了した作業はその場で評価を入れられる（飛ばせる）。見たあとの番は「返事待ち」と表示
  * v1.150.8（2026-11-27 開発部・Naoki「シアニンパネルに通知が多い。拡張機能アイコンのところで」）：/manager/ext/yours の 件数（アイコンの数）を「判断待ち」と「返事が来た（見ていない）24 時間以内」だけにした（46 → 6）。見たあとの Naoki の番は数えない。タブ名の「● 」の住所はそのまま。番の数 に今までの数。拡張は入れ替え不要。
  * v1.150.7（2026-11-26 Naoki「今使ってるものが目立てばいい。俺の番がまとめられてよくわからん」OK 20:55）：上の「あなたの番」の欄をやめ、開いている作業の行そのものを状態で目立たせる（あなたの番＝赤い地と線・白い字の札・○分前から、AI 作業中＝青い札と点滅）。並びは あなたの番 → AI 作業中 → そのほか。広げたタブの一覧で番が来たチャットに ●。開いている・要対応のどこにも出ないチャットは「ほかのチャット」に。
  * v1.150.6（2026-11-26 開発部・Naoki「Naoki の番が目立たない・見逃す」OK 20:48）：パネルの「開いている」のいちばん上に「あなたの番」（返事が来た・Naoki の番を待っている時間の長い順・押すとそのタブが前に出る）、入口「開いている」に赤い数。chatOut に 番の時刻。拡張 1.21.0 向けに /manager/ext/yours（Naoki の番のチャットの住所）＝アイコンの数とタブ名の「● 」。
@@ -765,6 +771,7 @@ import { registerAnkenTools } from "./tools-anken.js";
 import { registerXbunsekiTools } from "./tools-xbunseki.js";
 import { registerAiLogTools } from "./tools-ai-log.js";
 import { runAllWaiting } from "./manager-run.js";
+import { sleepStaleChats } from "./manager-store.js";
 import { syncFromTaskmaster } from "./manager-folders.js";
 import { runKaizen } from "./manager-kaizen.js";
 import { registerManagerTools } from "./tools-manager.js";
@@ -1446,7 +1453,8 @@ export default {
           const q = await runAllWaiting(env); // v1.131.0：順番待ちの依頼（回数の上限で戻ったものなど）をもう一度動かす
           const kz = await runKaizen(env).catch((e) => ({ ran: false, reason: String((e as Error)?.message || e).slice(0, 120) })); // v1.142.0：週 1 回の改善係
           const tmSync = await syncFromTaskmaster(env).catch((e) => ({ error: String((e as Error)?.message || e).slice(0, 120) })); // v1.138.0：TaskMaster の期日・重要度・完了を作業へ
-          return { count: t.added + t.done + (n.wrote ? 1 : 0) + q.fired, detail: `判断のタスク 立てた ${t.added}・済み ${t.done}・失敗 ${t.errors}／NotebookLM：${n.message}／依頼 動かした ${q.fired}・失敗 ${q.errors}／改善係 ${kz.ran ? "出した" : kz.reason}／TaskMaster ${"error" in tmSync ? "読めない：" + tmSync.error : `写した ${tmSync.updated}・完了 ${tmSync.done}`}` };
+          const slept = await sleepStaleChats(env).catch(() => -1); // v1.151.0：3 日触っていないチャットを寝かせ中へ
+          return { count: t.added + t.done + (n.wrote ? 1 : 0) + q.fired, detail: `寝かせ中へ ${slept}／判断のタスク 立てた ${t.added}・済み ${t.done}・失敗 ${t.errors}／NotebookLM：${n.message}／依頼 動かした ${q.fired}・失敗 ${q.errors}／改善係 ${kz.ran ? "出した" : kz.reason}／TaskMaster ${"error" in tmSync ? "読めない：" + tmSync.error : `写した ${tmSync.updated}・完了 ${tmSync.done}`}` };
         })
       );
       // 2026-10-07（v1.1.0）：会員管理くんの自動写像（handleAutoMappingCron）を止めた。

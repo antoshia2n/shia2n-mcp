@@ -6,7 +6,7 @@
  * 表と関数を作る SQL は sql/manager.sql（ブラウザからは読めない・管理者キーだけ）。
  */
 import type { Env } from "./index.js";
-import { chatPageOf, flatText, pinKeys, extMayWriteArea, workKey, groupName, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, nextTurn, workProgress, type CaptureCheck, type Turn, type TabRow } from "./manager-core.js";
+import { chatPageOf, flatText, pinKeys, extMayWriteArea, workKey, groupName, markerNo, mergeTurns, parseChatRef, pickChats, rankPins, titleWords, transcriptOf as joinTurns, nextTurn, workProgress, SLEEP_AFTER_MS, type CaptureCheck, type Turn, type TabRow } from "./manager-core.js";
 
 type Row = Record<string, any>;
 type SbEnv = Pick<Env, "SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY">;
@@ -112,7 +112,19 @@ export async function updateChat(env: SbEnv, no: number, patch: Record<string, u
     method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ ...patch, touched_at: new Date().toISOString() }),
   });
   if (!rows?.[0]) throw new ManagerError("chat_not_found", `チャット ${no} はありません`);
+  // v1.151.0：寝かせ中のチャットは、触ったら（読んだ・書いた・直した）進行中へ戻す。状態を自分で決めたときは戻さない
+  if (patch.state === undefined && rows[0].state === "寝かせ中") {
+    const w = await sb(env, `mk_chats?no=eq.${no}&select=${CHAT_COLS}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ state: "進行中" }) });
+    if (w?.[0]) return w[0];
+  }
   return rows[0];
+}
+
+/** v1.151.0：3 日触っていない「進行中」のチャットを寝かせ中へ。判断待ちは下げない。戻した数を返す */
+export async function sleepStaleChats(env: SbEnv, now = Date.now()): Promise<number> {
+  const before = new Date(now - SLEEP_AFTER_MS).toISOString();
+  const rows = await sb(env, `mk_chats?state=eq.${enc("進行中")}&touched_at=lt.${enc(before)}&select=no`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ state: "寝かせ中" }) });
+  return Array.isArray(rows) ? rows.length : 0;
 }
 
 export async function addPin(env: SbEnv, chatNo: number, title: string, body: string): Promise<Row> {
@@ -378,7 +390,7 @@ export async function worksWithChats(env: SbEnv, opt: { all?: boolean; area?: st
   if (!works.length) return [];
   const ids = works.map((w) => w.id).join(",");
   const [chats, reqs]: [Row[], Row[]] = await Promise.all([
-    sb(env, `mk_chats?select=no,name,ai,url,state,touched_at,work_id,turn&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
+    sb(env, `mk_chats?select=no,name,ai,url,state,touched_at,work_id,turn,turn_at&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
     sb(env, `mk_requests?select=id,work_id,state,done_at&work_id=in.(${ids})&limit=5000`).then((x) => x || []),
   ]);
   // v1.136.0：評価した依頼に印（評価待ちの数のため）
@@ -494,8 +506,9 @@ export async function setTurnByUrl(env: SbEnv, url: string, kind: "AI" | "seen")
   const c = await chatByUrl(env, url);
   if (!c) return null;
   const turn = kind === "AI" ? "AI" : c.turn === "新着" ? "Naoki" : null;
-  if (!turn || turn === c.turn) return c;
-  const rows = await sb(env, `mk_chats?no=eq.${c.no}&select=${CHAT_COLS}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ turn, turn_at: new Date().toISOString() }) });
+  const wake = kind === "AI" && c.state === "寝かせ中"; // v1.151.0：AI が答え始めたら寝かせ中から戻す
+  if ((!turn || turn === c.turn) && !wake) return c;
+  const rows = await sb(env, `mk_chats?no=eq.${c.no}&select=${CHAT_COLS}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify({ ...(turn && turn !== c.turn ? { turn, turn_at: new Date().toISOString() } : {}), ...(wake ? { state: "進行中", touched_at: new Date().toISOString() } : {}) }) });
   return rows?.[0] ?? c;
 }
 

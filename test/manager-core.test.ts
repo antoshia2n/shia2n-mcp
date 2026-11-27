@@ -322,3 +322,18 @@ test("badgeCount：判断待ちと 24 時間以内の新着だけ数える（見
   ];
   assert.equal(badgeCount(rows, now), 3);
 });
+
+import { needsYou, workProgress as wp2 } from "../src/manager-core.ts";
+test("needsYou と workProgress：要対応は判断待ちと 24 時間以内の新着、見たあとは返事待ち", () => {
+  const now = Date.now(), h = 3600e3;
+  assert.equal(needsYou({ state: "判断待ち", turn: null }, now), true);
+  assert.equal(needsYou({ state: "寝かせ中", turn: "新着", turn_at: new Date(now).toISOString() }, now), false);
+  assert.equal(needsYou({ state: "進行中", turn: "新着", turn_at: new Date(now - 2 * h).toISOString() }, now), true);
+  assert.equal(needsYou({ state: "進行中", turn: "新着", turn_at: new Date(now - 30 * h).toISOString() }, now), false);
+  const p = wp2({ state: "進行中" }, [
+    { state: "判断待ち", turn: "Naoki" },
+    { state: "進行中", turn: "Naoki" },
+    { state: "進行中", turn: "新着", turn_at: new Date(now - h).toISOString() },
+  ], []);
+  assert.equal(p.要対応, 2); assert.equal(p.返事待ち, 1);
+});
