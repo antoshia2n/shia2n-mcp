@@ -1,7 +1,7 @@
 // v1.130.0：ブレインくんの道具の決まり。走らせ方：esbuild で束ねてから node --test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { plainText, linksIn, searchBrain, tidyCandidates, type BrNote } from "../src/brain-core.js";
+import { plainText, linksIn, searchBrain, tidyCandidates, planSuggestions, type BrNote } from "../src/brain-core.js";
 
 const N = (id: string, kind: string, title: string, body = "", o: Partial<BrNote> = {}): BrNote => ({ id, kind, use_id: null, title, folder: "", status: "s1", lines: body ? [{ t: body }] : [], aliases: [], daily: null, touched_at: "2026-11-2" + id.length, created_at: "", ...o });
 
@@ -24,4 +24,22 @@ test("tidyCandidates：重複と近い表記ゆれだけ（メモ・違う種類
   assert.ok(t.some(x => x.reason === "表記ゆれ" && x.notes.some(n => n.id === "3")));
   assert.ok(!t.some(x => x.notes.some(n => n.id === "5" || n.id === "4" && x.kind === "キーワード")));
   assert.ok(!t.some(x => x.notes.some(n => n.id === "6")));
+});
+
+test("planSuggestions：重なり・捨てた候補・あるノート・見つからない元を外し、用途は名前から id へ", () => {
+  const notes = [N("n1", "memo", "11/27", "", { daily: "2026-11-27" }), N("n2", "kw", "地頭")];
+  const have = [{ kind: "kw", title: "思考体力", state: "out" }];
+  const uses = new Map([["u1", "言葉"], ["u2", "主張・事実"]]);
+  const r = planSuggestions([
+    { note_id: "n1", kind: "kw", title: "頭がいい人", use: "言葉", why: "頭がいい人" },
+    { note_id: "n1", kind: "kw", title: "頭がいい人" },
+    { kind: "kw", title: "思考 体力" },
+    { kind: "kw", title: "地頭" },
+    { kind: "task", title: "地頭" },
+    { note_id: "zz", kind: "pt", title: "型" },
+    { kind: "pt", title: "  " },
+  ], have, notes, uses);
+  assert.deepEqual(r.add.map(a => [a.kind, a.title, a.use_id]), [["kw", "頭がいい人", "u1"], ["task", "地頭", null]]);
+  assert.equal(r.skipped.length, 5);
+  assert.ok(r.skipped.some(s => s.title === "思考 体力" && /捨てた/.test(s.reason)));
 });
