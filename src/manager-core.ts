@@ -409,7 +409,8 @@ export function prLinks(done: Array<{ link?: unknown; at?: unknown; chat_no?: un
 
 /** Chrome のタブのまとまりの名前（作業の名前になる）。空白をつめて 80 字まで。空は null（v1.132.0） */
 export function groupName(v: unknown): string | null {
-  const s = String(v ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
+  // v1.151.1：保存済みのまとまりは Chrome の名前の頭に「◆ 」が付く（拡張 1.22.0）。作業の名前には入れない
+  const s = String(v ?? "").replace(/^\s*◆\s*/, "").trim().replace(/\s+/g, " ").slice(0, 80);
   return s || null;
 }
 
