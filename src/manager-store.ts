@@ -137,6 +137,11 @@ export async function addPin(env: SbEnv, chatNo: number, title: string, body: st
   return { ...rows[0], title };
 }
 
+/** v1.151.1：保存済み（進行中）の作業の名前。拡張が Chrome のまとまりに「◆ 」を付ける（受け箱は除く） */
+export async function openWorkNames(env: SbEnv): Promise<string[]> {
+  const rows: Row[] = (await sb(env, `mk_works?select=name&state=eq.${enc("進行中")}&limit=500`)) || [];
+  return rows.map((r) => String(r.name)).filter((n) => n && n !== "受け箱");
+}
 /** v1.150.5：Naoki の番のチャット（返事が来た・Naoki の番・判断待ち）。寝かせ中と閉じたは出さない */
 export async function yourTurnChats(env: SbEnv): Promise<Row[]> {
   const rows: Row[] = (await sb(env, `mk_chats?select=no,url,turn,turn_at,state&or=(turn.in.(${enc("新着")},Naoki),state.eq.${enc("判断待ち")})&limit=200`)) || [];
